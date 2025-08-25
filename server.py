@@ -1,39 +1,22 @@
 import os
-import sqlite3
 import discord
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 from datetime import datetime
-
-from keep_alive import keep_alive
+from supabase import create_client
 
 # --- Setup ---
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+SUPABASE_URL = os.getenv("SupabaseURL")
+SUPABASE_APIKEY = os.getenv("SupabaseAPIKEY")
 
-keep_alive()  # Starte den Webserver, um den Bot am Leben zu halten
+supabase = create_client(SUPABASE_URL, SUPABASE_APIKEY) 
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-DB_FILE = "events.db"
-
-
-# --- DB Setup ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS events (
-                 name TEXT PRIMARY KEY,
-                 target_time TEXT
-                 )""")
-    conn.commit()
-    conn.close()
-
-init_db()
-
 
 # --- Zeitberechnung ---
 def format_time_until(target_time: str) -> str:
@@ -66,136 +49,171 @@ def format_time_until(target_time: str) -> str:
     if minutes: parts.append(f"{minutes} Minute{'n' if minutes != 1 else ''}")
     if seconds_left: parts.append(f"{seconds_left} Sekunde{'n' if seconds_left != 1 else ''}")
 
-    return "Noch " + ", ".join(parts)
+    return ", ".join(parts)
 
 
-# --- Hilfsfunktion für Autocomplete ---
+# --- Autocomplete für Event-Namen ---
 async def event_autocomplete(interaction: discord.Interaction, current: str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT name FROM events")
-    rows = c.fetchall()
-    conn.close()
-
-    # Filter nach aktueller Eingabe
-    return [
-        app_commands.Choice(name=row[0], value=row[0])
-        for row in rows if current.lower() in row[0].lower()
-    ][:25]  # max. 25 Vorschläge erlaubt
+    try:
+        response = supabase.table("events").select("name").eq("serverid", str(interaction.guild.id)).execute()
+        rows = [item['name'] for item in response.data]
+        return [
+            app_commands.Choice(name=row, value=row)
+            for row in rows if current.lower() in row.lower()
+        ][:25]
+    except Exception as e:
+        print("Autocomplete Error:", e)
+        return []
 
 
 # --- Slash Commands ---
 @bot.tree.command(name="add_event", description="Neues Event hinzufügen (Format: YYYY-MM-DD HH:MM:SS)")
-@app_commands.describe(name="Name des Events", zeitpunkt="Zeitpunkt im Format YYYY-MM-DD HH:MM:SS")
-async def add_event(interaction: discord.Interaction, name: str, zeitpunkt: str):
-    # --- Adminprüfung ---
+@app_commands.describe(name="Name des Events", zeitpunkt="Startzeit im Format YYYY-MM-DD HH:MM:SS", endzeit="Endzeit im Format YYYY-MM-DD HH:MM:SS")
+async def add_event(interaction: discord.Interaction, name: str, zeitpunkt: str, endzeit: str = None):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "❌ Du brauchst **Administratorrechte**, um Events hinzuzufügen.",
-            ephemeral=True
+        embed = discord.Embed(
+            title="❌ Fehlende Berechtigung",
+            description="Du brauchst **Administratorrechte**, um Events hinzuzufügen.",
+            color=discord.Color.red()
         )
-    # --- Alternative: auf bestimmte Rolle prüfen ---
-    # role_name = "EventManager"
-    # if not any(role.name == role_name for role in interaction.user.roles):
-    #     return await interaction.response.send_message(
-    #         f"❌ Du brauchst die Rolle **{role_name}**, um das zu dürfen.",
-    #         ephemeral=True
-    #     )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+    server_id = str(interaction.guild.id)
     try:
-        c.execute("INSERT OR REPLACE INTO events (name, target_time) VALUES (?, ?)", (name, zeitpunkt))
-        conn.commit()
-        await interaction.response.send_message(f"✅ Event **{name}** für `{zeitpunkt}` gespeichert.")
+        supabase.table("events").upsert({
+            "name": name,
+            "target_time": zeitpunkt,
+            "end_time": endzeit,
+            "serverid": server_id
+        }).execute()
+
+        embed = discord.Embed(
+            title=f"✅ Event **{name}** gespeichert.",
+            description=f"Start: `{zeitpunkt}`" + (f" | Ende: `{endzeit}`" if endzeit else ""),
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
     except Exception as e:
-        await interaction.response.send_message(f"⚠️ Fehler: {e}")
-    finally:
-        conn.close()
+        embed = discord.Embed(
+            title="❌ Fehler beim Hinzufügen des Events",
+            description=str(e),
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="time_until", description="Zeigt die Zeit bis zu einem gespeicherten Event")
 @app_commands.autocomplete(name=event_autocomplete)
 async def time_until(interaction: discord.Interaction, name: str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT target_time FROM events WHERE name = ?", (name,))
-    row = c.fetchone()
-    conn.close()
+    try:
+        response = supabase.table("events").select("target_time, end_time")\
+            .eq("name", name).eq("serverid", str(interaction.guild.id)).execute()
+        row = response.data[0] if response.data else None
 
-    if row:
-        result = format_time_until(row[0])
-        await interaction.response.send_message(f"📅 Event **{name}** → {result}")
-    else:
-        await interaction.response.send_message(f"⚠️ Kein Event mit dem Namen **{name}** gefunden.")
+        if not row:
+            return await interaction.response.send_message(f"⚠️ Kein Event mit dem Namen **{name}** gefunden.", ephemeral=True)
+
+        start_time = format_time_until(row['target_time'])
+        embed = discord.Embed(
+            title=f"⏱ Zeit bis Event {name}",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Startet in:", value=start_time, inline=False)
+
+        if row.get('end_time'):
+            end_time = format_time_until(row['end_time'])
+            embed.add_field(name="Endet in:", value=end_time, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="list_events", description="Zeigt alle gespeicherten Events")
 async def list_events(interaction: discord.Interaction):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT name, target_time FROM events")
-    rows = c.fetchall()
-    conn.close()
+    try:
+        server_id = str(interaction.guild.id)
+        response = supabase.table("events").select("name, target_time").eq("serverid", server_id).execute()
+        rows = [(item['name'], item['target_time']) for item in response.data]
 
-    if not rows:
-        await interaction.response.send_message("📂 Keine Events gespeichert.")
-        return
+        if not rows:
+            return await interaction.response.send_message("📂 Keine Events gespeichert.")
 
-    msg = "**📅 Gespeicherte Events:**\n"
-    for name, zeit in rows:
-        msg += f"• **{name}** → `{zeit}`\n"
+        embed = discord.Embed(
+            title="📂 Gespeicherte Events",
+            description="Hier sind alle gespeicherten Events:",
+            color=discord.Color.green()
+        )
+        for name, time in rows:
+            embed.add_field(name=name, value=f"Startet am: {time}", inline=False)
 
-    await interaction.response.send_message(msg)
+        await interaction.response.send_message(embed=embed)
 
-
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="remove_event", description="Löscht ein gespeichertes Event")
 @app_commands.autocomplete(name=event_autocomplete)
 async def remove_event(interaction: discord.Interaction, name: str):
-    # --- Adminprüfung ---
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "❌ Du brauchst **Administratorrechte**, um Events zu löschen.",
-            ephemeral=True
+        embed = discord.Embed(
+            title="❌ Fehlende Berechtigung",
+            description="Du brauchst **Administratorrechte**, um Events zu löschen.",
+            color=discord.Color.red()
         )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM events WHERE name = ?", (name,))
-    conn.commit()
-    conn.close()
+    server_id = str(interaction.guild.id)
+    try:
+        response = supabase.table("events").select("*").eq("name", name).eq("serverid", server_id).execute()
+        if not response.data:
+            return await interaction.response.send_message(
+                f"❌ Kein Event mit dem Namen **{name}** gefunden.", ephemeral=True
+            )
 
-    await interaction.response.send_message(f"🗑️ Event **{name}** gelöscht.")
+        supabase.table("events").delete().eq("name", name).eq("serverid", server_id).execute()
+        embed = discord.Embed(
+            title="✅ Event gelöscht",
+            description=f"Das Event **{name}** wurde erfolgreich gelöscht.",
+            color=discord.Color.yellow()
+        )
+        await interaction.response.send_message(embed=embed)
 
-@bot.event
-async def on_member_join(member):
-    # Channel-ID des allgemeinen Channels, z.B. 123456789012345678
-    # channel_id = "🌍-willkommen"
-    # channel = bot.get_channel(channel_id)
-    
-    # if channel:
-    #     embed = discord.Embed(
-    #         title=f"***Willkommen {member.name} zu Die Insel!***",
-    #         description=f"Bitte lies dir einmal die Regeln durch und setzte einen hacken. Schreibe bitte denen Minecraft-ingame Namen Namen in #minecraft-name damit wir dich immer zu ordnen können :)\n ",
-    #         color=discord.Color.green()
-    #     )
-    #     embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
-    #     embed.add_field(name="Regeln", value="Bitte lese die Regeln im #regeln Channel durch.", inline=False)
-    #     embed.set_footer(text="Viel Spaß auf unserem Server!")
-        
-    #     await channel.send(embed=embed)
-    # else:
-    #     print("Channel nicht gefunden!")
-    pass
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
 
-# Bot Start
+# --- Willkommensnachricht ---
+# @bot.event
+# async def on_member_join(member):
+#     channel = discord.utils.get(member.guild.text_channels, name="willkommen")
+#     if channel:
+#         embed = discord.Embed(
+#             title=f"***Willkommen {member.name} zu Die Insel!***",
+#             description="Willkommen auf unserem Discord-Server, wir freuen uns dass du den Weg zu uns gefunden hast!",
+#             color=discord.Color.green()
+#         )
+#         embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+#         embed.add_field(name="Regeln", value="Bitte lese die Regeln im #regeln Channel durch und setze einen Haken darunter", inline=False)
+#         embed.set_footer(text="Wir wünschen dir viel Spaß auf unserem Server!")
+#         await channel.send(embed=embed)
+
+
+# --- Ping Command ---
+# @bot.command()
+async def ping(ctx):
+    await ctx.send("Pong! 🏓")
+
+
+# --- Bot Start ---
 @bot.event
 async def on_ready():
-    await bot.tree.sync()  # Slash Commands mit Discord synchronisieren
     print(f"{bot.user} ist online ✅")
+    for guild in bot.guilds:
+        print(f"Server-Name: {guild.name} | Server-ID: {guild.id}")
 
 
 bot.run(TOKEN)
