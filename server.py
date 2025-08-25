@@ -5,12 +5,15 @@ from discord import app_commands
 from dotenv import load_dotenv
 from datetime import datetime
 from supabase import create_client
+from keep_alive import keep_alive
 
 # --- Setup ---
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SUPABASE_URL = os.getenv("SupabaseURL")
 SUPABASE_APIKEY = os.getenv("SupabaseAPIKEY")
+
+keep_alive()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_APIKEY) 
 
