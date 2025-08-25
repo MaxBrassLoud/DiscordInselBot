@@ -206,7 +206,7 @@ async def remove_event(interaction: discord.Interaction, name: str):
 
 
 # --- Ping Command ---
-# @bot.command()
+@bot.command()
 async def ping(ctx):
     await ctx.send("Pong! 🏓")
 
