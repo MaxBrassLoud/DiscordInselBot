@@ -149,6 +149,8 @@ async def list_events(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
+
+
 @bot.tree.command(name="remove_event", description="Löscht ein gespeichertes Event")
 @app_commands.autocomplete(name=event_autocomplete)
 async def remove_event(interaction: discord.Interaction, name: str):
@@ -166,6 +168,27 @@ async def remove_event(interaction: discord.Interaction, name: str):
     conn.close()
 
     await interaction.response.send_message(f"🗑️ Event **{name}** gelöscht.")
+
+@bot.event
+async def on_member_join(member):
+    # Channel-ID des allgemeinen Channels, z.B. 123456789012345678
+    # channel_id = "🌍-willkommen"
+    # channel = bot.get_channel(channel_id)
+    
+    # if channel:
+    #     embed = discord.Embed(
+    #         title=f"***Willkommen {member.name} zu Die Insel!***",
+    #         description=f"Bitte lies dir einmal die Regeln durch und setzte einen hacken. Schreibe bitte denen Minecraft-ingame Namen Namen in #minecraft-name damit wir dich immer zu ordnen können :)\n ",
+    #         color=discord.Color.green()
+    #     )
+    #     embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+    #     embed.add_field(name="Regeln", value="Bitte lese die Regeln im #regeln Channel durch.", inline=False)
+    #     embed.set_footer(text="Viel Spaß auf unserem Server!")
+        
+    #     await channel.send(embed=embed)
+    # else:
+    #     print("Channel nicht gefunden!")
+    pass
 
 
 # Bot Start
