@@ -19,6 +19,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_APIKEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Zeitberechnung ---
@@ -70,9 +71,16 @@ async def event_autocomplete(interaction: discord.Interaction, current: str):
 
 
 # --- Slash Commands ---
-@bot.tree.command(name="add_event", description="Neues Event hinzufügen (Format: YYYY-MM-DD HH:MM:SS)")
-@app_commands.describe(name="Name des Events", zeitpunkt="Startzeit im Format YYYY-MM-DD HH:MM:SS", endzeit="Endzeit im Format YYYY-MM-DD HH:MM:SS")
-async def add_event(interaction: discord.Interaction, name: str, zeitpunkt: str, endzeit: str = None):
+@bot.tree.command(
+    name="add_event",
+    description="Neues Event hinzufügen"
+)
+@app_commands.describe(
+    name="Name des Events",
+    zeitpunkt="Startzeit des Events (Pflicht, Format: YYYY-MM-DD HH:MM:SS)",
+    endzeit="Endzeit des Events (optional, muss nach Startzeit liegen, Format: YYYY-MM-DD HH:MM:SS)"
+)
+async def add_event(interaction: discord.Interaction, name: str, zeitpunkt: str, endzeit: str):
     if not interaction.user.guild_permissions.administrator:
         embed = discord.Embed(
             title="❌ Fehlende Berechtigung",
@@ -190,24 +198,30 @@ async def remove_event(interaction: discord.Interaction, name: str):
 
 
 # --- Willkommensnachricht ---
-# @bot.event
-# async def on_member_join(member):
-#     channel = discord.utils.get(member.guild.text_channels, name="willkommen")
-#     if channel:
-#         embed = discord.Embed(
-#             title=f"***Willkommen {member.name} zu Die Insel!***",
-#             description="Willkommen auf unserem Discord-Server, wir freuen uns dass du den Weg zu uns gefunden hast!",
-#             color=discord.Color.green()
-#         )
-#         embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
-#         embed.add_field(name="Regeln", value="Bitte lese die Regeln im #regeln Channel durch und setze einen Haken darunter", inline=False)
-#         embed.set_footer(text="Wir wünschen dir viel Spaß auf unserem Server!")
-#         await channel.send(embed=embed)
+@bot.event
+async def on_member_join(member):
+    print(f"Mitglied beigetreten: {member.name}")
+    channel = discord.utils.get(member.guild.text_channels, name="Allgemein")
+    print(channel)
+    if channel:
+        embed = discord.Embed(
+            title=f"***Willkommen {member.name} zu Die Insel!***",
+            description="Willkommen auf unserem Discord-Server, wir freuen uns dass du den Weg zu uns gefunden hast!",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
+        embed.add_field(name="Regeln", value="Bitte lese die Regeln im #regeln Channel durch und setze einen Haken darunter", inline=False)
+        embed.set_footer(text="Wir wünschen dir viel Spaß auf unserem Server!")
+        print(f"Neues Mitglied: {member.name} ist dem Server beigetreten.")
+        await channel.send(embed=embed)
+    else:
+        print("Willkommens-Channel nicht gefunden.")
 
 
 # --- Ping Command ---
 @bot.command()
 async def ping(ctx):
+    await on_member_join(ctx.author)
     await ctx.send("Pong! 🏓")
 
 
