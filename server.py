@@ -25,6 +25,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_APIKEY)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.guilds = True
+intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 try:
@@ -72,6 +74,7 @@ try:
 
 
     # --- Setup Command ---
+    
     @bot.tree.command(name="setup", description="Setup für Willkommens-, Eventchannel und Event-Rolle")
     async def setup(interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -84,80 +87,92 @@ try:
 
         class SetupView(View):
             def __init__(self, guild: discord.Guild):
-                super().__init__(timeout=60)
+                super().__init__(timeout=120)
+                self.guild = guild
 
-                # Channel Select
+                # --- Channel Selector ---
                 self.channel_select = Select(
                     placeholder="Wähle, was du einrichten möchtest …",
                     options=[
                         discord.SelectOption(label="📥 Welcome-Channel", value="welcome", description="Der Channel für Willkommensnachrichten"),
-                        discord.SelectOption(label="📢 Event-Channel", value="event", description="Der Channel für Event-Announcements"),
+                        discord.SelectOption(label="📢 Event-Channel", value="event", description="Der Channel für Event-Ankündigungen"),
                         discord.SelectOption(label="🎮 Spieleabend-Channel", value="game_night", description="Der Channel für Spieleabend-Umfragen")
                     ]
                 )
                 self.channel_select.callback = self.channel_select_callback
                 self.add_item(self.channel_select)
 
-                # Rollen-Select für Event-Erwähnung
-                role_options = [
-                    discord.SelectOption(label=role.name, value=str(role.id))
-                    for role in guild.roles if not role.is_default()
-                ]
-                self.role_select = Select(
-                    placeholder="Wähle die Rolle für Event-Pings …",
-                    options=role_options
-                )
-                self.role_select.callback = self.role_select_callback
+                # --- Event-Rolle Multi-Page Selector ---
+                self.roles = [role for role in guild.roles if not role.is_default()]
+                self.page = 0
+                self.PAGE_SIZE = 24
+                self.role_select = self.build_role_select()
                 self.add_item(self.role_select)
+
+                # Buttons für Navigation
+                self.prev_button = Button(label="◀️ Vorherige Seite", style=discord.ButtonStyle.secondary)
+                self.next_button = Button(label="▶️ Nächste Seite", style=discord.ButtonStyle.secondary)
+                self.prev_button.callback = self.prev_page
+                self.next_button.callback = self.next_page
+                self.add_item(self.prev_button)
+                self.add_item(self.next_button)
+                self.update_buttons()
+
+            def build_role_select(self):
+                start = self.page * self.PAGE_SIZE
+                end = start + self.PAGE_SIZE
+                options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in self.roles[start:end]]
+                return Select(placeholder="Wähle die Event-Rolle …", options=options, min_values=1, max_values=1)
+
+            def update_buttons(self):
+                self.prev_button.disabled = self.page == 0
+                self.next_button.disabled = (self.page + 1) * self.PAGE_SIZE >= len(self.roles)
 
             async def channel_select_callback(self, inter: discord.Interaction):
                 choice = self.channel_select.values[0]
                 channel_id = inter.channel.id
-
+                data = {"serverid": str(inter.guild.id)}
                 if choice == "welcome":
-                    supabase.table("server_settings").upsert({
-                        "serverid": str(inter.guild.id),
-                        "welcome_channel": str(channel_id)
-                    }, on_conflict="serverid").execute()
+                    data["welcome_channel"] = str(channel_id)
                     msg = f"✅ Welcome-Channel gesetzt auf {inter.channel.mention}"
                 elif choice == "game_night":
-                    supabase.table("server_settings").upsert({
-                        "serverid": str(inter.guild.id),
-                        "game_night_channel": str(channel_id)
-                    }, on_conflict="serverid").execute()
+                    data["game_night_channel"] = str(channel_id)
                     msg = f"✅ Spieleabend-Channel gesetzt auf {inter.channel.mention}"
                 else:
-                    supabase.table("server_settings").upsert({
-                        "serverid": str(inter.guild.id),
-                        "event_channel": str(channel_id)
-                    }, on_conflict="serverid").execute()
+                    data["event_channel"] = str(channel_id)
                     msg = f"✅ Event-Channel gesetzt auf {inter.channel.mention}"
 
-                await inter.response.edit_message(embed=discord.Embed(
-                    title="⚙️ Setup abgeschlossen",
-                    description=msg,
-                    color=discord.Color.green()
-                ), view=None)
+                supabase.table("server_settings").upsert(data, on_conflict="serverid").execute()
+                await inter.response.edit_message(embed=discord.Embed(title="⚙️ Setup abgeschlossen", description=msg, color=discord.Color.green()), view=None)
 
             async def role_select_callback(self, inter: discord.Interaction):
                 role_id = self.role_select.values[0]
-                supabase.table("server_settings").upsert({
-                    "serverid": str(inter.guild.id),
-                    "event_role_id": role_id
-                }, on_conflict="serverid").execute()
+                supabase.table("server_settings").upsert({"serverid": str(inter.guild.id), "event_role_id": role_id}, on_conflict="serverid").execute()
+                await inter.response.edit_message(embed=discord.Embed(title="✅ Event-Rolle gesetzt", description=f"Rolle <@&{role_id}> wird nun bei Event-Remindern erwähnt.", color=discord.Color.green()), view=None)
 
-                await inter.response.edit_message(
-                    embed=discord.Embed(
-                        title="✅ Event-Rolle gesetzt",
-                        description=f"Rolle <@&{role_id}> wird nun bei Event-Remindern erwähnt.",
-                        color=discord.Color.green()
-                    ),
-                    view=None
-                )
+            async def prev_page(self, inter: discord.Interaction):
+                self.page -= 1
+                self.role_select = self.build_role_select()
+                self.clear_items()
+                self.add_item(self.channel_select)
+                self.add_item(self.role_select)
+                self.add_item(self.prev_button)
+                self.add_item(self.next_button)
+                self.update_buttons()
+                self.role_select.callback = self.role_select_callback
+                await inter.response.edit_message(view=self)
 
-            async def on_timeout(self):
-                for child in self.children:
-                    child.disabled = True
+            async def next_page(self, inter: discord.Interaction):
+                self.page += 1
+                self.role_select = self.build_role_select()
+                self.clear_items()
+                self.add_item(self.channel_select)
+                self.add_item(self.role_select)
+                self.add_item(self.prev_button)
+                self.add_item(self.next_button)
+                self.update_buttons()
+                self.role_select.callback = self.role_select_callback
+                await inter.response.edit_message(view=self)
 
         embed = discord.Embed(
             title="⚙️ Setup starten",
@@ -169,6 +184,7 @@ try:
             color=discord.Color.blurple()
         )
         await interaction.response.send_message(embed=embed, view=SetupView(interaction.guild), ephemeral=True)
+
 
 
     # --- Funktionen aktivieren/deaktivieren ---
