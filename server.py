@@ -466,7 +466,7 @@ try:
 
             # Nachricht senden
             message = await channel.send(
-                "@everyone Ein neuer Spieleabend wurde erstellt!",
+                "Ein neuer Spieleabend wurde erstellt!",
                 embed=embed,
                 view=view
             )
