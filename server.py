@@ -58,6 +58,12 @@ try:
 
         return ", ".join(parts)
 
+    def check_time_format(time_str: str) -> bool:
+        try:
+            datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            return True
+        except ValueError:
+            return False
 
     # --- Autocomplete für Event-Namen ---
     async def event_autocomplete(interaction: discord.Interaction, current: str):
@@ -276,6 +282,20 @@ try:
                 color=discord.Color.red()
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
+        if not check_time_format(zeitpunkt):
+            embed = discord.Embed(
+                title="❌ Falsches Zeitformat",
+                description="Die Startzeit muss im Format `YYYY-MM-DD HH:MM` sein.",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        if endzeit and not check_time_format(zeitpunkt):
+            embed = discord.Embed(
+                title="❌ Falsches Zeitformat",
+                description="Die Endzeit muss im Format `YYYY-MM-DD HH:MM` sein.",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         server_id = str(interaction.guild.id)
         try:
@@ -405,6 +425,12 @@ try:
         async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.votes_yes.add(interaction.user.display_name)
             self.votes_no.discard(interaction.user.display_name)
+            list_  = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+            list_ = list(list_.data[0]["yes_votes"])
+            list_.append(str(interaction.user.id))
+            supabase.table("game_nights").update({
+                "yes_votes": str(list_)
+            }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
             await interaction.response.edit_message(
                 embed=self.build_embed(self.event_name, self.event_time, self.event_author),
                 view=self
@@ -414,6 +440,12 @@ try:
         async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.votes_no.add(interaction.user.display_name)
             self.votes_yes.discard(interaction.user.display_name)
+            list_ = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+            list_ = list(list_.data[0]["yes_votes"])
+            list_.discard(str(interaction.user.id))
+            supabase.table("game_nights").update({
+                "yes_votes": str(list_)
+            }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
             await interaction.response.edit_message(
                 embed=self.build_embed(self.event_name, self.event_time, self.event_author),
                 view=self
@@ -434,6 +466,13 @@ try:
     )
     async def spieleabend(interaction: discord.Interaction, name: str, zeitpunkt: str):
         try:
+            if not check_time_format(zeitpunkt):
+                embed = discord.Embed(
+                    title="❌ Falsches Zeitformat",
+                    description="Die Startzeit muss im Format `YYYY-MM-DD HH:MM` sein.",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
             server_id = str(interaction.guild.id)
 
             # Zeitformat fixen
@@ -441,10 +480,12 @@ try:
                 zeitpunkt = zeitpunkt + ":00"
 
             # Speichere Event in Supabase (damit /list_events etc. es auch kennt)
-            supabase.table("events").upsert({
-                "name": f"Spieleabend: {name}",
-                "target_time": zeitpunkt,
-                "serverid": server_id
+
+            supabase.table("game_nights").insert({
+                "serverid": server_id,
+                "name": name,
+                "time": zeitpunkt,
+                "yes_votes": str([""])
             }).execute()
 
             # Spieleabend-Channel aus DB holen
@@ -677,7 +718,44 @@ try:
             try:
                 now = datetime.now()
                 response = supabase.table("events").select("*").execute()
-
+                response2 = supabase.table("game_nights").select("*").execute()
+                if False:
+                    for row in response2.data:
+                        print(row)
+                        time = datetime.strptime(row['time'], "%Y-%m-%d %H:%M:%S")
+                        if now > time:
+                            supabase.table("game_nights").delete().eq("name", row['name']).eq("serverid", row['serverid']).execute()
+                            print(f"🗑 Spieleabend gelöscht: {row['name']} (Server: {row['serverid']})")
+                        delta = time - now
+                        milestones = {
+                            7*24*3600: "📢 In **1 Woche** startet das Event!",
+                            24*3600: "⏰ In **24 Stunden** startet das Event!",
+                            3600: "⚡ In **1 Stunde** geht es los!",
+                            600: "⏳ In **10 Minuten** geht es los!",
+                            0: "🚀 Das Event startet jetzt!"
+                        }
+                        for seconds, message in milestones.items():
+                            if seconds - 60 < delta.total_seconds() <= seconds:
+                                guild = bot.get_guild(int(row['serverid']))
+                                if guild:
+                                    settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(guild.id)).execute()
+                                    if not settings.data: 
+                                        continue
+                                    s = settings.data[0]
+                                    channel_id = s.get("game_night_channel")
+                                    if channel_id:
+                                        channel = guild.get_channel(int(channel_id))
+                                        if channel:
+                                            personstoping = list(response2.data[0]['yes_votes'])
+                                            print(personstoping)
+                                            await channel.send(
+                                                f"{message}",
+                                                embed=discord.Embed(
+                                                    title="📢 Spieleabend-Erinnerung",
+                                                    description=f"**Spiel:** {row['name']}\nStart: `{row['time']}` {discord.member(persons for persons in  personstoping)}",#erwähnen,
+                                                    color=discord.Color.orange()
+                                                )
+                                            )
                 for row in response.data:
                     target_time = datetime.strptime(row['target_time'], "%Y-%m-%d %H:%M:%S")
                     end_time_dt = datetime.strptime(row['end_time'], "%Y-%m-%d %H:%M:%S") if row.get('end_time') else None
@@ -735,7 +813,6 @@ try:
                     if delete_event:
                         supabase.table("events").delete().eq("name", row['name']).eq("serverid", row['serverid']).execute()
                         print(f"🗑 Event gelöscht: {row['name']} (Server: {row['serverid']})")
-
             except Exception as e:
                 print("❌ Fehler im Reminder-Loop:", e)
 
@@ -761,35 +838,36 @@ except Exception as e:
     print(f"❌ Fehler beim Starten des Bots: {e}")
 
 
-# @bot.command()
-# async def welcome(ctx):
-#     member = ctx.author
-#     messages = [
-#         f"**{member.mention} hat zu diesem Server gefunden! Willkommen!  <:pepelove:1362364214995324928>**",
-#         f"**wow, wie toll! {member.mention} ist jetzt hier! <:welcome:1362364322772160513>**",
-#         f"**{member.mention} hat zur Insel gefunden! <:pepehappy:1362364194967781598>**",
-#         f"**Juhu, {member.mention} hat zur Insel gefunden!**",
-#         f"**Kuckt mal wer hier ist: {member.mention} ! <:pepehappy:1362364194967781598>**",
-#         f"**Herzlich Willkommen {member.mention} ! Du bist nun bei der Insel!  <:pepelove:1362364214995324928>**",
-#         f"**{member.mention} ist dem Insel-Discord beigetreten! 🫡**",
-#         f"**Endlich! {member.mention} ist hier! 😇**",
-#         f"**Huhu {member.mention} . Willkommen 🙂**",
-#         f"**Ein wildes  {member.mention} ist auf die Insel geschlittert 😄**",
-#         f"**Wilkommen {member.mention} bei der Insel! <:pepehappy:1362364194967781598>**",
-#         f"**{member.mention}, was geht yallah <:welcome:1362364322772160513>**",
-#         f"**Oh halloo! {member.mention} 🙂 **",
-#         f"**Heyyyy was geeeht {member.mention} 😀 **",
-#         f"**{member.mention} Du bist Kanidat, gewinnen wir die Runde bekommst du einen Händedruck!**",
-#         f"**Seht Seht {member.mention} hat es auf den Server geschafft.<:welcome:1362364322772160513>**",
-#         f"**Boar das schmeckt, {member.mention} ist nun hier!🙃**"
-#         ]
-#     for message in messages:
-#             embed = discord.Embed(
-#                 title="👋 Willkommen!",
-#                 description=message,
-            
-#                 color=discord.Color.green()
-#             )
-#             await ctx.send(embed=embed)
+@bot.command()
+async def welcome(ctx):
+    if False:
+        member = ctx.author
+        messages = [
+            f"**{member.mention} hat zu diesem Server gefunden! Willkommen!  <:pepelove:1362364214995324928>**",
+            f"**wow, wie toll! {member.mention} ist jetzt hier! <:welcome:1362364322772160513>**",
+            f"**{member.mention} hat zur Insel gefunden! <:pepehappy:1362364194967781598>**",
+            f"**Juhu, {member.mention} hat zur Insel gefunden!**",
+            f"**Kuckt mal wer hier ist: {member.mention} ! <:pepehappy:1362364194967781598>**",
+            f"**Herzlich Willkommen {member.mention} ! Du bist nun bei der Insel!  <:pepelove:1362364214995324928>**",
+            f"**{member.mention} ist dem Insel-Discord beigetreten! 🫡**",
+            f"**Endlich! {member.mention} ist hier! 😇**",
+            f"**Huhu {member.mention} . Willkommen 🙂**",
+            f"**Ein wildes  {member.mention} ist auf die Insel geschlittert 😄**",
+            f"**Wilkommen {member.mention} bei der Insel! <:pepehappy:1362364194967781598>**",
+            f"**{member.mention}, was geht yallah <:welcome:1362364322772160513>**",
+            f"**Oh halloo! {member.mention} 🙂 **",
+            f"**Heyyyy was geeeht {member.mention} 😀 **",
+            f"**{member.mention} Du bist Kanidat, gewinnen wir die Runde bekommst du einen Händedruck!**",
+            f"**Seht Seht {member.mention} hat es auf den Server geschafft.<:welcome:1362364322772160513>**",
+            f"**Boar das schmeckt, {member.mention} ist nun hier!🙃**"
+            ]
+        for message in messages:
+                embed = discord.Embed(
+                    title="👋 Willkommen!",
+                    description=message,
+                
+                    color=discord.Color.green()
+                )
+                await ctx.send(embed=embed)
 
 bot.run(TOKEN)
