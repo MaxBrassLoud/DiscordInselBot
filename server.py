@@ -11,6 +11,7 @@ from discord.ui import View, Select
 from discord.ui import View, Select, Modal, TextInput, Button
 from discord import app_commands, Interaction, Embed, TextStyle, PermissionOverwrite
 import asyncio
+import json
 
 # --- Setup ---
 load_dotenv()
@@ -402,35 +403,52 @@ try:
             await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
 
-    # --- Spieleabend VoteView ---
     class VoteView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
-            self.votes_yes = set()
+            self.votes_yes = {}
             self.votes_no = set()
 
         def build_embed(self, name: str, zeitpunkt: str, author: discord.Member) -> discord.Embed:
+            dabei = ", ".join(f"<@{uid}>" for uid in self.votes_yes.keys()) if self.votes_yes else "Noch keiner"
+            keine_zeit = ", ".join(self.votes_no) if self.votes_no else "Noch keiner"
+
             return discord.Embed(
                 title="🎮 Spieleabend geplant!",
                 description=(
                     f"**Spiel:** {name}\n"
                     f"**Start:** `{zeitpunkt}`\n\n"
-                    f"✅ Dabei: {', '.join(self.votes_yes) if self.votes_yes else 'Noch keiner'}\n"
-                    f"❌ Keine Zeit: {', '.join(self.votes_no) if self.votes_no else 'Noch keiner'}"
+                    f"✅ Dabei: {dabei}\n"
+                    f"❌ Keine Zeit: {keine_zeit}"
                 ),
                 color=discord.Color.blurple()
             ).set_footer(text=f"Geplant von {author.display_name}")
 
         @discord.ui.button(label="✅ Dabei!", style=discord.ButtonStyle.success)
         async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.votes_yes.add(interaction.user.display_name)
+            self.votes_yes[str(interaction.user.id)] = {
+                "name": interaction.user.display_name,
+                "id": str(interaction.user.id)
+            }
             self.votes_no.discard(interaction.user.display_name)
-            list_  = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
-            list_ = list(list_.data[0]["yes_votes"])
-            list_.append(str(interaction.user.id))
+
+            # DB updaten
+            data = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+            yes_votes = data.data[0].get("yes_votes", "{}")
+            if isinstance(yes_votes, str):
+                try:
+                    yes_votes = eval(yes_votes)
+                except:
+                    yes_votes = {}
+            yes_votes[str(interaction.user.id)] = {
+                "name": interaction.user.display_name,
+                "id": str(interaction.user.id)
+            }
+
             supabase.table("game_nights").update({
-                "yes_votes": str(list_)
+                "yes_votes": str(yes_votes)
             }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+
             await interaction.response.edit_message(
                 embed=self.build_embed(self.event_name, self.event_time, self.event_author),
                 view=self
@@ -439,23 +457,40 @@ try:
         @discord.ui.button(label="❌ Keine Zeit", style=discord.ButtonStyle.danger)
         async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.votes_no.add(interaction.user.display_name)
-            self.votes_yes.discard(interaction.user.display_name)
-            list_ = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
-            list_ = list(list_.data[0]["yes_votes"])
-            list_.discard(str(interaction.user.id))
+            self.votes_yes.pop(str(interaction.user.id), None)
+
+            # DB updaten
+            data = supabase.table("game_nights").select("yes_votes").eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+            yes_votes = data.data[0].get("yes_votes", "{}")
+            if isinstance(yes_votes, str):
+                try:
+                    yes_votes = eval(yes_votes)
+                except:
+                    yes_votes = {}
+            yes_votes.pop(str(interaction.user.id), None)
+
             supabase.table("game_nights").update({
-                "yes_votes": str(list_)
+                "yes_votes": str(yes_votes)
             }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
+
             await interaction.response.edit_message(
                 embed=self.build_embed(self.event_name, self.event_time, self.event_author),
                 view=self
             )
 
-        # kleine Helfer, um Context reinzuschieben
+        # Context
         def set_context(self, name: str, zeitpunkt: str, author: discord.Member):
             self.event_name = name
             self.event_time = zeitpunkt
             self.event_author = author
+
+        def add_votes(self, serverid: str):
+            data = supabase.table("game_nights").select("yes_votes").eq("serverid", serverid).eq("name", self.event_name).execute()
+            yes_votes = data.data[0].get("yes_votes", "{}")
+            try:
+                return eval(yes_votes) if isinstance(yes_votes, str) else yes_votes
+            except:
+                return {}
 
 
     # --- Slash Command: /spieleabend ---
@@ -473,44 +508,47 @@ try:
                     color=discord.Color.red()
                 )
                 return await interaction.response.send_message(embed=embed, ephemeral=True)
+
             server_id = str(interaction.guild.id)
 
             # Zeitformat fixen
             if len(zeitpunkt) == 16:
                 zeitpunkt = zeitpunkt + ":00"
 
-            # Speichere Event in Supabase (damit /list_events etc. es auch kennt)
-
-            supabase.table("game_nights").insert({
-                "serverid": server_id,
-                "name": name,
-                "time": zeitpunkt,
-                "yes_votes": str([""])
-            }).execute()
-
-            # Spieleabend-Channel aus DB holen
+            # Channel aus settings
             settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", server_id).execute()
             channel_id = None
             if settings.data and settings.data[0].get("game_night_channel"):
                 channel_id = int(settings.data[0]["game_night_channel"])
-
-            # Fallback: aktueller Channel
             channel = interaction.channel if not channel_id else interaction.guild.get_channel(channel_id)
             if not channel:
                 return await interaction.response.send_message("❌ Kein Spieleabend-Channel gefunden.", ephemeral=True)
 
-            # VoteView vorbereiten
+            # VoteView
             view = VoteView()
             view.set_context(name, zeitpunkt, interaction.user)
+            view.votes_yes[str(interaction.user.id)] = {
+                "name": interaction.user.display_name,
+                "id": str(interaction.user.id)
+            }
 
             embed = view.build_embed(name, zeitpunkt, interaction.user)
+            msg = await channel.send("Ein neuer Spieleabend wurde erstellt!", embed=embed, view=view)
 
-            # Nachricht senden
-            message = await channel.send(
-                "Ein neuer Spieleabend wurde erstellt!",
-                embed=embed,
-                view=view
-            )
+            # Event in DB speichern (inkl. MessageID)
+            supabase.table("game_nights").insert({
+                "serverid": server_id,
+                "name": name,
+                "time": zeitpunkt,
+                "yes_votes": str({
+                    str(interaction.user.id): {
+                        "name": interaction.user.display_name,
+                        "id": str(interaction.user.id)
+                    }
+                }),
+                "senderid": str(interaction.user.id),
+                "messageid": str(msg.id)
+            }).execute()
 
             await interaction.response.send_message(
                 f"✅ Spieleabend **{name}** am `{zeitpunkt}` erstellt.",
@@ -519,6 +557,65 @@ try:
 
         except Exception as e:
             await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
+
+
+    # --- Autocomplete für remove_spieleabend ---
+    async def spieleabend_autocomplete(interaction: discord.Interaction, current: str):
+        server_id = str(interaction.guild.id)
+        events = supabase.table("game_nights").select("name").eq("serverid", server_id).execute()
+        choices = []
+        if events.data:
+            for e in events.data:
+                if current.lower() in e["name"].lower():
+                    choices.append(app_commands.Choice(name=e["name"], value=e["name"]))
+        return choices[:25]  # max. 25 Vorschläge
+
+
+    # --- Slash Command: /remove_spieleabend ---
+    @bot.tree.command(name="remove_spieleabend", description="Entfernt einen Spieleabend")
+    @app_commands.autocomplete(name=spieleabend_autocomplete)
+    async def remove_spieleabend(interaction: discord.Interaction, name: str):
+        try:
+            # Daten aus DB ziehen
+            result = supabase.table("game_nights").select("senderid", "messageid").eq("name", name).eq("serverid", str(interaction.guild.id)).execute()
+            if not result.data:
+                return await interaction.response.send_message("❌ Spieleabend nicht gefunden.", ephemeral=True)
+
+            senderid = result.data[0].get("senderid")
+            messageid = result.data[0].get("messageid")
+
+            # Berechtigung prüfen
+            if not interaction.user.guild_permissions.administrator and str(interaction.user.id) != str(senderid):
+                embed = discord.Embed(
+                    title="❌ Keine Berechtigung",
+                    description="Nur Administratoren oder der Ersteller dürfen den Spieleabend löschen.",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            # Nachricht löschen, wenn möglich
+            if messageid:
+                try:
+                    # Channel aus Settings holen
+                    settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(interaction.guild.id)).execute()
+                    if settings.data and settings.data[0].get("game_night_channel"):
+                        channel_id = int(settings.data[0]["game_night_channel"])
+                        channel = interaction.guild.get_channel(channel_id)
+                    else:
+                        channel = interaction.channel
+
+                    msg = await channel.fetch_message(int(messageid))
+                    await msg.delete()
+                except Exception as e:
+                    print(f"[WARN] Nachricht konnte nicht gelöscht werden: {e}")
+
+            # DB-Eintrag löschen
+            supabase.table("game_nights").delete().eq("serverid", str(interaction.guild.id)).eq("name", name).execute()
+
+            await interaction.response.send_message(f"🗑️ Spieleabend **{name}** wurde entfernt.", ephemeral=True)
+
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Fehler beim Entfernen: {e}", ephemeral=True)
 
 
     @bot.tree.command(name="ticket_setup", description="Richte das Ticket-System ein")
@@ -706,113 +803,125 @@ try:
 
 
     # --- Reminder Task ---
-    # --- Reminder Task ---
     async def event_reminder_loop():
         await bot.wait_until_ready()  # Sicherstellen, dass der Bot bereit ist
         while not bot.is_closed():
             now = datetime.now()
-            # --- Warte bis zur nächsten vollen Minute ---
+            # Bis zur nächsten vollen Minute schlafen
             sleep_seconds = 60 - now.second - now.microsecond / 1_000_000
             await asyncio.sleep(sleep_seconds)
 
             try:
                 now = datetime.now()
-                response = supabase.table("events").select("*").execute()
-                response2 = supabase.table("game_nights").select("*").execute()
-                if False:
-                    for row in response2.data:
-                        print(row)
-                        time = datetime.strptime(row['time'], "%Y-%m-%d %H:%M:%S")
-                        if now > time:
-                            supabase.table("game_nights").delete().eq("name", row['name']).eq("serverid", row['serverid']).execute()
-                            print(f"🗑 Spieleabend gelöscht: {row['name']} (Server: {row['serverid']})")
-                        delta = time - now
-                        milestones = {
-                            7*24*3600: "📢 In **1 Woche** startet das Event!",
-                            24*3600: "⏰ In **24 Stunden** startet das Event!",
-                            3600: "⚡ In **1 Stunde** geht es los!",
-                            600: "⏳ In **10 Minuten** geht es los!",
-                            0: "🚀 Das Event startet jetzt!"
-                        }
-                        for seconds, message in milestones.items():
-                            if seconds - 60 < delta.total_seconds() <= seconds:
-                                guild = bot.get_guild(int(row['serverid']))
-                                if guild:
-                                    settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(guild.id)).execute()
-                                    if not settings.data: 
-                                        continue
-                                    s = settings.data[0]
-                                    channel_id = s.get("game_night_channel")
-                                    if channel_id:
-                                        channel = guild.get_channel(int(channel_id))
-                                        if channel:
-                                            personstoping = list(response2.data[0]['yes_votes'])
-                                            print(personstoping)
-                                            await channel.send(
-                                                f"{message}",
-                                                embed=discord.Embed(
-                                                    title="📢 Spieleabend-Erinnerung",
-                                                    description=f"**Spiel:** {row['name']}\nStart: `{row['time']}` {discord.member(persons for persons in  personstoping)}",#erwähnen,
-                                                    color=discord.Color.orange()
-                                                )
-                                            )
-                for row in response.data:
-                    target_time = datetime.strptime(row['target_time'], "%Y-%m-%d %H:%M:%S")
-                    end_time_dt = datetime.strptime(row['end_time'], "%Y-%m-%d %H:%M:%S") if row.get('end_time') else None
+
+                # --- Spieleabende (game_nights) ---
+                gn_resp = supabase.table("game_nights").select("*").execute()
+                if gn_resp.data:
+                    for row in gn_resp.data:
+                        # Zeitdifferenz zum Start
+                        target_time = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S")
+                        delta = target_time - now
+
+                        # Channel finden
+                        guild = bot.get_guild(int(row["serverid"]))
+                        if not guild:
+                            continue
+                        settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(guild.id)).execute()
+                        if not settings.data or not settings.data[0].get("game_night_channel"):
+                            continue
+                        channel = guild.get_channel(int(settings.data[0]["game_night_channel"]))
+                        if not channel:
+                            continue
+
+                        # yes_votes parsen -> Dict {user_id: {...}}
+                        yes_votes_raw = row.get("yes_votes", "{}")
+                        try:
+                            yes_votes = eval(yes_votes_raw) if isinstance(yes_votes_raw, str) else (yes_votes_raw or {})
+                            if not isinstance(yes_votes, dict):
+                                yes_votes = {}
+                        except Exception:
+                            yes_votes = {}
+                        mentions = " ".join(f"<@{uid}>" for uid in yes_votes.keys()) if yes_votes else ""
+
+                        # 10-Minuten-Reminder: genau im Fenster (600s - 60s, 600s]
+                        if 540 < delta.total_seconds() <= 600:
+                            text = f"{mentions} ⏳ In **10 Minuten** startet der Spieleabend **{row['name']}**!"
+                            embed = discord.Embed(
+                                title="🔔 Spieleabend-Erinnerung (T–10)",
+                                description=f"**Spiel:** {row['name']}\n**Start:** `{row['time']}`",
+                                color=discord.Color.orange()
+                            )
+                            await channel.send(content=text if mentions else None, embed=embed)
+
+                        # Start-Reminder: genau im Fenster (0s - 60s]
+                        if -60 < delta.total_seconds() <= 0:
+                            dabei = ", ".join(f"<@{uid}>" for uid in yes_votes.keys()) if yes_votes else "Noch keiner"
+                            text = f"🎮 Der Spieleabend **{row['name']}** startet jetzt!\n\n✅ Dabei: {dabei}"
+                            embed = discord.Embed(
+                                title="🎮 Spieleabend startet jetzt!",
+                                description=f"**Spiel:** {row['name']}\n**Start:** `{row['time']}`",
+                                color=discord.Color.green()
+                            )
+                            await channel.send(content=text, embed=embed)
+
+                # --- Allgemeine Events (events) ---
+                ev_resp = supabase.table("events").select("*").execute()
+                for row in ev_resp.data:
+                    target_time = datetime.strptime(row["target_time"], "%Y-%m-%d %H:%M:%S")
+                    end_time_dt = datetime.strptime(row["end_time"], "%Y-%m-%d %H:%M:%S") if row.get("end_time") else None
                     delta = target_time - now
 
-                    # --- Erinnerungen ---
                     milestones = {
-                        7*24*3600: "📢 In **1 Woche** startet das Event!",
-                        24*3600: "⏰ In **24 Stunden** startet das Event!",
+                        7 * 24 * 3600: "📢 In **1 Woche** startet das Event!",
+                        24 * 3600: "⏰ In **24 Stunden** startet das Event!",
                         3600: "⚡ In **1 Stunde** geht es los!",
                         600: "⏳ In **10 Minuten** geht es los!",
-                        0: "🚀 Das Event startet jetzt!"
+                        0: "🚀 Das Event startet jetzt!",
                     }
 
+                    # Channel + Settings prüfen
+                    guild = bot.get_guild(int(row["serverid"]))
+                    if not guild:
+                        continue
+                    settings = supabase.table("server_settings").select("event_channel,event_enabled,event_role_id")\
+                        .eq("serverid", str(guild.id)).execute()
+                    if not settings.data:
+                        continue
+                    s = settings.data[0]
+                    if not s.get("event_enabled"):
+                        continue
+                    channel_id = s.get("event_channel")
+                    if not channel_id:
+                        continue
+                    channel = guild.get_channel(int(channel_id))
+                    if not channel:
+                        continue
+
                     for seconds, message in milestones.items():
-                        # Nachricht nur senden, wenn die Zeit bis zum Event zwischen seconds-60 und seconds liegt
-                        if seconds - 60 < delta.total_seconds() <= seconds:
-                            guild = bot.get_guild(int(row['serverid']))
-                            if guild:
-                                settings = supabase.table("server_settings").select("event_channel, event_enabled","event_role_id")\
-                                    .eq("serverid", str(guild.id)).execute()
-                                if not settings.data: 
-                                    continue
-                                s = settings.data[0]
-                                if not s.get("event_enabled"): 
-                                    continue
+                        # Fenster: (seconds-60, seconds]
+                        if (seconds - 60) < delta.total_seconds() <= seconds:
+                            role_id = s.get("event_role_id")
+                            role_mention = f"<@&{role_id}>" if role_id else ""
+                            embed = discord.Embed(
+                                title="📢 Event-Erinnerung",
+                                description=f"**Event:** {row['name']}\nStart: `{row['target_time']}`",
+                                color=discord.Color.orange()
+                            )
+                            await channel.send(content=f"{role_mention} {message}".strip(), embed=embed)
 
-                                channel_id = s.get("event_channel")
-                                if channel_id:
-                                    channel = guild.get_channel(int(channel_id))
-                                    if channel:
-                                        role_id = s.get("event_role_id")
-                                        role_mention = f"<@&{role_id}>" if role_id else ""
-
-                                        await channel.send(
-                                            f"{role_mention} {message}",
-                                            embed=discord.Embed(
-                                                title="📢 Event-Erinnerung",
-                                                description=f"**Event:** {row['name']}\nStart: `{row['target_time']}`",
-                                                color=discord.Color.orange()
-                                            )
-                                        )
-                    # --- Automatisches Löschen abgeschlossener Events ---
+                    # Auto-Cleanup
                     delete_event = False
-                    # Spieleabende: immer löschen, wenn vorbei
-                    if row['name'].startswith("Spieleabend:") and now >= target_time:
+                    if row["name"].startswith("Spieleabend:") and now >= target_time:
                         delete_event = True
-                    # Events ohne Endzeit: löschen, wenn Startzeit vorbei
                     elif not end_time_dt and now >= target_time:
                         delete_event = True
-                    # Events mit Endzeit: löschen, wenn Endzeit vorbei
                     elif end_time_dt and now >= end_time_dt:
                         delete_event = True
 
                     if delete_event:
-                        supabase.table("events").delete().eq("name", row['name']).eq("serverid", row['serverid']).execute()
+                        supabase.table("events").delete().eq("name", row["name"]).eq("serverid", row["serverid"]).execute()
                         print(f"🗑 Event gelöscht: {row['name']} (Server: {row['serverid']})")
+
             except Exception as e:
                 print("❌ Fehler im Reminder-Loop:", e)
 
