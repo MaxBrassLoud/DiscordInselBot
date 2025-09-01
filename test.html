@@ -1,11 +1,4 @@
-from flask import Flask
-from threading import Thread
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return """<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8" />
@@ -68,7 +61,7 @@ def home():
   </style>
 </head>
 <body>
-  <h1>🎉 Danke dass du den Insel Bot nutzt!</h1>
+  <h1>🎉 Danke für den Insel Bot!</h1>
   <p>Der Bot ist jetzt in deinem Server. Hier findest du alle verfügbaren Commands:</p>
 
   <div class="commands">
@@ -121,14 +114,3 @@ def home():
   <footer>© 2025 Insel Bot – Alle Rechte vorbehalten</footer>
 </body>
 </html>
-"""
-
-def run():
-    app.run(host="0.0.0.0", port=8080)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-if __name__=="__main__":
-    keep_alive()
