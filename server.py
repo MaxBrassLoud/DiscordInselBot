@@ -12,6 +12,7 @@ from discord.ui import View, Select, Modal, TextInput, Button
 from discord import app_commands, Interaction, Embed, TextStyle, PermissionOverwrite
 import asyncio
 import json
+from levelcalc import calculate_level
 
 # --- Setup ---
 load_dotenv()
@@ -203,7 +204,8 @@ try:
                     placeholder=f"Wähle die Funktion zum {mode} …",
                     options=[
                         discord.SelectOption(label="👋 Willkommensnachricht", value="welcome"),
-                        discord.SelectOption(label="📅 Event-Ankündiger", value="event")
+                        discord.SelectOption(label="📅 Event-Ankündiger", value="event"),
+                        discord.SelectOption(label="🎮 Spieleabend", value="game_night")
                     ]
                 )
                 self.select.callback = self.select_callback
@@ -211,7 +213,7 @@ try:
 
             async def select_callback(self, inter: discord.Interaction):
                 choice = self.select.values[0]
-                field = "welcome_enabled" if choice == "welcome" else "event_enabled"
+                field = "welcome_enabled" if choice == "welcome" else "game_night_enabled" if choice == "game_night" else "event_enabled"
                 supabase.table("server_settings").upsert(
                     {"serverid": guild_id, field: (mode == "aktivieren")},
                     on_conflict="serverid"
@@ -294,6 +296,14 @@ try:
             embed = discord.Embed(
                 title="❌ Falsches Zeitformat",
                 description="Die Endzeit muss im Format `YYYY-MM-DD HH:MM` sein.",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        enabled = supabase.table("server_settings").select("event_enabled").eq("serverid", str(interaction.guild.id)).execute()
+        if not enabled.data or not enabled.data[0].get("event_enabled", False):
+            embed = discord.Embed(
+                title="❌ Funktion deaktiviert",
+                description="Der Event-Ankündiger ist auf diesem Server nicht aktiviert. Bitte aktiviere die Funktion zuerst mit `/activate`.",
                 color=discord.Color.red()
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -510,6 +520,15 @@ try:
                 return await interaction.response.send_message(embed=embed, ephemeral=True)
 
             server_id = str(interaction.guild.id)
+
+            enabled = supabase.table("server_settings").select("game_night_enabled").eq("serverid", server_id).execute()
+            if not enabled.data or not enabled.data[0].get("game_night_enabled", False):
+                embed = discord.Embed(
+                    title="❌ Funktion deaktiviert",
+                    description="Der Spieleabend ist auf diesem Server nicht aktiviert. Bitte aktiviere die Funktion zuerst mit `/activate`.",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
             # Zeitformat fixen
             if len(zeitpunkt) == 16:
@@ -810,12 +829,20 @@ try:
             # Bis zur nächsten vollen Minute schlafen
             sleep_seconds = 60 - now.second - now.microsecond / 1_000_000
             await asyncio.sleep(sleep_seconds)
+            try:
+                settings = True
+                if settings:
+                    save_xp_to_db()
+            except Exception as e:
+                print(f"[ERROR] Fehler beim Speichern der XP: {e}")
+
 
             try:
                 now = datetime.now()
 
                 # --- Spieleabende (game_nights) ---
                 gn_resp = supabase.table("game_nights").select("*").execute()
+
                 if gn_resp.data:
                     for row in gn_resp.data:
                         # Zeitdifferenz zum Start
@@ -926,17 +953,118 @@ try:
                 print("❌ Fehler im Reminder-Loop:", e)
 
 
-    # --- Bot Start ---
-    @bot.event
-    async def on_ready():
-        try:
-            synced = await bot.tree.sync()
-            print(f"✅ {len(synced)} globale Slash-Commands synchronisiert")
-            bot.loop.create_task(event_reminder_loop())
-        except Exception as e:
-            print(f"❌ Fehler beim Synchronisieren: {e}")
-            
 
+    # ---- Level System ----
+    @bot.event
+    async def on_message(message):
+        if message.author.bot:
+            return
+
+        # JSON einlesen oder neu erstellen
+        try:
+            with open("ram.json", "r") as f:
+                ram = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            ram = {}
+
+        guild_id = str(message.guild.id)
+        user_id = str(message.author.id)
+
+        if guild_id not in ram:
+            ram[guild_id] = {}
+        if user_id not in ram[guild_id]:
+            ram[guild_id][user_id] = {"xp": 0, "serverid": guild_id}
+
+        # +1 XP für jede Nachricht
+        ram[guild_id][user_id]["xp"] += 1
+
+        with open("ram.json", "w") as f:
+            json.dump(ram, f, indent=4)
+
+        await bot.process_commands(message)  # Commands nicht blockieren
+
+
+    def save_xp_to_db():
+        try:
+            with open("ram.json", "r") as f:
+                ram = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        settings = supabase.table("server_settings").select("level_system_enabled", "serverid").eq("level_system_enabled", True).execute()
+        Server_Ids = [s["serverid"] for s in settings.data] if settings.data else []
+        if not settings.data:
+            return
+
+        for guild_id, users in ram.items():
+            for user_id, data in users.items():
+                
+                xp = int(data.get("xp", 0))
+
+                if guild_id not in Server_Ids:
+                    print(f"[INFO] Level System deaktiviert auf Server {guild_id}, XP nicht gespeichert.")
+                    return 
+
+                # Prüfen, ob User schon existiert
+                resp = supabase.table("levels").select("xp", "level").eq("userid", user_id).eq("serverid", guild_id).execute()
+                if not resp.data:
+                    # Neuer Eintrag
+                    supabase.table("levels").insert({
+                        "userid": user_id,
+                        "serverid": guild_id,
+                        "xp": xp,
+                        "level": 0
+                    }).execute()
+                else:
+                    # Update XP (DB-Wert in int konvertieren!)
+                    try:
+                        current_xp = int(resp.data[0].get("xp", 0))
+                    except (ValueError, TypeError):
+                        current_xp = 0
+
+                    supabase.table("levels").update({
+                        "xp": current_xp + xp,
+                        "level": calculate_level(current_xp + xp)  # Level = XP // 100
+                    }).eq("userid", user_id).eq("serverid", guild_id).execute()
+
+        # RAM leeren nach Speichern
+        with open("ram.json", "w") as f:
+            json.dump({}, f)
+
+
+    # ---- Voice XP Task ----
+    async def voice_xp_loop():
+        await bot.wait_until_ready()  # Sicherstellen, dass der Bot bereit ist
+        while not bot.is_closed():
+            now = datetime.now()
+            # Bis zur nächsten vollen Minute schlafen
+            sleep_seconds = 60 - now.second - now.microsecond / 1_000_000
+            await asyncio.sleep(sleep_seconds)
+            for guild in bot.guilds:
+                for vc in guild.voice_channels:
+                    for member in vc.members:
+                        if member.bot:
+                            continue
+                        try:
+                            with open("ram.json", "r") as f:
+                                ram = json.load(f)
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            ram = {}
+
+                        guild_id = str(guild.id)
+                        user_id = str(member.id)
+
+                        if guild_id not in ram:
+                            ram[guild_id] = {}
+                        if user_id not in ram[guild_id]:
+                            ram[guild_id][user_id] = {"xp": 0, "serverid": guild_id}
+
+                        # +6 XP pro Minute im Voice
+                        ram[guild_id][user_id]["xp"] += 6
+
+                        with open("ram.json", "w") as f:
+                            json.dump(ram, f, indent=4)
+
+            await asyncio.sleep(60)  # jede Minute prüfen
 
     # pingpong test !ping
     @bot.command()
@@ -949,7 +1077,7 @@ except Exception as e:
 
 @bot.command()
 async def welcome(ctx):
-    if False:
+    if ctx.author.guild_permissions.administrator:
         member = ctx.author
         messages = [
             f"**{member.mention} hat zu diesem Server gefunden! Willkommen!  <:pepelove:1362364214995324928>**",
@@ -978,5 +1106,17 @@ async def welcome(ctx):
                     color=discord.Color.green()
                 )
                 await ctx.send(embed=embed)
+@bot.event
+async def on_ready():
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} globale Slash-Commands synchronisiert")
+        bot.loop.create_task(event_reminder_loop())
+        bot.loop.create_task(voice_xp_loop())  # Voice XP Task starten
+    except Exception as e:
+        print(f"❌ Fehler beim Synchronisieren: {e}")
 
 bot.run(TOKEN)
+
+
+
