@@ -4,7 +4,7 @@ import random
 from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from keep_alive import keep_alive
 from discord.ui import View, Select
@@ -13,6 +13,8 @@ from discord import app_commands, Interaction, Embed, TextStyle, PermissionOverw
 import asyncio
 import json
 from levelcalc import calculate_level
+import ast
+
 
 # --- Setup ---
 load_dotenv()
@@ -105,7 +107,8 @@ try:
                         discord.SelectOption(label="📥 Welcome-Channel", value="welcome", description="Der Channel für Willkommensnachrichten"),
                         discord.SelectOption(label="📢 Event-Channel", value="event", description="Der Channel für Event-Ankündigungen"),
                         discord.SelectOption(label="🎮 Spieleabend-Channel", value="game_night", description="Der Channel für Spieleabend-Umfragen")
-                    ]
+                    ],
+                    custom_id="channel_select_unique"
                 )
                 self.channel_select.callback = self.channel_select_callback
                 self.add_item(self.channel_select)
@@ -118,8 +121,8 @@ try:
                 self.add_item(self.role_select)
 
                 # Buttons für Navigation
-                self.prev_button = Button(label="◀️ Vorherige Seite", style=discord.ButtonStyle.secondary)
-                self.next_button = Button(label="▶️ Nächste Seite", style=discord.ButtonStyle.secondary)
+                self.prev_button = Button(label="◀️ Vorherige Seite", style=discord.ButtonStyle.secondary, custom_id="prev_page_unique")
+                self.next_button = Button(label="▶️ Nächste Seite", style=discord.ButtonStyle.secondary, custom_id="next_page_unique")
                 self.prev_button.callback = self.prev_page
                 self.next_button.callback = self.next_page
                 self.add_item(self.prev_button)
@@ -130,7 +133,7 @@ try:
                 start = self.page * self.PAGE_SIZE
                 end = start + self.PAGE_SIZE
                 options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in self.roles[start:end]]
-                return Select(placeholder="Wähle die Event-Rolle …", options=options, min_values=1, max_values=1)
+                return Select(placeholder="Wähle die Event-Rolle …", options=options, min_values=1, max_values=1, custom_id="role_select_unique")
 
             def update_buttons(self):
                 self.prev_button.disabled = self.page == 0
@@ -206,7 +209,8 @@ try:
                         discord.SelectOption(label="👋 Willkommensnachricht", value="welcome"),
                         discord.SelectOption(label="📅 Event-Ankündiger", value="event"),
                         discord.SelectOption(label="🎮 Spieleabend", value="game_night")
-                    ]
+                    ],
+                    custom_id="feature_select_unique"
                 )
                 self.select.callback = self.select_callback
                 self.add_item(self.select)
@@ -321,13 +325,20 @@ try:
                 "end_time": endzeit,
                 "serverid": server_id
             }).execute()
-
-            await interaction.response.send_message(
-                f"✅ Event **{name}** gespeichert.\nStart: `{zeitpunkt}`" + (f"\nEnde: `{endzeit}`" if endzeit else "")
+            embed = discord.Embed(
+                title=f"✅ Event **{name}** gespeichert.",
+                description=f"Start: `{zeitpunkt}`" + (f"\nEnde: `{endzeit}`" if endzeit else ""),
+                color=discord.Color.green()
             )
+            await interaction.response.send_message(embed=embed)
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
+            embed= discord.Embed(
+                title="❌ Fehler",
+                description=f"{e}",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed)
 
 
     @bot.tree.command(name="time_until", description="Zeigt die Zeit bis zu einem gespeicherten Event")
@@ -413,26 +424,38 @@ try:
             await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
 
+
     class VoteView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
             self.votes_yes = {}
             self.votes_no = set()
 
-        def build_embed(self, name: str, zeitpunkt: str, author: discord.Member) -> discord.Embed:
+        def build_embed(self, name: str, zeitpunkt: str, author: discord.Member, description: str = None) -> discord.Embed:
             dabei = ", ".join(f"<@{uid}>" for uid in self.votes_yes.keys()) if self.votes_yes else "Noch keiner"
             keine_zeit = ", ".join(self.votes_no) if self.votes_no else "Noch keiner"
 
-            return discord.Embed(
+            # Zeit in Discord Timestamp konvertieren
+            try:
+                dt = datetime.strptime(zeitpunkt, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                timestamp = int(dt.timestamp())
+                zeit_fmt = f"<t:{timestamp}:F>"  # schön formatiert mit Tag, Datum und Uhrzeit
+            except:
+                zeit_fmt = zeitpunkt  # Fallback, falls Parsing fehlschlägt
+
+            embed = discord.Embed(
                 title="🎮 Spieleabend geplant!",
                 description=(
                     f"**Spiel:** {name}\n"
-                    f"**Start:** `{zeitpunkt}`\n\n"
-                    f"✅ Dabei: {dabei}\n"
-                    f"❌ Keine Zeit: {keine_zeit}"
+                    + (f"**Beschreibung:** {description}\n\n" if description else "")
+                    + f"**Start:** {zeit_fmt}\n\n"
+                    + f"✅ Dabei: {dabei}\n"
+                    + f"❌ Keine Zeit: {keine_zeit}"
                 ),
                 color=discord.Color.blurple()
             ).set_footer(text=f"Geplant von {author.display_name}")
+
+            return embed
 
         @discord.ui.button(label="✅ Dabei!", style=discord.ButtonStyle.success)
         async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -460,7 +483,7 @@ try:
             }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
 
             await interaction.response.edit_message(
-                embed=self.build_embed(self.event_name, self.event_time, self.event_author),
+                embed=self.build_embed(self.event_name, self.event_time, self.event_author, self.event_description),
                 view=self
             )
 
@@ -484,15 +507,16 @@ try:
             }).eq("serverid", str(interaction.guild.id)).eq("name", self.event_name).execute()
 
             await interaction.response.edit_message(
-                embed=self.build_embed(self.event_name, self.event_time, self.event_author),
+                embed=self.build_embed(self.event_name, self.event_time, self.event_author, self.event_description),
                 view=self
             )
 
         # Context
-        def set_context(self, name: str, zeitpunkt: str, author: discord.Member):
+        def set_context(self, name: str, zeitpunkt: str, author: discord.Member, description: str = None):
             self.event_name = name
             self.event_time = zeitpunkt
             self.event_author = author
+            self.event_description = description
 
         def add_votes(self, serverid: str):
             data = supabase.table("game_nights").select("yes_votes").eq("serverid", serverid).eq("name", self.event_name).execute()
@@ -503,13 +527,121 @@ try:
                 return {}
 
 
-    # --- Slash Command: /spieleabend ---
+    class VoteView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)  # persistente View
+
+        def build_embed_from_row(self, row: dict, guild: discord.Guild) -> discord.Embed:
+            # safe parse yes_votes
+            yes_votes_raw = row.get("yes_votes", "{}")
+            try:
+                yes_votes = ast.literal_eval(yes_votes_raw) if isinstance(yes_votes_raw, str) else (yes_votes_raw or {})
+                if not isinstance(yes_votes, dict):
+                    yes_votes = {}
+            except Exception:
+                yes_votes = {}
+
+            dabei = ", ".join(f"<@{uid}>" for uid in yes_votes.keys()) if yes_votes else "Noch keiner"
+            description = row.get("description", "")
+
+            # Zeit formatieren
+            try:
+                dt = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                zeit_fmt = f"<t:{int(dt.timestamp())}:F>"
+            except Exception:
+                zeit_fmt = row.get("time", "Unbekannt")
+
+            author = None
+            try:
+                if row.get("senderid") and guild:
+                    author = guild.get_member(int(row.get("senderid")))
+            except Exception:
+                author = None
+
+            footer_text = f"Geplant von {author.display_name}" if author else "Geplant von Unbekannt"
+
+            embed = discord.Embed(
+                title="🎮 Spieleabend geplant!",
+                description=(
+                    f"**Spiel:** {row.get('name','Unbekannt')}\n"
+                    + (f"**Beschreibung:** {description}\n\n" if description else "")
+                    + f"**Start:** {zeit_fmt}\n\n"
+                    + f"✅ Dabei: {dabei}"
+                ),
+                color=discord.Color.blurple()
+            ).set_footer(text=footer_text)
+
+            return embed
+
+        @discord.ui.button(label="✅ Dabei!", style=discord.ButtonStyle.success, custom_id="vote_yes")
+        async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            serverid = str(interaction.guild.id)
+            msg_id = str(interaction.message.id)
+
+            # Hole DB-Row anhand messageid
+            resp = supabase.table("game_nights").select("*").eq("serverid", serverid).eq("messageid", msg_id).execute()
+            if not resp.data:
+                return await interaction.response.send_message("❌ Dieses Event existiert nicht mehr.", ephemeral=True)
+            row = resp.data[0]
+
+            # parse yes_votes sicher
+            yes_votes_raw = row.get("yes_votes", "{}")
+            try:
+                yes_votes = ast.literal_eval(yes_votes_raw) if isinstance(yes_votes_raw, str) else (yes_votes_raw or {})
+                if not isinstance(yes_votes, dict):
+                    yes_votes = {}
+            except Exception:
+                yes_votes = {}
+
+            # hinzufügen
+            yes_votes[str(interaction.user.id)] = {
+                "name": interaction.user.display_name,
+                "id": str(interaction.user.id)
+            }
+
+            supabase.table("game_nights").update({"yes_votes": str(yes_votes)}).eq("serverid", serverid).eq("messageid", msg_id).execute()
+
+            # neu bauen & editieren
+            row["yes_votes"] = str(yes_votes)
+            await interaction.response.edit_message(embed=self.build_embed_from_row(row, interaction.guild), view=self)
+
+        @discord.ui.button(label="❌ Keine Zeit", style=discord.ButtonStyle.danger, custom_id="vote_no")
+        async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            serverid = str(interaction.guild.id)
+            msg_id = str(interaction.message.id)
+
+            resp = supabase.table("game_nights").select("*").eq("serverid", serverid).eq("messageid", msg_id).execute()
+            if not resp.data:
+                return await interaction.response.send_message("❌ Dieses Event existiert nicht mehr.", ephemeral=True)
+            row = resp.data[0]
+
+            # parse yes_votes
+            yes_votes_raw = row.get("yes_votes", "{}")
+            try:
+                yes_votes = ast.literal_eval(yes_votes_raw) if isinstance(yes_votes_raw, str) else (yes_votes_raw or {})
+                if not isinstance(yes_votes, dict):
+                    yes_votes = {}
+            except Exception:
+                yes_votes = {}
+
+            # entfernen
+            yes_votes.pop(str(interaction.user.id), None)
+
+            supabase.table("game_nights").update({"yes_votes": str(yes_votes)}).eq("serverid", serverid).eq("messageid", msg_id).execute()
+
+            row["yes_votes"] = str(yes_votes)
+            await interaction.response.edit_message(embed=self.build_embed_from_row(row, interaction.guild), view=self)
+
+
+
+
     @bot.tree.command(name="spieleabend", description="Plane einen Spieleabend mit Abstimmung")
     @app_commands.describe(
         name="Name des Spiels",
-        zeitpunkt="Startzeit (Format: YYYY-MM-DD HH:MM)"
+        zeitpunkt="Startzeit (Format: YYYY-MM-DD HH:MM)",
+        beschreibung="Optionale Beschreibung"
     )
-    async def spieleabend(interaction: discord.Interaction, name: str, zeitpunkt: str):
+    async def spieleabend(interaction: discord.Interaction, name: str, zeitpunkt: str, beschreibung: str = None):
         try:
             if not check_time_format(zeitpunkt):
                 embed = discord.Embed(
@@ -530,44 +662,69 @@ try:
                 )
                 return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # Zeitformat fixen
+            # Zeit fixen
             if len(zeitpunkt) == 16:
                 zeitpunkt = zeitpunkt + ":00"
 
-            # Channel aus settings
+            # Channel aus Settings
             settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", server_id).execute()
             channel_id = None
             if settings.data and settings.data[0].get("game_night_channel"):
-                channel_id = int(settings.data[0]["game_night_channel"])
+                try:
+                    channel_id = int(settings.data[0]["game_night_channel"])
+                except Exception:
+                    channel_id = None
+
             channel = interaction.channel if not channel_id else interaction.guild.get_channel(channel_id)
             if not channel:
                 return await interaction.response.send_message("❌ Kein Spieleabend-Channel gefunden.", ephemeral=True)
 
-            # VoteView
-            view = VoteView()
-            view.set_context(name, zeitpunkt, interaction.user)
-            view.votes_yes[str(interaction.user.id)] = {
-                "name": interaction.user.display_name,
-                "id": str(interaction.user.id)
+            # initial votes (Ersteller ist automatisch dabei)
+            initial_yes = {
+                str(interaction.user.id): {
+                    "name": interaction.user.display_name,
+                    "id": str(interaction.user.id)
+                }
             }
 
-            embed = view.build_embed(name, zeitpunkt, interaction.user)
-            msg = await channel.send("Ein neuer Spieleabend wurde erstellt!", embed=embed, view=view)
-
-            # Event in DB speichern (inkl. MessageID)
-            supabase.table("game_nights").insert({
+            # Build embed lokal (vor dem DB-Eintrag)
+            temp_row = {
                 "serverid": server_id,
                 "name": name,
                 "time": zeitpunkt,
-                "yes_votes": str({
-                    str(interaction.user.id): {
-                        "name": interaction.user.display_name,
-                        "id": str(interaction.user.id)
-                    }
-                }),
+                "description": beschreibung or "",
+                "senderid": str(interaction.user.id),
+                "yes_votes": str(initial_yes),
+                "messageid": ""  # wird nach dem Senden gefüllt
+            }
+
+            view = VoteView()
+            embed = view.build_embed_from_row(temp_row, interaction.guild)
+
+            # Nachricht senden
+            msg = await channel.send("Ein neuer Spieleabend wurde erstellt!", embed=embed, view=view)
+
+            # DB-Eintrag mit messageid speichern
+            insert_payload = {
+                "serverid": server_id,
+                "name": name,
+                "time": zeitpunkt,
+                "description": beschreibung or "",
+                "yes_votes": str(initial_yes),
                 "senderid": str(interaction.user.id),
                 "messageid": str(msg.id)
-            }).execute()
+            }
+            try:
+                supabase.table("game_nights").insert(insert_payload).execute()
+            except Exception as e:
+                # falls Insert fehlschlägt: loggen, aber die Nachricht bleibt im Channel
+                print(f"[WARN] DB insert failed for game_night: {e}")
+
+            # persistente View registrieren (damit Buttons nach Neustart weiter funktionieren)
+            try:
+                bot.add_view(VoteView(), message_id=msg.id)
+            except Exception as e:
+                print(f"[WARN] konnte VoteView nicht persistent registrieren: {e}")
 
             await interaction.response.send_message(
                 f"✅ Spieleabend **{name}** am `{zeitpunkt}` erstellt.",
@@ -576,6 +733,7 @@ try:
 
         except Exception as e:
             await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
+
 
 
     # --- Autocomplete für remove_spieleabend ---
@@ -587,7 +745,7 @@ try:
             for e in events.data:
                 if current.lower() in e["name"].lower():
                     choices.append(app_commands.Choice(name=e["name"], value=e["name"]))
-        return choices[:25]  # max. 25 Vorschläge
+        return choices[:25]
 
 
     # --- Slash Command: /remove_spieleabend ---
@@ -595,15 +753,14 @@ try:
     @app_commands.autocomplete(name=spieleabend_autocomplete)
     async def remove_spieleabend(interaction: discord.Interaction, name: str):
         try:
-            # Daten aus DB ziehen
-            result = supabase.table("game_nights").select("senderid", "messageid").eq("name", name).eq("serverid", str(interaction.guild.id)).execute()
+            result = supabase.table("game_nights").select("senderid", "messageid") \
+                .eq("name", name).eq("serverid", str(interaction.guild.id)).execute()
             if not result.data:
                 return await interaction.response.send_message("❌ Spieleabend nicht gefunden.", ephemeral=True)
 
             senderid = result.data[0].get("senderid")
             messageid = result.data[0].get("messageid")
 
-            # Berechtigung prüfen
             if not interaction.user.guild_permissions.administrator and str(interaction.user.id) != str(senderid):
                 embed = discord.Embed(
                     title="❌ Keine Berechtigung",
@@ -612,10 +769,8 @@ try:
                 )
                 return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # Nachricht löschen, wenn möglich
             if messageid:
                 try:
-                    # Channel aus Settings holen
                     settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(interaction.guild.id)).execute()
                     if settings.data and settings.data[0].get("game_night_channel"):
                         channel_id = int(settings.data[0]["game_night_channel"])
@@ -628,9 +783,7 @@ try:
                 except Exception as e:
                     print(f"[WARN] Nachricht konnte nicht gelöscht werden: {e}")
 
-            # DB-Eintrag löschen
             supabase.table("game_nights").delete().eq("serverid", str(interaction.guild.id)).eq("name", name).execute()
-
             await interaction.response.send_message(f"🗑️ Spieleabend **{name}** wurde entfernt.", ephemeral=True)
 
         except Exception as e:
@@ -647,39 +800,6 @@ try:
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        class TicketSetupView(View):
-            def __init__(self):
-                super().__init__(timeout=None)
-
-                # Select Menu mit Optionen direkt initialisieren
-                self.select = discord.ui.Select(
-                    placeholder="Wähle die Ticket-Kategorie …",
-                    options=[
-                        discord.SelectOption(label="Support Ticket", value="support", description="Für allgemeine Support-Anfragen"),
-                        discord.SelectOption(label="Bauprojekt", value="bauprojekt", description="Für Bauprojekte oder Planungen")
-                    ]
-                )
-                self.select.callback = self.select_callback
-                self.add_item(self.select)
-
-            async def select_callback(self, interaction: discord.Interaction):
-                category = self.select.values[0]
-                guild = interaction.guild
-
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                }
-
-                channel_name = f"{category}-{interaction.user.name}".lower()
-                ticket_channel = await guild.create_text_channel(
-                    name=channel_name,
-                    overwrites=overwrites,
-                    reason=f"Neues Ticket ({category})"
-                )
-                await ticket_channel.send(f"Hallo {interaction.user.mention}, dies ist dein {category}-Ticket. Wie können wir dir helfen?")
-
         embed = discord.Embed(
             title="🎟 Ticket-System",
             description="Wähle die Kategorie deines Tickets aus dem Dropdown-Menü unten.",
@@ -687,25 +807,28 @@ try:
         )
         await interaction.response.send_message(embed=embed, view=TicketSetupView())
 
+
+    
     @bot.tree.command(name="bewerbung", description="Starte eine Bewerbung")
     async def bewerbung(interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_guild:
             embed = discord.Embed(
                 title="❌ Keine Berechtigung",
-                description="Nur Administratoren dürfen Funktionen aktivieren.",
+                description="Nur Administratoren oder Moderatoren dürfen Bewerbungen starten.",
                 color=discord.Color.red()
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        class CategorySelectView(View):
+        class CategorySelectView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=60)
-                self.add_item(Select(
+                self.add_item(discord.ui.Select(
                     placeholder="Wähle deine Kategorie …",
                     options=[
                         discord.SelectOption(label="Mitglied", value="Mitglied", description="Normales Mitglied"),
                         discord.SelectOption(label="Verbündeter", value="Verbündeter", description="Verbündeter Spieler")
-                    ]
+                    ],
+                    custom_id="category_select_unique"
                 ))
                 self.children[0].callback = self.select_callback
 
@@ -713,11 +836,11 @@ try:
                 category = select_interaction.data['values'][0]
 
                 # Modal für Minecraft Namen
-                class MinecraftNameModal(Modal):
+                class MinecraftNameModal(discord.ui.Modal):
                     def __init__(self, category: str):
                         super().__init__(title="Bewerbung")
                         self.category = category
-                        self.mc_name_input = TextInput(
+                        self.mc_name_input = discord.ui.TextInput(
                             label="Dein Minecraft Name",
                             placeholder="Gib hier deinen MC-Namen ein",
                             required=True,
@@ -728,44 +851,19 @@ try:
                     async def on_submit(self, modal_interaction: discord.Interaction):
                         mc_name = self.mc_name_input.value
 
-                        # Button für Regeln und Channel-Erstellung
-                        class RulesButtonView(View):
-                            def __init__(self):
-                                super().__init__(timeout=None)
+                        # Button für Regeln (globale View!)
+                        rules_view = RulesButtonView(self.category, mc_name)
 
-                            @discord.ui.button(label="Ich stimme den Regeln zu", style=discord.ButtonStyle.success, custom_id="rules_accept_unique")
-                            async def rules_button(self, btn_inter: discord.Interaction, button: Button):
-                                guild = btn_inter.guild
-                                overwrites = {
-                                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                                    btn_inter.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                                }
-                                channel_name = f"bewerbung-{btn_inter.user.name}".lower()
-                                ticket_channel = await guild.create_text_channel(
-                                    name=channel_name,
-                                    overwrites=overwrites,
-                                    reason="Neue Bewerbung"
-                                )
-
-                                embed = discord.Embed(
-                                    title="✅ Bewerbung erstellt",
-                                    description=f"**Kategorie:** {category}\n**Minecraft Name:** {mc_name}\nModeratoren können nun die Bewerbung prüfen.",
-                                    color=discord.Color.green()
-                                )
-                                await ticket_channel.send(f"{btn_inter.user.mention}, willkommen! Dein privater Bewerbungs-Channel wurde erstellt.", embed=embed)
-                                await btn_inter.response.send_message(f"✅ Dein Bewerbungs-Channel wurde erstellt: {ticket_channel.mention}", ephemeral=True)
-                        # Sende Nachricht mit Button
                         if not modal_interaction.response.is_done():
                             await modal_interaction.response.send_message(
                                 "Klicke auf den Button, um den Regeln zuzustimmen und die Bewerbung abzuschicken.",
-                                view=RulesButtonView(),
+                                view=rules_view,
                                 ephemeral=True
                             )
                         else:
                             await modal_interaction.followup.send(
                                 "Klicke auf den Button, um den Regeln zuzustimmen und die Bewerbung abzuschicken.",
-                                view=RulesButtonView(),
+                                view=rules_view,
                                 ephemeral=True
                             )
 
@@ -777,6 +875,71 @@ try:
             color=discord.Color.blurple()
         )
         await interaction.response.send_message(embed=embed, view=CategorySelectView())
+
+
+
+
+    class TicketSetupView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)
+            self.select = discord.ui.Select(
+                placeholder="Wähle die Ticket-Kategorie …",
+                options=[
+                    discord.SelectOption(label="Support Ticket", value="support", description="Für allgemeine Support-Anfragen"),
+                    discord.SelectOption(label="Bauprojekt", value="bauprojekt", description="Für Bauprojekte oder Planungen")
+                ],
+                custom_id="ticket_category_select_unique"
+            )
+            self.select.callback = self.select_callback
+            self.add_item(self.select)
+
+        async def select_callback(self, interaction: discord.Interaction):
+            category = self.select.values[0]
+            guild = interaction.guild
+
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+
+            channel_name = f"{category}-{interaction.user.name}".lower()
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name,
+                overwrites=overwrites,
+                reason=f"Neues Ticket ({category})"
+            )
+            await ticket_channel.send(f"Hallo {interaction.user.mention}, dies ist dein {category}-Ticket. Wie können wir dir helfen?")
+
+
+    class RulesButtonView(discord.ui.View):
+        def __init__(self, category: str, mc_name: str):
+            super().__init__(timeout=None)
+            self.category = category
+            self.mc_name = mc_name
+
+        @discord.ui.button(label="Ich stimme den Regeln zu", style=discord.ButtonStyle.success, custom_id="rules_accept_unique")
+        async def rules_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            guild = interaction.guild
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            channel_name = f"bewerbung-{interaction.user.name}".lower()
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name,
+                overwrites=overwrites,
+                reason="Neue Bewerbung"
+            )
+
+            embed = discord.Embed(
+                title="✅ Bewerbung erstellt",
+                description=f"**Kategorie:** {self.category}\n**Minecraft Name:** {self.mc_name}\nModeratoren können nun die Bewerbung prüfen.",
+                color=discord.Color.green()
+            )
+            await ticket_channel.send(f"{interaction.user.mention}, willkommen! Dein privater Bewerbungs-Channel wurde erstellt.", embed=embed)
+            await interaction.response.send_message(f"✅ Dein Bewerbungs-Channel wurde erstellt: {ticket_channel.mention}", ephemeral=True)
 
 
     # --- Willkommensnachricht ---
@@ -839,6 +1002,8 @@ try:
 
             try:
                 now = datetime.now()
+                # 2 Stunden früher
+                now = now - timedelta(hours=2)
 
                 # --- Spieleabende (game_nights) ---
                 gn_resp = supabase.table("game_nights").select("*").execute()
@@ -1111,10 +1276,67 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} globale Slash-Commands synchronisiert")
+
+        # Hintergrundtasks starten
         bot.loop.create_task(event_reminder_loop())
-        bot.loop.create_task(voice_xp_loop())  # Voice XP Task starten
+        bot.loop.create_task(voice_xp_loop())
+
+        # andere globale persistente Views (z.B. TicketSetupView) wieder registrieren, falls nötig
+        try:
+            bot.add_view(TicketSetupView())
+        except Exception:
+            pass
+
+        # --- Offene Spieleabende laden und VoteView für jede message registrieren ---
+        try:
+            events = supabase.table("game_nights").select("serverid", "messageid").execute()
+            if events.data:
+                for row in events.data:
+                    try:
+                        guild = bot.get_guild(int(row["serverid"]))
+                        if not guild:
+                            continue
+                        msg_id = int(row["messageid"])
+
+                        # try channel from settings first (faster)
+                        settings = supabase.table("server_settings").select("game_night_channel").eq("serverid", str(guild.id)).execute()
+                        found = False
+                        if settings.data and settings.data[0].get("game_night_channel"):
+                            ch = guild.get_channel(int(settings.data[0]["game_night_channel"]))
+                            if ch:
+                                try:
+                                    await ch.fetch_message(msg_id)
+                                    bot.add_view(VoteView(), message_id=msg_id)
+                                    found = True
+                                except Exception:
+                                    found = False
+
+                        # fallback: scan text channels (falls channel nicht in settings steht)
+                        if not found:
+                            for ch in guild.text_channels:
+                                try:
+                                    await ch.fetch_message(msg_id)
+                                    bot.add_view(VoteView(), message_id=msg_id)
+                                    found = True
+                                    break
+                                except Exception:
+                                    continue
+
+                        if found:
+                            print(f"✅ Spieleabend-View wiederhergestellt: {msg_id} (Server {guild.id})")
+                        else:
+                            print(f"[WARN] Nachricht {msg_id} nicht gefunden in Server {guild.id}")
+
+                    except Exception as e:
+                        print(f"[WARN] Fehler beim Wiederherstellen einer Spieleabend-View: {e}")
+        except Exception as e:
+            print(f"[WARN] Fehler beim Laden der game_nights aus DB: {e}")
+
+        print("✅ on_ready abgeschlossen")
+
     except Exception as e:
         print(f"❌ Fehler beim Synchronisieren: {e}")
+
 
 bot.run(TOKEN)
 
