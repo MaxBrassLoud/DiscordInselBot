@@ -10,7 +10,7 @@ def home():
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Insel Bot – Danke!</title>
+  <title>Insel Bot – Übersicht</title>
   <style>
     body {
       margin: 0;
@@ -27,15 +27,18 @@ def home():
       font-size: 2.5rem;
       margin-bottom: 10px;
       color: #38bdf8;
+      text-align: center;
     }
     p {
       font-size: 1.1rem;
       color: #cbd5e1;
       margin-bottom: 30px;
+      text-align: center;
+      max-width: 700px;
     }
     .commands {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 15px;
       width: 100%;
       max-width: 900px;
@@ -43,12 +46,13 @@ def home():
     .command {
       background: #1e293b;
       border: 1px solid #334155;
-      padding: 15px;
-      border-radius: 12px;
-      transition: transform 0.2s;
+      padding: 16px;
+      border-radius: 14px;
+      transition: transform 0.2s, box-shadow 0.2s;
     }
     .command:hover {
       transform: translateY(-4px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25);
     }
     .command h3 {
       margin: 0;
@@ -56,7 +60,7 @@ def home():
       font-size: 1.1rem;
     }
     .command p {
-      margin: 5px 0 0 0;
+      margin: 6px 0 0 0;
       font-size: 0.95rem;
       color: #94a3b8;
     }
@@ -64,61 +68,39 @@ def home():
       margin-top: auto;
       font-size: 0.9rem;
       color: #64748b;
+      padding-top: 40px;
     }
   </style>
 </head>
 <body>
-  <h1>🎉 Danke dass du den Insel Bot nutzt!</h1>
-  <p>Der Bot ist jetzt in deinem Server. Hier findest du alle verfügbaren Commands:</p>
+
+  <h1>🎮 Insel Bot</h1>
+  <p>
+    Danke, dass du den Insel Bot nutzt!  
+    Der Bot bietet ein vollständiges Spieleabend-System.
+  </p>
 
   <div class="commands">
+
     <div class="command">
-      <h3>/activate</h3>
-      <p>Kann gewisse Funktionen aktivieren.</p>
+      <h3>/setup_spieleabend</h3>
+      <p>Richtet den Spieleabend-Bot ein (Ping-Rolle, Kanal, Lösch-Rollen).</p>
     </div>
+
     <div class="command">
-      <h3>/disable</h3>
-      <p>Kann gewisse Funktionen deaktivieren</p>
-    </div>
-    <div class="command">
-      <h3>/setup</h3>
-      <p>Setzt den Bot auf.</p>
-    </div>
-    <div class="command">
-      <h3>/add_event</h3>
-      <p>Ein Event erstellen</p>
-    </div>
-    <div class="command">
-      <h3>/list_events</h3>
-      <p>Alle Events auflisten</p>
-    </div>
-    <div class="command">
-      <h3>/time_until</h3>
-      <p>Sagt wie lange es bis zu einem Event dauert</p>
-    </div>
-    <div class="command">
-      <h3>/remove_event</h3>
-      <p>Löscht ein Event</p>
-    </div>
-        <div class="command">
       <h3>/spieleabend</h3>
-      <p>Erstellt einen Spieleabend.</p>
+      <p>Erstellt einen neuen Spieleabend mit Thread und Teilnahme-Buttons.</p>
     </div>
+
     <div class="command">
-      <h3>/remove_spieleabned</h3>
-      <p>LKöscht einen Spieleabned.</p>
-      </div>
-          <div class="command">
-      <h3>/bewerbung</h3>
-      <p>Lässt den Bewerbungsscreen zeigen.</p>
+      <h3>/spieleabend_loeschen</h3>
+      <p>Löscht einen Spieleabend inklusive Nachricht, Thread und Datenbank-Eintrag.</p>
     </div>
-        <div class="command">
-      <h3>/ticket</h3>
-      <p>Lässt den Ticketscreen zeigen</p>
-    </div>
+
   </div>
 
-  <footer>© 2025 Insel Bot – Alle Rechte vorbehalten</footer>
+  <footer>© 2026 Insel Bot – Entwickelt für Discord</footer>
+
 </body>
 </html>
 """
@@ -130,5 +112,5 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     keep_alive()
