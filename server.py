@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import os
+import random
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 import asyncio
@@ -10,6 +11,9 @@ from keep_alive import keep_alive
 
 
 keep_alive()
+
+# Zufälliger Delay pro Instanz – verhindert dass mehrere Instanzen gleichzeitig senden
+INSTANCE_DELAY = random.uniform(0.2, 1.5)
 
 
 # Supabase Setup
@@ -532,6 +536,84 @@ async def Ping(ctx):
     await ctx.send("Pong!")
     return
 
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    # Bot-Nachrichten ignorieren
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    # Nur in Gilden
+    if not message.guild:
+        await bot.process_commands(message)
+        return
+
+    # Prüfe ob Anhänge mit Bildern vorhanden sind
+    image_attachments = [
+        a for a in message.attachments
+        if a.content_type and a.content_type.startswith("image/")
+    ]
+
+    if image_attachments:
+        try:
+            settings = supabase.table("settings").select("*").eq("guild_id", str(message.guild.id)).execute()
+
+            if settings.data:
+                config = settings.data[0]
+                image_channel_id = config.get("image_channel_id")
+
+                if image_channel_id:
+                    image_channel = bot.get_channel(int(image_channel_id))
+
+                    if image_channel and message.channel.id != image_channel.id:
+
+                        # ── Deduplizierung: Discord-Kanal als Lock ────────────────────
+                        # Jede Instanz wartet eine deterministisch unterschiedliche Zeit
+                        # basierend auf ihrer Bot-User-ID (alle Instanzen haben dieselbe
+                        # Bot-ID → gleiche Wartezeit). Daher: zufälligen lokalen Offset
+                        # beim Start generieren und als Modul-Variable speichern.
+                        await asyncio.sleep(INSTANCE_DELAY)
+
+                        # Prüfe die letzten Nachrichten im Bilder-Kanal ob das Bild
+                        # bereits von einer anderen Instanz gepostet wurde
+                        already_posted = False
+                        async for recent_msg in image_channel.history(limit=20):
+                            if recent_msg.author.id == bot.user.id and recent_msg.embeds:
+                                for emb in recent_msg.embeds:
+                                    for field in emb.fields:
+                                        if field.name == "🔗 Nachricht" and str(message.id) in field.value:
+                                            already_posted = True
+                                            break
+
+                        if already_posted:
+                            await bot.process_commands(message)
+                            return
+                        # ─────────────────────────────────────────────────────────────
+
+                        for attachment in image_attachments:
+                            embed = discord.Embed(
+                                color=discord.Color.blurple(),
+                                timestamp=message.created_at
+                            )
+                            embed.set_image(url=attachment.url)
+                            embed.set_author(
+                                name=message.author.display_name,
+                                icon_url=message.author.display_avatar.url
+                            )
+                            embed.add_field(name="📌 Kanal", value=message.channel.mention, inline=True)
+                            # message.id ist im jump_url enthalten – wird als Lock-Key genutzt
+                            embed.add_field(name="🔗 Nachricht", value=f"[Zum Original]({message.jump_url})", inline=True)
+                            if message.content:
+                                embed.add_field(name="💬 Text", value=message.content[:500], inline=False)
+
+                            await image_channel.send(embed=embed)
+
+        except Exception as e:
+            print(f"Fehler beim Bild-Weiterleiten: {e}")
+
+    await bot.process_commands(message)
 
 
 @bot.event
