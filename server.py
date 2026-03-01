@@ -18,10 +18,15 @@ keep_alive()
 # ── Instanz-Delay für Deduplizierung ─────────────────────────────────────────
 INSTANCE_DELAY = random.uniform(0.2, 1.5)
 
-# ── Supabase Setup ────────────────────────────────────────────────────────────
-# Absoluter Pfad zur .env – funktioniert unabhängig vom Working Directory
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_base_dir, ".env"))
+
+# DEBUG - danach wieder entfernen
+print(f"[DEBUG] Base dir: {_base_dir}")
+print(f"[DEBUG] .env Pfad: {os.path.join(_base_dir, '.env')}")
+print(f"[DEBUG] .env existiert: {os.path.exists(os.path.join(_base_dir, '.env'))}")
+print(f"[DEBUG] SUPABASE_URL: {os.getenv('SUPABASE_URL')}")
+print(f"[DEBUG] SUPABASE_KEY (erste 10 Zeichen): {str(os.getenv('SUPABASE_KEY'))[:10]}")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
