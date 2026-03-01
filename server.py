@@ -19,7 +19,10 @@ keep_alive()
 INSTANCE_DELAY = random.uniform(0.2, 1.5)
 
 # ── Supabase Setup ────────────────────────────────────────────────────────────
-load_dotenv()
+# Absoluter Pfad zur .env – funktioniert unabhängig vom Working Directory
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_base_dir, ".env"))
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
