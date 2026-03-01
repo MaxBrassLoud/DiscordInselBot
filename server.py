@@ -18,15 +18,10 @@ keep_alive()
 # ── Instanz-Delay für Deduplizierung ─────────────────────────────────────────
 INSTANCE_DELAY = random.uniform(0.2, 1.5)
 
+# ── Supabase Setup ────────────────────────────────────────────────────────────
+# Absoluter Pfad zur .env – funktioniert unabhängig vom Working Directory
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_base_dir, ".env"))
-
-# DEBUG - danach wieder entfernen
-print(f"[DEBUG] Base dir: {_base_dir}")
-print(f"[DEBUG] .env Pfad: {os.path.join(_base_dir, '.env')}")
-print(f"[DEBUG] .env existiert: {os.path.exists(os.path.join(_base_dir, '.env'))}")
-print(f"[DEBUG] SUPABASE_URL: {os.getenv('SUPABASE_URL')}")
-print(f"[DEBUG] SUPABASE_KEY (erste 10 Zeichen): {str(os.getenv('SUPABASE_KEY'))[:10]}")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -714,13 +709,8 @@ async def on_member_join(member: discord.Member):
         if config.get("welcome_enabled", True) and config.get("welcome_channel_id"):
             channel = bot.get_channel(int(config["welcome_channel_id"]))
             if channel:
-                embed = discord.Embed(
-                    title=f"Welcome {member.display_name}!",
-                    description=random.choice(WELCOME_MESSAGES).format(mention=member.mention),
-                    color=discord.Color.green(),
-                )
-
-                await channel.send(embed=embed)
+                msg = random.choice(WELCOME_MESSAGES).format(mention=member.mention)
+                await channel.send(msg)
     except Exception as e:
         print(f"[Welcomer] on_member_join Fehler: {e}")
 
@@ -735,18 +725,7 @@ async def on_member_remove(member: discord.Member):
         if config.get("goodbye_enabled", True) and config.get("goodbye_channel_id"):
             channel = bot.get_channel(int(config["goodbye_channel_id"]))
             if channel:
-                embed = discord.Embed(
-                    title=f"Goodbye {member.display_name}!",
-                    description=f"{member.display_name} hat den Server verlassen",
-                )
-                embed.add_field(
-                    name="Beigetreten am",
-                    value=member.joined_at.strftime("%d.%m.%Y"),
-                    inline=True
-                )
-                await channel.send(embed=embed)
-
-
+                await channel.send(f"**{member.display_name}** hat den Server verlassen.")
     except Exception as e:
         print(f"[Welcomer] on_member_remove Fehler: {e}")
 
@@ -803,6 +782,728 @@ async def check_reminders():
 
     except Exception as e:
         print(f"[check_reminders] Fehler: {e}")
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ROLLEN-VERGABE SYSTEM
+# ═════════════════════════════════════════════════════════════════════════════
+
+MAX_ROLE_MODULES = 5
+
+
+# ── Persistent Button View für Rollenvergabe ──────────────────────────────────
+
+class RoleAssignView(discord.ui.View):
+    """Persistente View mit 'Rolle annehmen' und 'Rolle ablehnen' Buttons."""
+
+    def __init__(self, role_id: int, module_db_id: int):
+        super().__init__(timeout=None)
+        self.role_id     = role_id
+        self.module_db_id = module_db_id
+
+        accept_btn = discord.ui.Button(
+            label="✅ Rolle annehmen",
+            style=discord.ButtonStyle.success,
+            custom_id=f"role_accept_{module_db_id}",
+        )
+        accept_btn.callback = self.accept_callback
+        self.add_item(accept_btn)
+
+        decline_btn = discord.ui.Button(
+            label="❌ Rolle ablehnen",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"role_decline_{module_db_id}",
+        )
+        decline_btn.callback = self.decline_callback
+        self.add_item(decline_btn)
+
+    async def accept_callback(self, interaction: discord.Interaction):
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("❌ Rolle nicht gefunden.", ephemeral=True)
+            return
+        if role in interaction.user.roles:
+            await interaction.response.send_message("ℹ️ Du hast diese Rolle bereits.", ephemeral=True)
+            return
+        try:
+            await interaction.user.add_roles(role, reason="Rollenvergabe Bot")
+            await interaction.response.send_message(f"✅ Du hast die Rolle **{role.name}** erhalten!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Ich habe keine Berechtigung diese Rolle zu vergeben.", ephemeral=True)
+
+    async def decline_callback(self, interaction: discord.Interaction):
+        role = interaction.guild.get_role(self.role_id)
+        if not role or role not in interaction.user.roles:
+            # Stille Ignorierung
+            await interaction.response.send_message("ℹ️ Du hast diese Rolle nicht.", ephemeral=True)
+            return
+        try:
+            await interaction.user.remove_roles(role, reason="Rollenvergabe Bot")
+            await interaction.response.send_message(f"🔕 Die Rolle **{role.name}** wurde entfernt.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Ich habe keine Berechtigung diese Rolle zu entfernen.", ephemeral=True)
+
+
+# ── Hilfsfunktion: persistent Views beim Start registrieren ──────────────────
+
+async def register_role_views():
+    """Lädt alle gespeicherten Rollenvergabe-Module und registriert ihre Views."""
+    try:
+        result = supabase.table("role_modules").select("*").execute()
+        for mod in result.data:
+            view = RoleAssignView(int(mod["role_id"]), mod["id"])
+            bot.add_view(view)
+        print(f"✅ {len(result.data)} Rollenvergabe-Views registriert")
+    except Exception as e:
+        print(f"[RoleSystem] register_role_views Fehler: {e}")
+
+
+# ── RolePicker View: Discord-Rolle auswählen nach Modal ──────────────────────
+
+class RolePickerView(discord.ui.View):
+    """Ephemeral View die nach dem Modal erscheint – User wählt die echte Rolle."""
+
+    def __init__(self, display_name: str, role_desc: str, setup_view: "SetupRoleView"):
+        super().__init__(timeout=120)
+        self.display_name = display_name
+        self.role_desc    = role_desc
+        self.setup_view   = setup_view
+
+        role_sel = discord.ui.RoleSelect(
+            placeholder="Wähle die Discord-Rolle...",
+            min_values=1,
+            max_values=1,
+        )
+        role_sel.callback = self.role_selected
+        self.add_item(role_sel)
+
+    async def role_selected(self, interaction: discord.Interaction):
+        role_id   = interaction.data["values"][0]
+        role_name = interaction.guild.get_role(int(role_id)).name
+
+        # Prüfe ob Rolle schon einem Modul zugewiesen ist
+        for mod in self.setup_view.modules:
+            if mod["role_id"] == role_id:
+                await interaction.response.send_message(
+                    f"❌ Die Rolle **{role_name}** ist bereits einem Modul zugewiesen.",
+                    ephemeral=True
+                )
+                return
+
+        self.setup_view.modules.append({
+            "display_name": self.display_name,
+            "role_desc":    self.role_desc,
+            "role_id":      role_id,
+            "role_name":    role_name,   # echter Discord-Rollenname
+        })
+        self.setup_view._rebuild()
+
+        # Setup-Nachricht aktualisieren + diese ephemeral Nachricht bestätigen
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ Modul hinzugefügt",
+                description=(
+                    f"**Anzeigename:** {self.display_name}\n"
+                    f"**Discord-Rolle:** {role_name}\n\n"
+                    "Du kannst das Setup-Fenster wieder öffnen oder weitere Module hinzufügen."
+                ),
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+        # Setup-Message updaten – hole die originale Interaction-Message
+        try:
+            await self.setup_view._original_interaction.edit_original_response(
+                embed=self.setup_view._build_embed(),
+                view=self.setup_view
+            )
+        except Exception:
+            pass  # Falls nicht mehr erreichbar, kein Problem
+
+
+# ── Modal: Rollenmodul hinzufügen ─────────────────────────────────────────────
+
+class AddRoleModuleModal(discord.ui.Modal, title="Rollenmodul hinzufügen"):
+    role_name = discord.ui.TextInput(
+        label="Rollenname", placeholder="z.B. Gamer, Musik-Fan, ...",
+        required=True, max_length=100
+    )
+    role_desc = discord.ui.TextInput(
+        label="Beschreibung", placeholder="Was bekommt man mit dieser Rolle?",
+        required=True, style=discord.TextStyle.paragraph, max_length=300
+    )
+
+    def __init__(self, setup_view: "SetupRoleView"):
+        super().__init__()
+        self.setup_view = setup_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Prüfe ob Anzeigename bereits vergeben
+        for mod in self.setup_view.modules:
+            if mod["display_name"].lower() == self.role_name.value.lower():
+                await interaction.response.send_message(
+                    "❌ Ein Modul mit diesem Namen existiert bereits.", ephemeral=True
+                )
+                return
+
+        # Zeige Rollen-Auswahl damit User die echte Discord-Rolle wählt
+        view = RolePickerView(
+            display_name=self.role_name.value,
+            role_desc=self.role_desc.value,
+            setup_view=self.setup_view,
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🎭 Rolle auswählen",
+                description=(
+                    f"Modul **{self.role_name.value}** wird angelegt.\n\n"
+                    "Wähle nun die **Discord-Rolle** die vergeben werden soll.\n"
+                    "*(Der Anzeigename im Bot kann vom Rollennamen abweichen)*"
+                ),
+                color=discord.Color.blurple()
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+
+# ── Setup View für Rollenvergabe ──────────────────────────────────────────────
+
+class SetupRoleView(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=300)
+        self.guild_id              = guild_id
+        self.modules: list         = []   # max 5 Dicts
+        self.target_channel_id: str | None = None
+        self._original_interaction = None
+        self._rebuild()
+
+    def _rebuild(self):
+        """Baut alle Buttons neu auf."""
+        for item in [i for i in self.children if isinstance(i, discord.ui.Button)]:
+            self.remove_item(item)
+        # Entferne alten ChannelSelect falls vorhanden
+        for item in [i for i in self.children if isinstance(i, discord.ui.ChannelSelect)]:
+            self.remove_item(item)
+
+        # ── Modul hinzufügen Button ───────────────────────────────────────────
+        if len(self.modules) < MAX_ROLE_MODULES:
+            add_btn = discord.ui.Button(
+                label=f"➕ Modul hinzufügen ({len(self.modules)}/{MAX_ROLE_MODULES})",
+                style=discord.ButtonStyle.primary,
+            )
+            async def add_callback(interaction: discord.Interaction):
+                await interaction.response.send_modal(AddRoleModuleModal(self))
+            add_btn.callback = add_callback
+            self.add_item(add_btn)
+
+        # ── Letztes Modul entfernen ───────────────────────────────────────────
+        if self.modules:
+            remove_btn = discord.ui.Button(
+                label="🗑️ Letztes Modul entfernen",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def remove_callback(interaction: discord.Interaction):
+                if self.modules:
+                    self.modules.pop()
+                self._rebuild()
+                await interaction.response.edit_message(
+                    embed=self._build_embed(), view=self
+                )
+            remove_btn.callback = remove_callback
+            self.add_item(remove_btn)
+
+        # ── Channel Select ────────────────────────────────────────────────────
+        ch_sel = discord.ui.ChannelSelect(
+            placeholder="📢 Kanal für die Rollenvergabe-Nachricht",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text],
+        )
+        async def ch_callback(interaction: discord.Interaction):
+            self.target_channel_id = interaction.data["values"][0]
+            self._rebuild()
+            await interaction.response.edit_message(
+                embed=self._build_embed(), view=self
+            )
+        ch_sel.callback = ch_callback
+        self.add_item(ch_sel)
+
+        # ── Absenden Button ───────────────────────────────────────────────────
+        send_btn = discord.ui.Button(
+            label="🚀 Nachrichten senden & speichern",
+            style=discord.ButtonStyle.success,
+            disabled=not (self.modules and self.target_channel_id),
+        )
+        send_btn.callback = self.send_callback
+        self.add_item(send_btn)
+
+    def _build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="⚙️ Rollenvergabe Setup",
+            description=(
+                "Füge bis zu **5 Rollenmodule** hinzu. Jedes Modul bekommt eine eigene "
+                "Nachricht mit **Annehmen / Ablehnen** Buttons im gewählten Kanal."
+            ),
+            color=discord.Color.blurple()
+        )
+        if self.modules:
+            for i, mod in enumerate(self.modules, 1):
+                embed.add_field(
+                    name=f"Modul {i}: {mod['display_name']} → @{mod['role_name']}",
+                    value=mod["role_desc"][:200],
+                    inline=False
+                )
+        else:
+            embed.add_field(name="Module", value="*Noch keine Module hinzugefügt*", inline=False)
+
+        embed.add_field(
+            name="📢 Kanal",
+            value=f"<#{self.target_channel_id}>" if self.target_channel_id else "*Nicht ausgewählt*",
+            inline=False
+        )
+        embed.set_footer(text="Die Rollen werden automatisch auf dem Server erstellt wenn sie nicht existieren.")
+        return embed
+
+    async def send_callback(self, interaction: discord.Interaction):
+        # Use defer so we can do multiple async operations
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        try:
+            channel = bot.get_channel(int(self.target_channel_id))
+            if not channel:
+                await interaction.followup.send("❌ Kanal nicht gefunden!", ephemeral=True)
+                return
+
+            # ── Hauptnachricht senden ─────────────────────────────────────────
+            main_embed = discord.Embed(
+                title="🎭 Rollenvergabe",
+                description=(
+                    "Wähle deine Rollen aus! Drücke bei der jeweiligen Rolle auf "
+                    "**✅ Rolle annehmen** oder **❌ Rolle ablehnen**."
+                ),
+                color=discord.Color.blurple()
+            )
+            """
+            for mod in self.modules:
+                
+                main_embed.add_field(
+                    name=f"🏷️ {mod['display_name']}",
+                    value=mod["role_desc"],
+                    inline=False
+                )"""
+            await channel.send(embed=main_embed)
+
+            # ── Pro Modul: Rolle aus gewählter ID holen + eigene Nachricht ────
+            for mod in self.modules:
+                role = interaction.guild.get_role(int(mod["role_id"]))
+                if not role:
+                    await interaction.followup.send(
+                        f"⚠️ Rolle für Modul '{mod['display_name']}' nicht gefunden – übersprungen.",
+                        ephemeral=True
+                    )
+                    continue
+
+                # In Supabase speichern
+                db_data = {
+                    "guild_id":    str(self.guild_id),
+                    "role_id":     str(role.id),
+                    "role_name":   mod["role_name"],
+                    "display_name": mod["display_name"],
+                    "role_desc":   mod["role_desc"],
+                    "channel_id":  str(self.target_channel_id),
+                }
+                result = supabase.table("role_modules").insert(db_data).execute()
+                db_id = result.data[0]["id"] if result.data else 0
+
+                # Einzelne Nachricht mit Buttons
+                role_embed = discord.Embed(
+                    title=f"🏷️ {mod['display_name']}",
+                    description=mod["role_desc"],
+                    color=discord.Color.blurple()
+                )
+                #role_embed.set_footer(text=f"Modul-ID: {db_id} | Bearbeiten: /rollen_bearbeiten")
+                view = RoleAssignView(role.id, db_id)
+                bot.add_view(view)
+                sent_msg = await channel.send(embed=role_embed, view=view)
+                # message_id nachträglich speichern für späteres Bearbeiten
+                supabase.table("role_modules").update({"message_id": str(sent_msg.id)}).eq("id", db_id).execute()
+
+            for item in self.children:
+                item.disabled = True
+
+            await interaction.followup.send(
+                f"✅ {len(self.modules)} Rollenvergabe-Module wurden in <#{self.target_channel_id}> gesendet!",
+                ephemeral=True
+            )
+
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Ich habe keine Berechtigung Rollen zu erstellen. Bitte prüfe meine Rolle im Server.",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+# ── Slash Command ─────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_rollen", description="Richte die Rollenvergabe ein")
+async def setup_rollen(interaction: discord.Interaction):
+    if not has_rights(interaction):
+        await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+        return
+    view = SetupRoleView(interaction.guild_id)
+    view._original_interaction = interaction
+    await interaction.response.send_message(
+        embed=view._build_embed(), view=view, ephemeral=True
+    )
+
+
+# ── Edit: Modal für Anzeigename + Beschreibung ────────────────────────────────
+
+class EditRoleModuleModal(discord.ui.Modal, title="Rollenmodul bearbeiten"):
+    new_display = discord.ui.TextInput(
+        label="Neuer Anzeigename", required=True, max_length=100
+    )
+    new_desc = discord.ui.TextInput(
+        label="Neue Beschreibung", required=True,
+        style=discord.TextStyle.paragraph, max_length=300
+    )
+
+    def __init__(self, module: dict):
+        super().__init__()
+        self.module = module
+        self.new_display.default = module.get("display_name") or module.get("role_name", "")
+        self.new_desc.default    = module.get("role_desc", "")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            mod_id = self.module["id"]
+            supabase.table("role_modules").update({
+                "display_name": self.new_display.value,
+                "role_desc":    self.new_desc.value,
+            }).eq("id", mod_id).execute()
+
+            # Originale Nachricht im Kanal updaten
+            channel = bot.get_channel(int(self.module["channel_id"]))
+            if channel:
+                # Suche nach der Embed-Nachricht mit dieser Modul-ID
+                # Die Nachricht hat den Titel des alten display_name
+                old_name = self.module.get("display_name") or self.module.get("role_name", "")
+                async for msg in channel.history(limit=50):
+                    if msg.author.id == bot.user.id and msg.embeds:
+                        emb = msg.embeds[0]
+                        if emb.title and old_name in emb.title:
+                            new_embed = discord.Embed(
+                                title=f"🏷️ {self.new_display.value}",
+                                description=self.new_desc.value,
+                                color=discord.Color.blurple()
+                            )
+                            role = interaction.guild.get_role(int(self.module["role_id"]))
+                            view = RoleAssignView(role.id if role else 0, mod_id)
+                            await msg.edit(embed=new_embed, view=view)
+                            break
+
+            await interaction.followup.send("✅ Modul aktualisiert!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+# ── Edit: Rolle neu wählen ────────────────────────────────────────────────────
+
+class EditRolePickerView(discord.ui.View):
+    def __init__(self, module: dict, guild: discord.Guild):
+        super().__init__(timeout=120)
+        self.module = module
+        self.guild  = guild
+
+        role_sel = discord.ui.RoleSelect(
+            placeholder="Neue Discord-Rolle wählen...",
+            min_values=1, max_values=1,
+        )
+        role_sel.callback = self.role_selected
+        self.add_item(role_sel)
+
+    async def role_selected(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            new_role_id   = interaction.data["values"][0]
+            new_role      = interaction.guild.get_role(int(new_role_id))
+            new_role_name = new_role.name if new_role else "Unbekannt"
+            mod_id        = self.module["id"]
+
+            supabase.table("role_modules").update({
+                "role_id":   str(new_role_id),
+                "role_name": new_role_name,
+            }).eq("id", mod_id).execute()
+
+            # Nachricht im Kanal: Buttons tauschen
+            channel = bot.get_channel(int(self.module["channel_id"]))
+            if channel and new_role:
+                display = self.module.get("display_name") or self.module.get("role_name", "")
+                async for msg in channel.history(limit=50):
+                    if msg.author.id == bot.user.id and msg.embeds:
+                        if msg.embeds[0].title and display in msg.embeds[0].title:
+                            view = RoleAssignView(new_role.id, mod_id)
+                            bot.add_view(view)
+                            await msg.edit(view=view)
+                            break
+
+            await interaction.followup.send(
+                f"✅ Rolle geändert zu **{new_role_name}**!", ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+# ── Edit: Aktion wählen nach Modul-Auswahl ───────────────────────────────────
+
+class RoleEditActionView(discord.ui.View):
+    def __init__(self, module: dict, guild: discord.Guild):
+        super().__init__(timeout=120)
+        self.module = module
+        self.guild  = guild
+
+        display = module.get("display_name") or module.get("role_name", "?")
+        role    = guild.get_role(int(module["role_id"]))
+
+        embed_info = (
+            f"**Modul:** {display}\n"
+            f"**Discord-Rolle:** {role.mention if role else '❓ Nicht gefunden'}\n"
+            f"**Beschreibung:** {module.get('role_desc','')[:100]}\n"
+            f"**ID:** `{module['id']}`"
+        )
+        self._info = embed_info
+
+        edit_btn = discord.ui.Button(
+            label="✏️ Name & Beschreibung", style=discord.ButtonStyle.primary
+        )
+        edit_btn.callback = self.edit_text
+        self.add_item(edit_btn)
+
+        role_btn = discord.ui.Button(
+            label="🎭 Rolle ändern", style=discord.ButtonStyle.secondary
+        )
+        role_btn.callback = self.edit_role
+        self.add_item(role_btn)
+
+        del_btn = discord.ui.Button(
+            label="🗑️ Modul löschen", style=discord.ButtonStyle.danger
+        )
+        del_btn.callback = self.delete_module
+        self.add_item(del_btn)
+
+    async def edit_text(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(EditRoleModuleModal(self.module))
+
+    async def edit_role(self, interaction: discord.Interaction):
+        view = EditRolePickerView(self.module, self.guild)
+        await interaction.response.send_message(
+            "Wähle die neue Discord-Rolle:", view=view, ephemeral=True
+        )
+
+    async def delete_module(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            # Nachricht im Kanal löschen
+            channel = bot.get_channel(int(self.module["channel_id"]))
+            if channel:
+                display = self.module.get("display_name") or self.module.get("role_name", "")
+                async for msg in channel.history(limit=50):
+                    if msg.author.id == bot.user.id and msg.embeds:
+                        if msg.embeds[0].title and display in msg.embeds[0].title:
+                            await msg.delete()
+                            break
+
+            supabase.table("role_modules").delete().eq("id", self.module["id"]).execute()
+            await interaction.followup.send("✅ Modul gelöscht!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+# ── Edit: Modul-Auswahl Dropdown ──────────────────────────────────────────────
+
+class RoleModuleSelectView(discord.ui.View):
+    def __init__(self, modules: list[dict], guild: discord.Guild):
+        super().__init__(timeout=60)
+        self.guild = guild
+
+        options = [
+            discord.SelectOption(
+                label=(m.get("display_name") or m.get("role_name", "?"))[:100],
+                description=f"ID {m['id']} | Rolle: @{m.get('role_name','?')}",
+                value=str(m["id"])
+            )
+            for m in modules[:25]
+        ]
+        self.modules_map = {str(m["id"]): m for m in modules}
+
+        sel = discord.ui.Select(placeholder="Wähle ein Rollenmodul...", options=options)
+        sel.callback = self.selected
+        self.add_item(sel)
+
+    async def selected(self, interaction: discord.Interaction):
+        mod_id = interaction.data["values"][0]
+        # Frische Daten holen
+        fresh = supabase.table("role_modules").select("*").eq("id", mod_id).execute()
+        module = fresh.data[0] if fresh.data else self.modules_map[mod_id][0]
+
+        display = module.get("display_name") or module.get("role_name", "?")
+        role    = interaction.guild.get_role(int(module["role_id"]))
+
+        embed = discord.Embed(
+            title=f"✏️ Modul bearbeiten: {display}",
+            description=(
+                f"**Discord-Rolle:** {role.mention if role else '❓ Nicht gefunden'}\n"
+                f"**Beschreibung:** {module.get('role_desc','')[:200]}\n"
+                f"**Modul-ID:** `{module['id']}`"
+            ),
+            color=discord.Color.blurple()
+        )
+        action_view = RoleEditActionView(module, self.guild)
+        await interaction.response.edit_message(embed=embed, view=action_view)
+
+
+# ── Edit Command ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="rollen_bearbeiten", description="Bearbeite oder lösche ein Rollenvergabe-Modul")
+async def rollen_bearbeiten(interaction: discord.Interaction):
+    if not has_rights(interaction):
+        await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result = supabase.table("role_modules").select("*")                         .eq("guild_id", str(interaction.guild_id)).execute()
+        if not result.data:
+            await interaction.followup.send(
+                "❌ Keine Rollenvergabe-Module gefunden. Nutze `/setup_rollen` zuerst.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="✏️ Rollenvergabe bearbeiten",
+            description="Wähle ein Modul das du bearbeiten möchtest:",
+            color=discord.Color.blurple()
+        )
+        # Zeige alle Module als Übersicht
+        for m in result.data:
+            display = m.get("display_name") or m.get("role_name", "?")
+            role    = interaction.guild.get_role(int(m["role_id"]))
+            embed.add_field(
+                name=f"ID `{m['id']}` — {display}",
+                value=f"Rolle: {role.mention if role else '❓'} | {m.get('role_desc','')[:80]}",
+                inline=False
+            )
+
+        view = RoleModuleSelectView(result.data, interaction.guild)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+
+
+
+# ── Edit Modals ───────────────────────────────────────────────────────────────
+
+class EditRoleDisplayNameModal(discord.ui.Modal, title="Anzeigename ändern"):
+    new_name = discord.ui.TextInput(
+        label="Neuer Anzeigename", placeholder="z.B. Musik-Fan", required=True, max_length=100
+    )
+    def __init__(self, module: dict):
+        super().__init__()
+        self.module = module
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            supabase.table("role_modules").update({"display_name": self.new_name.value}).eq("id", self.module["id"]).execute()
+            await _update_role_message(interaction.guild, self.module, display_name=self.new_name.value)
+            await interaction.followup.send(f"✅ Anzeigename auf **{self.new_name.value}** geändert.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+class EditRoleDescModal(discord.ui.Modal, title="Beschreibung ändern"):
+    new_desc = discord.ui.TextInput(
+        label="Neue Beschreibung", placeholder="...", required=True,
+        style=discord.TextStyle.paragraph, max_length=300
+    )
+    def __init__(self, module: dict):
+        super().__init__()
+        self.module = module
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            supabase.table("role_modules").update({"role_desc": self.new_desc.value}).eq("id", self.module["id"]).execute()
+            await _update_role_message(interaction.guild, self.module, role_desc=self.new_desc.value)
+            await interaction.followup.send("✅ Beschreibung aktualisiert.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+# ── Hilfsfunktion: Rollennachricht bearbeiten ─────────────────────────────────
+
+async def _update_role_message(guild: discord.Guild, module: dict, **overrides):
+    """Bearbeitet die gesendete Rollennachricht mit neuen Werten."""
+    try:
+        if not module.get("message_id") or not module.get("channel_id"):
+            return
+        channel = bot.get_channel(int(module["channel_id"]))
+        if not channel:
+            return
+        msg = await channel.fetch_message(int(module["message_id"]))
+
+        display_name = overrides.get("display_name", module.get("display_name") or module.get("role_name"))
+        role_desc    = overrides.get("role_desc",    module.get("role_desc", ""))
+        new_role_id  = overrides.get("role_id",      None)
+
+        embed = discord.Embed(
+            title=f"🏷️ {display_name}",
+            description=role_desc,
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text=f"Modul-ID: {module['id']}")
+
+        role_id = int(new_role_id) if new_role_id else int(module["role_id"])
+        view = RoleAssignView(role_id, module["id"])
+        await msg.edit(embed=embed, view=view)
+    except Exception as e:
+        print(f"[RoleSystem] _update_role_message Fehler: {e}")
+
+
+# ── Edit Select Views ─────────────────────────────────────────────────────────
+
+
+
+
+class RoleChangePickerView(discord.ui.View):
+    """Wählt neue Discord-Rolle für ein Modul."""
+    def __init__(self, module: dict):
+        super().__init__(timeout=60)
+        self.module = module
+        sel = discord.ui.RoleSelect(placeholder="Neue Discord-Rolle wählen...", min_values=1, max_values=1)
+        async def cb(interaction: discord.Interaction):
+            new_role_id = interaction.data["values"][0]
+            new_role    = interaction.guild.get_role(int(new_role_id))
+            await interaction.response.defer(ephemeral=True)
+            try:
+                supabase.table("role_modules").update({
+                    "role_id":   str(new_role_id),
+                    "role_name": new_role.name if new_role else "Unbekannt"
+                }).eq("id", self.module["id"]).execute()
+                await _update_role_message(interaction.guild, self.module, role_id=new_role_id)
+                await interaction.followup.send(
+                    f"✅ Rolle geändert zu **{new_role.name if new_role else new_role_id}**.", ephemeral=True
+                )
+            except Exception as e:
+                await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+        sel.callback = cb
+        self.add_item(sel)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1707,6 +2408,7 @@ async def on_ready():
     print(f"✅ Bot ist online als {bot.user}")
     bot.add_view(SpielabendView())
     bot.add_view(EventFollowView())
+    await register_role_views()
     await bot.tree.sync()
     print("✅ Commands synchronisiert")
     if not check_reminders.is_running():
