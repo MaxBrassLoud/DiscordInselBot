@@ -45,17 +45,14 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".m4v", ".w
 
 # ═════════════════════════════════════════════════════════════════════════════
 # RAM-CACHE SYSTEM
-# Reduziert Supabase-Anfragen drastisch – Settings werden pro Guild gecacht
-# und erst nach CACHE_TTL Sekunden erneut von der DB geladen.
 # ═════════════════════════════════════════════════════════════════════════════
 CACHE_TTL = 5 * 60  # 5 Minuten in Sekunden
 
 class SettingsCache:
     def __init__(self):
-        self._cache: dict[str, dict] = {}       # guild_id -> {"data": ..., "ts": ...}
+        self._cache: dict[str, dict] = {}
 
     def get(self, guild_id: str) -> dict | None:
-        """Gibt gecachte Settings zurück oder None wenn abgelaufen/nicht vorhanden."""
         entry = self._cache.get(guild_id)
         if not entry:
             return None
@@ -65,22 +62,18 @@ class SettingsCache:
         return entry["data"]
 
     def set(self, guild_id: str, data: dict):
-        """Speichert Settings im Cache."""
         self._cache[guild_id] = {"data": data, "ts": datetime.now().timestamp()}
 
     def invalidate(self, guild_id: str):
-        """Löscht Cache-Eintrag (nach Settings-Änderung)."""
         self._cache.pop(guild_id, None)
 
 settings_cache = SettingsCache()
 
 
 async def get_settings(guild_id: str) -> dict | None:
-    """Holt Settings aus Cache oder Supabase."""
     cached = settings_cache.get(guild_id)
     if cached is not None:
         return cached
-
     result = supabase.table("settings").select("*").eq("guild_id", guild_id).execute()
     if result.data:
         settings_cache.set(guild_id, result.data[0])
@@ -102,7 +95,6 @@ def has_rights(ctx: discord.Interaction) -> bool:
 
 
 async def get_youtube_info(url: str) -> dict | None:
-    """Holt YouTube Video-Infos (Titel, Thumbnail, etc.) via yt-dlp."""
     try:
         ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
         loop = asyncio.get_event_loop()
@@ -115,14 +107,12 @@ async def get_youtube_info(url: str) -> dict | None:
 
 
 async def check_already_posted(image_channel: discord.TextChannel, message_id: int) -> bool:
-    """Prüft ob eine Nachricht bereits weitergeleitet wurde (Deduplizierung)."""
     target_id = str(message_id)
     async for recent_msg in image_channel.history(limit=50):
         if recent_msg.author.id == bot.user.id and recent_msg.embeds:
             for emb in recent_msg.embeds:
                 for field in emb.fields:
                     if field.name == "🔗 Nachricht":
-                        # Extrahiere Message-ID aus der Jump-URL exakt
                         parts = field.value.split("/")
                         if parts and parts[-1].rstrip(")") == target_id:
                             return True
@@ -132,7 +122,6 @@ async def check_already_posted(image_channel: discord.TextChannel, message_id: i
 # ── Media-Forward Funktionen ──────────────────────────────────────────────────
 
 async def forward_image(image_channel: discord.TextChannel, attachment: discord.Attachment, message: discord.Message):
-    """Leitet ein Bild mit blauer Outline weiter."""
     embed = discord.Embed(color=0x5865F2, timestamp=message.created_at)
     embed.set_image(url=attachment.url)
     embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
@@ -145,7 +134,6 @@ async def forward_image(image_channel: discord.TextChannel, attachment: discord.
 
 
 async def forward_video(image_channel: discord.TextChannel, attachment: discord.Attachment, message: discord.Message):
-    """Leitet ein Video mit gelber Outline weiter."""
     embed = discord.Embed(color=0xFEE75C, timestamp=message.created_at)
     embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
     embed.add_field(name="📌 Kanal", value=message.channel.mention, inline=True)
@@ -158,9 +146,7 @@ async def forward_video(image_channel: discord.TextChannel, attachment: discord.
 
 
 async def forward_youtube(image_channel: discord.TextChannel, url: str, message: discord.Message):
-    """Leitet einen YouTube Link mit Thumbnail und roter Outline weiter."""
     info = await get_youtube_info(url)
-
     embed = discord.Embed(
         color=0xED4245,
         timestamp=message.created_at,
@@ -168,7 +154,6 @@ async def forward_youtube(image_channel: discord.TextChannel, url: str, message:
         url=url
     )
     embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-
     if info:
         thumbnail = info.get("thumbnail")
         if thumbnail:
@@ -182,32 +167,25 @@ async def forward_youtube(image_channel: discord.TextChannel, url: str, message:
             hours, minutes = divmod(minutes, 60)
             duration_str = f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
             embed.add_field(name="⏱️ Länge", value=duration_str, inline=True)
-
     embed.add_field(name="📌 Kanal", value=message.channel.mention, inline=True)
     embed.add_field(name="🔗 Nachricht", value=f"[Zum Original]({message.jump_url})", inline=True)
-
     clean_content = message.content.replace(url, "").strip() if message.content else ""
     if clean_content:
         embed.add_field(name="💬 Text", value=clean_content[:500], inline=False)
-
     embed.set_footer(text="🎬 YouTube")
     await image_channel.send(embed=embed)
 
 
 async def forward_twitch_clip(image_channel: discord.TextChannel, url: str, message: discord.Message):
-    """Leitet einen Twitch Clip als Embed mit Discord-Native-Preview weiter."""
     embed = discord.Embed(color=0x9B59B6, timestamp=message.created_at)
     embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
     embed.add_field(name="📌 Kanal", value=message.channel.mention, inline=True)
     embed.add_field(name="🔗 Nachricht", value=f"[Zum Original]({message.jump_url})", inline=True)
     embed.add_field(name="🎮 Twitch Clip", value=url, inline=False)
-
     clean_content = message.content.replace(url, "").strip() if message.content else ""
     if clean_content:
         embed.add_field(name="💬 Text", value=clean_content[:500], inline=False)
-
     embed.set_footer(text="💜 Twitch Clip")
-    # URL als reiner content-Text → Discord rendert automatisch eine native Clip-Preview
     await image_channel.send(content=url, embed=embed)
 
 
@@ -216,14 +194,11 @@ async def forward_twitch_clip(image_channel: discord.TextChannel, url: str, mess
 # ═════════════════════════════════════════════════════════════════════════════
 
 class SetupMediaView(discord.ui.View):
-    """View für /setup_media – wählt Kanal und aktiviert Features per Toggle."""
-
     def __init__(self, guild_id: int, current_config: dict | None = None):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         self.image_channel_id: str | None = None
 
-        # Aktuelle Feature-Zustände aus bestehender Config laden
         cfg = current_config or {}
         self.feature_images  = bool(cfg.get("forward_images",  True))
         self.feature_videos  = bool(cfg.get("forward_videos",  True))
@@ -233,7 +208,6 @@ class SetupMediaView(discord.ui.View):
         if cfg.get("image_channel_id"):
             self.image_channel_id = str(cfg["image_channel_id"])
 
-        # Channel Select
         self.channel_select = discord.ui.ChannelSelect(
             placeholder="📺 Ziel-Kanal für weitergeleitete Medien",
             min_values=1,
@@ -243,12 +217,9 @@ class SetupMediaView(discord.ui.View):
         self.channel_select.callback = self.channel_callback
         self.add_item(self.channel_select)
 
-        # Toggle Buttons werden in _rebuild_buttons gesetzt
         self._rebuild_buttons()
 
     def _rebuild_buttons(self):
-        """Entfernt alte Toggle-Buttons und fügt aktualisierte hinzu."""
-        # Entferne alle Buttons (nicht den ChannelSelect)
         to_remove = [item for item in self.children if isinstance(item, discord.ui.Button)]
         for item in to_remove:
             self.remove_item(item)
@@ -271,7 +242,6 @@ class SetupMediaView(discord.ui.View):
         self.add_item(make_toggle("YouTube",  "▶️", "feature_youtube", self.feature_youtube))
         self.add_item(make_toggle("Twitch",   "💜", "feature_twitch",  self.feature_twitch))
 
-        # Speichern Button
         save_btn = discord.ui.Button(
             label="💾 Speichern",
             style=discord.ButtonStyle.success,
@@ -316,23 +286,18 @@ class SetupMediaView(discord.ui.View):
                 "forward_youtube":  self.feature_youtube,
                 "forward_twitch":   self.feature_twitch,
             }
-
             existing = supabase.table("settings").select("id").eq("guild_id", str(self.guild_id)).execute()
             if existing.data:
                 supabase.table("settings").update(data).eq("guild_id", str(self.guild_id)).execute()
             else:
                 supabase.table("settings").insert(data).execute()
-
             settings_cache.invalidate(str(self.guild_id))
-
             embed = self._build_embed()
             embed.color = discord.Color.green()
             embed.title = "✅ Media-Setup gespeichert!"
-
             for item in self.children:
                 item.disabled = True
             await interaction.response.edit_message(embed=embed, view=self)
-
         except Exception as e:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Fehler beim Speichern: {e}", ephemeral=True)
@@ -396,7 +361,6 @@ class SetupView(discord.ui.View):
     async def update_status(self, interaction: discord.Interaction):
         if self.ping_role and self.channel and self.delete_roles:
             self.save_button.disabled = False
-
         embed = interaction.message.embeds[0]
         embed.clear_fields()
         embed.add_field(name="🔔 Ping Rolle",   value=f"<@&{self.ping_role}>" if self.ping_role else "*Nicht ausgewählt*", inline=False)
@@ -417,9 +381,7 @@ class SetupView(discord.ui.View):
                 supabase.table("settings").update(data).eq("guild_id", str(self.guild_id)).execute()
             else:
                 supabase.table("settings").insert(data).execute()
-
             settings_cache.invalidate(str(self.guild_id))
-
             embed = interaction.message.embeds[0]
             embed.color = discord.Color.green()
             embed.title = "✅ Setup erfolgreich gespeichert!"
@@ -461,12 +423,10 @@ class SpielabendModal(discord.ui.Modal, title="Spieleabend erstellen"):
             if not config:
                 await interaction.followup.send("❌ Bitte führe zuerst `/setup_spieleabend` aus!", ephemeral=True)
                 return
-
             channel = bot.get_channel(int(config['channel_id']))
             if not channel:
                 await interaction.followup.send("❌ Kanal nicht gefunden!", ephemeral=True)
                 return
-
             zeitpunkt = self.parse_time(self.uhrzeit.value)
             embed = discord.Embed(
                 title=f"🎮 {self.titel.value}",
@@ -479,15 +439,12 @@ class SpielabendModal(discord.ui.Modal, title="Spieleabend erstellen"):
             embed.add_field(name="✅ Dabei",    value="*Niemand*", inline=False)
             embed.add_field(name="❓ Vielleicht", value="*Niemand*", inline=False)
             embed.add_field(name="❌ Keine Zeit", value="*Niemand*", inline=False)
-
             role = interaction.guild.get_role(int(config['ping_role_id']))
             ping_text = role.mention if role else "@everyone"
-
             view = SpielabendView()
             message = await channel.send(content=ping_text, embed=embed, view=view)
             thread = await message.create_thread(name=f"💬 {self.titel.value}", auto_archive_duration=1440)
             await thread.send(f"Hier könnt ihr über den Spieleabend **{self.titel.value}** diskutieren! 🎮")
-
             game_night_data = {
                 "guild_id":    str(interaction.guild_id),
                 "message_id":  str(message.id),
@@ -505,7 +462,6 @@ class SpielabendModal(discord.ui.Modal, title="Spieleabend erstellen"):
             if result.data:
                 embed.set_footer(text=f"Spieleabend ID: {result.data[0]['id']}")
                 await message.edit(embed=embed)
-
             await interaction.followup.send(f"✅ Spieleabend erstellt! {message.jump_url}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {str(e)}", ephemeral=True)
@@ -557,20 +513,16 @@ class SpielabendView(discord.ui.View):
             if not result.data:
                 await interaction.response.send_message("❌ Spieleabend nicht gefunden!", ephemeral=True)
                 return
-
             gn = result.data[0]
             dabei     = [uid for uid in gn.get('dabei',     []) if uid != user_id]
             vielleicht = [uid for uid in gn.get('vielleicht', []) if uid != user_id]
             keine_zeit = [uid for uid in gn.get('keine_zeit', []) if uid != user_id]
-
             if status == "dabei":      dabei.append(user_id)
             elif status == "vielleicht": vielleicht.append(user_id)
             elif status == "keine_zeit": keine_zeit.append(user_id)
-
             supabase.table("game_nights").update({
                 "dabei": dabei, "vielleicht": vielleicht, "keine_zeit": keine_zeit
             }).eq("message_id", message_id).execute()
-
             embed = interaction.message.embeds[0]
             dabei_text     = " ".join([f"<@{uid}>" for uid in dabei])     or "*Niemand*"
             vielleicht_text = " ".join([f"<@{uid}>" for uid in vielleicht]) or "*Niemand*"
@@ -578,7 +530,6 @@ class SpielabendView(discord.ui.View):
                 interaction.guild.get_member(int(uid)).display_name
                 for uid in keine_zeit if interaction.guild.get_member(int(uid))
             ]) or "*Niemand*"
-
             for i, field in enumerate(embed.fields):
                 if field.name == "✅ Dabei":
                     embed.set_field_at(i, name="✅ Dabei",     value=dabei_text,      inline=False)
@@ -586,7 +537,6 @@ class SpielabendView(discord.ui.View):
                     embed.set_field_at(i, name="❓ Vielleicht", value=vielleicht_text, inline=False)
                 elif field.name == "❌ Keine Zeit":
                     embed.set_field_at(i, name="❌ Keine Zeit", value=keine_zeit_text, inline=False)
-
             await interaction.message.edit(embed=embed)
             await interaction.response.send_message("✅ Status aktualisiert!", ephemeral=True)
         except Exception as e:
@@ -605,7 +555,6 @@ async def setup_spieleabend(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-
     embed = discord.Embed(
         title="⚙️ Spieleabend Bot Setup",
         description="Wähle die Einstellungen für den Spieleabend Bot aus:",
@@ -626,10 +575,7 @@ async def setup_media(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-
-    # Aktuelle Config laden um bestehende Werte vorzubefüllen
     current_config = await get_settings(str(interaction.guild_id))
-
     view = SetupMediaView(interaction.guild_id, current_config)
     await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
 
@@ -648,26 +594,22 @@ async def spieleabend_loeschen(interaction: discord.Interaction, spieleabend_id:
         if not config:
             await interaction.followup.send("❌ Keine Einstellungen gefunden!")
             return
-
         delete_role_ids = config.get("delete_role_ids", "").split(",")
         user_role_ids   = [str(r.id) for r in interaction.user.roles]
         has_permission  = (
             any(rid in delete_role_ids for rid in user_role_ids)
             or interaction.user.guild_permissions.administrator
         )
-
         result = supabase.table("game_nights").select("*").eq("id", spieleabend_id).execute()
         if not result.data:
             await interaction.followup.send("❌ Spieleabend nicht gefunden!")
             return
-
         game_night = result.data[0]
         if str(interaction.user.id) == game_night["creator_id"]:
             has_permission = True
         if not has_permission:
             await interaction.followup.send("❌ Keine Berechtigung!")
             return
-
         try:
             channel = bot.get_channel(int(config["channel_id"]))
             message = await channel.fetch_message(int(game_night["message_id"]))
@@ -676,7 +618,6 @@ async def spieleabend_loeschen(interaction: discord.Interaction, spieleabend_id:
             await thread.delete()
         except:
             pass
-
         supabase.table("game_nights").delete().eq("id", spieleabend_id).execute()
         await interaction.followup.send("✅ Spieleabend gelöscht!")
     except Exception as e:
@@ -705,7 +646,6 @@ async def on_member_join(member: discord.Member):
         config = await get_settings(str(member.guild.id))
         if not config:
             return
-
         if config.get("welcome_enabled", True) and config.get("welcome_channel_id"):
             channel = bot.get_channel(int(config["welcome_channel_id"]))
             if channel:
@@ -721,7 +661,6 @@ async def on_member_remove(member: discord.Member):
         config = await get_settings(str(member.guild.id))
         if not config:
             return
-
         if config.get("goodbye_enabled", True) and config.get("goodbye_channel_id"):
             channel = bot.get_channel(int(config["goodbye_channel_id"]))
             if channel:
@@ -745,44 +684,35 @@ async def Ping(ctx):
 
 @tasks.loop(minutes=1)
 async def check_reminders():
-    """Prüft auf bevorstehende Spieleabende und sendet Erinnerungen."""
     try:
         tz  = timezone(timedelta(hours=1))
         now = datetime.now(tz)
         result = supabase.table("game_nights").select("*").execute()
-
         for gn in result.data:
             if not gn.get('zeitpunkt'):
                 continue
-
             zeitpunkt_str = gn['zeitpunkt']
             zeitpunkt = datetime.fromisoformat(zeitpunkt_str)
             if zeitpunkt.tzinfo is None:
                 zeitpunkt = zeitpunkt.replace(tzinfo=tz)
-
             time_diff = (zeitpunkt - now).total_seconds() / 60
             thread = bot.get_channel(int(gn['thread_id']))
             if not thread:
                 continue
-
             if 59 <= time_diff <= 61 and gn.get('vielleicht') and not gn.get('reminded_1h'):
                 mentions = " ".join([f"<@{uid}>" for uid in gn['vielleicht']])
                 await thread.send(f"⏰ **1 Stunde bis zum Start!**\n{mentions} - Habt ihr doch noch Zeit?")
                 supabase.table("game_nights").update({"reminded_1h": True}).eq("id", gn['id']).execute()
-
             if 9 <= time_diff <= 11 and gn.get('dabei') and not gn.get('reminded_10m'):
                 mentions = " ".join([f"<@{uid}>" for uid in gn['dabei']])
                 await thread.send(f"⏰ **10 Minuten bis zum Start!**\n{mentions}")
                 supabase.table("game_nights").update({"reminded_10m": True}).eq("id", gn['id']).execute()
-
             if -1 <= time_diff <= 1 and gn.get('dabei') and not gn.get('reminded_start'):
                 mentions = " ".join([f"<@{uid}>" for uid in gn['dabei']])
                 await thread.send(f"🎮 **Es geht los!**\n{mentions}")
                 supabase.table("game_nights").update({"reminded_start": True}).eq("id", gn['id']).execute()
-
     except Exception as e:
         print(f"[check_reminders] Fehler: {e}")
-
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -792,11 +722,7 @@ async def check_reminders():
 MAX_ROLE_MODULES = 5
 
 
-# ── Persistent Button View für Rollenvergabe ──────────────────────────────────
-
 class RoleAssignView(discord.ui.View):
-    """Persistente View mit 'Rolle annehmen' und 'Rolle ablehnen' Buttons."""
-
     def __init__(self, role_id: int, module_db_id: int):
         super().__init__(timeout=None)
         self.role_id     = role_id
@@ -835,7 +761,6 @@ class RoleAssignView(discord.ui.View):
     async def decline_callback(self, interaction: discord.Interaction):
         role = interaction.guild.get_role(self.role_id)
         if not role or role not in interaction.user.roles:
-            # Stille Ignorierung
             await interaction.response.send_message("ℹ️ Du hast diese Rolle nicht.", ephemeral=True)
             return
         try:
@@ -845,10 +770,7 @@ class RoleAssignView(discord.ui.View):
             await interaction.response.send_message("❌ Ich habe keine Berechtigung diese Rolle zu entfernen.", ephemeral=True)
 
 
-# ── Hilfsfunktion: persistent Views beim Start registrieren ──────────────────
-
 async def register_role_views():
-    """Lädt alle gespeicherten Rollenvergabe-Module und registriert ihre Views."""
     try:
         result = supabase.table("role_modules").select("*").execute()
         for mod in result.data:
@@ -859,11 +781,7 @@ async def register_role_views():
         print(f"[RoleSystem] register_role_views Fehler: {e}")
 
 
-# ── RolePicker View: Discord-Rolle auswählen nach Modal ──────────────────────
-
 class RolePickerView(discord.ui.View):
-    """Ephemeral View die nach dem Modal erscheint – User wählt die echte Rolle."""
-
     def __init__(self, display_name: str, role_desc: str, setup_view: "SetupRoleView"):
         super().__init__(timeout=120)
         self.display_name = display_name
@@ -881,8 +799,6 @@ class RolePickerView(discord.ui.View):
     async def role_selected(self, interaction: discord.Interaction):
         role_id   = interaction.data["values"][0]
         role_name = interaction.guild.get_role(int(role_id)).name
-
-        # Prüfe ob Rolle schon einem Modul zugewiesen ist
         for mod in self.setup_view.modules:
             if mod["role_id"] == role_id:
                 await interaction.response.send_message(
@@ -890,16 +806,13 @@ class RolePickerView(discord.ui.View):
                     ephemeral=True
                 )
                 return
-
         self.setup_view.modules.append({
             "display_name": self.display_name,
             "role_desc":    self.role_desc,
             "role_id":      role_id,
-            "role_name":    role_name,   # echter Discord-Rollenname
+            "role_name":    role_name,
         })
         self.setup_view._rebuild()
-
-        # Setup-Nachricht aktualisieren + diese ephemeral Nachricht bestätigen
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="✅ Modul hinzugefügt",
@@ -912,17 +825,14 @@ class RolePickerView(discord.ui.View):
             ),
             view=None
         )
-        # Setup-Message updaten – hole die originale Interaction-Message
         try:
             await self.setup_view._original_interaction.edit_original_response(
                 embed=self.setup_view._build_embed(),
                 view=self.setup_view
             )
         except Exception:
-            pass  # Falls nicht mehr erreichbar, kein Problem
+            pass
 
-
-# ── Modal: Rollenmodul hinzufügen ─────────────────────────────────────────────
 
 class AddRoleModuleModal(discord.ui.Modal, title="Rollenmodul hinzufügen"):
     role_name = discord.ui.TextInput(
@@ -939,15 +849,12 @@ class AddRoleModuleModal(discord.ui.Modal, title="Rollenmodul hinzufügen"):
         self.setup_view = setup_view
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Prüfe ob Anzeigename bereits vergeben
         for mod in self.setup_view.modules:
             if mod["display_name"].lower() == self.role_name.value.lower():
                 await interaction.response.send_message(
                     "❌ Ein Modul mit diesem Namen existiert bereits.", ephemeral=True
                 )
                 return
-
-        # Zeige Rollen-Auswahl damit User die echte Discord-Rolle wählt
         view = RolePickerView(
             display_name=self.role_name.value,
             role_desc=self.role_desc.value,
@@ -968,26 +875,21 @@ class AddRoleModuleModal(discord.ui.Modal, title="Rollenmodul hinzufügen"):
         )
 
 
-# ── Setup View für Rollenvergabe ──────────────────────────────────────────────
-
 class SetupRoleView(discord.ui.View):
     def __init__(self, guild_id: int):
         super().__init__(timeout=300)
         self.guild_id              = guild_id
-        self.modules: list         = []   # max 5 Dicts
+        self.modules: list         = []
         self.target_channel_id: str | None = None
         self._original_interaction = None
         self._rebuild()
 
     def _rebuild(self):
-        """Baut alle Buttons neu auf."""
         for item in [i for i in self.children if isinstance(i, discord.ui.Button)]:
             self.remove_item(item)
-        # Entferne alten ChannelSelect falls vorhanden
         for item in [i for i in self.children if isinstance(i, discord.ui.ChannelSelect)]:
             self.remove_item(item)
 
-        # ── Modul hinzufügen Button ───────────────────────────────────────────
         if len(self.modules) < MAX_ROLE_MODULES:
             add_btn = discord.ui.Button(
                 label=f"➕ Modul hinzufügen ({len(self.modules)}/{MAX_ROLE_MODULES})",
@@ -998,7 +900,6 @@ class SetupRoleView(discord.ui.View):
             add_btn.callback = add_callback
             self.add_item(add_btn)
 
-        # ── Letztes Modul entfernen ───────────────────────────────────────────
         if self.modules:
             remove_btn = discord.ui.Button(
                 label="🗑️ Letztes Modul entfernen",
@@ -1014,7 +915,6 @@ class SetupRoleView(discord.ui.View):
             remove_btn.callback = remove_callback
             self.add_item(remove_btn)
 
-        # ── Channel Select ────────────────────────────────────────────────────
         ch_sel = discord.ui.ChannelSelect(
             placeholder="📢 Kanal für die Rollenvergabe-Nachricht",
             min_values=1, max_values=1,
@@ -1029,7 +929,6 @@ class SetupRoleView(discord.ui.View):
         ch_sel.callback = ch_callback
         self.add_item(ch_sel)
 
-        # ── Absenden Button ───────────────────────────────────────────────────
         send_btn = discord.ui.Button(
             label="🚀 Nachrichten senden & speichern",
             style=discord.ButtonStyle.success,
@@ -1056,7 +955,6 @@ class SetupRoleView(discord.ui.View):
                 )
         else:
             embed.add_field(name="Module", value="*Noch keine Module hinzugefügt*", inline=False)
-
         embed.add_field(
             name="📢 Kanal",
             value=f"<#{self.target_channel_id}>" if self.target_channel_id else "*Nicht ausgewählt*",
@@ -1066,7 +964,6 @@ class SetupRoleView(discord.ui.View):
         return embed
 
     async def send_callback(self, interaction: discord.Interaction):
-        # Use defer so we can do multiple async operations
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
         try:
@@ -1074,8 +971,6 @@ class SetupRoleView(discord.ui.View):
             if not channel:
                 await interaction.followup.send("❌ Kanal nicht gefunden!", ephemeral=True)
                 return
-
-            # ── Hauptnachricht senden ─────────────────────────────────────────
             main_embed = discord.Embed(
                 title="🎭 Rollenvergabe",
                 description=(
@@ -1084,17 +979,7 @@ class SetupRoleView(discord.ui.View):
                 ),
                 color=discord.Color.blurple()
             )
-            """
-            for mod in self.modules:
-                
-                main_embed.add_field(
-                    name=f"🏷️ {mod['display_name']}",
-                    value=mod["role_desc"],
-                    inline=False
-                )"""
             await channel.send(embed=main_embed)
-
-            # ── Pro Modul: Rolle aus gewählter ID holen + eigene Nachricht ────
             for mod in self.modules:
                 role = interaction.guild.get_role(int(mod["role_id"]))
                 if not role:
@@ -1103,8 +988,6 @@ class SetupRoleView(discord.ui.View):
                         ephemeral=True
                     )
                     continue
-
-                # In Supabase speichern
                 db_data = {
                     "guild_id":    str(self.guild_id),
                     "role_id":     str(role.id),
@@ -1115,28 +998,21 @@ class SetupRoleView(discord.ui.View):
                 }
                 result = supabase.table("role_modules").insert(db_data).execute()
                 db_id = result.data[0]["id"] if result.data else 0
-
-                # Einzelne Nachricht mit Buttons
                 role_embed = discord.Embed(
                     title=f"🏷️ {mod['display_name']}",
                     description=mod["role_desc"],
                     color=discord.Color.blurple()
                 )
-                #role_embed.set_footer(text=f"Modul-ID: {db_id} | Bearbeiten: /rollen_bearbeiten")
                 view = RoleAssignView(role.id, db_id)
                 bot.add_view(view)
                 sent_msg = await channel.send(embed=role_embed, view=view)
-                # message_id nachträglich speichern für späteres Bearbeiten
                 supabase.table("role_modules").update({"message_id": str(sent_msg.id)}).eq("id", db_id).execute()
-
             for item in self.children:
                 item.disabled = True
-
             await interaction.followup.send(
                 f"✅ {len(self.modules)} Rollenvergabe-Module wurden in <#{self.target_channel_id}> gesendet!",
                 ephemeral=True
             )
-
         except discord.Forbidden:
             await interaction.followup.send(
                 "❌ Ich habe keine Berechtigung Rollen zu erstellen. Bitte prüfe meine Rolle im Server.",
@@ -1145,8 +1021,6 @@ class SetupRoleView(discord.ui.View):
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-
-# ── Slash Command ─────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="setup_rollen", description="Richte die Rollenvergabe ein")
 async def setup_rollen(interaction: discord.Interaction):
@@ -1159,8 +1033,6 @@ async def setup_rollen(interaction: discord.Interaction):
         embed=view._build_embed(), view=view, ephemeral=True
     )
 
-
-# ── Edit: Modal für Anzeigename + Beschreibung ────────────────────────────────
 
 class EditRoleModuleModal(discord.ui.Modal, title="Rollenmodul bearbeiten"):
     new_display = discord.ui.TextInput(
@@ -1185,12 +1057,8 @@ class EditRoleModuleModal(discord.ui.Modal, title="Rollenmodul bearbeiten"):
                 "display_name": self.new_display.value,
                 "role_desc":    self.new_desc.value,
             }).eq("id", mod_id).execute()
-
-            # Originale Nachricht im Kanal updaten
             channel = bot.get_channel(int(self.module["channel_id"]))
             if channel:
-                # Suche nach der Embed-Nachricht mit dieser Modul-ID
-                # Die Nachricht hat den Titel des alten display_name
                 old_name = self.module.get("display_name") or self.module.get("role_name", "")
                 async for msg in channel.history(limit=50):
                     if msg.author.id == bot.user.id and msg.embeds:
@@ -1205,13 +1073,10 @@ class EditRoleModuleModal(discord.ui.Modal, title="Rollenmodul bearbeiten"):
                             view = RoleAssignView(role.id if role else 0, mod_id)
                             await msg.edit(embed=new_embed, view=view)
                             break
-
             await interaction.followup.send("✅ Modul aktualisiert!", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-
-# ── Edit: Rolle neu wählen ────────────────────────────────────────────────────
 
 class EditRolePickerView(discord.ui.View):
     def __init__(self, module: dict, guild: discord.Guild):
@@ -1233,13 +1098,10 @@ class EditRolePickerView(discord.ui.View):
             new_role      = interaction.guild.get_role(int(new_role_id))
             new_role_name = new_role.name if new_role else "Unbekannt"
             mod_id        = self.module["id"]
-
             supabase.table("role_modules").update({
                 "role_id":   str(new_role_id),
                 "role_name": new_role_name,
             }).eq("id", mod_id).execute()
-
-            # Nachricht im Kanal: Buttons tauschen
             channel = bot.get_channel(int(self.module["channel_id"]))
             if channel and new_role:
                 display = self.module.get("display_name") or self.module.get("role_name", "")
@@ -1250,7 +1112,6 @@ class EditRolePickerView(discord.ui.View):
                             bot.add_view(view)
                             await msg.edit(view=view)
                             break
-
             await interaction.followup.send(
                 f"✅ Rolle geändert zu **{new_role_name}**!", ephemeral=True
             )
@@ -1258,24 +1119,11 @@ class EditRolePickerView(discord.ui.View):
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
-# ── Edit: Aktion wählen nach Modul-Auswahl ───────────────────────────────────
-
 class RoleEditActionView(discord.ui.View):
     def __init__(self, module: dict, guild: discord.Guild):
         super().__init__(timeout=120)
         self.module = module
         self.guild  = guild
-
-        display = module.get("display_name") or module.get("role_name", "?")
-        role    = guild.get_role(int(module["role_id"]))
-
-        embed_info = (
-            f"**Modul:** {display}\n"
-            f"**Discord-Rolle:** {role.mention if role else '❓ Nicht gefunden'}\n"
-            f"**Beschreibung:** {module.get('role_desc','')[:100]}\n"
-            f"**ID:** `{module['id']}`"
-        )
-        self._info = embed_info
 
         edit_btn = discord.ui.Button(
             label="✏️ Name & Beschreibung", style=discord.ButtonStyle.primary
@@ -1307,7 +1155,6 @@ class RoleEditActionView(discord.ui.View):
     async def delete_module(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            # Nachricht im Kanal löschen
             channel = bot.get_channel(int(self.module["channel_id"]))
             if channel:
                 display = self.module.get("display_name") or self.module.get("role_name", "")
@@ -1316,20 +1163,16 @@ class RoleEditActionView(discord.ui.View):
                         if msg.embeds[0].title and display in msg.embeds[0].title:
                             await msg.delete()
                             break
-
             supabase.table("role_modules").delete().eq("id", self.module["id"]).execute()
             await interaction.followup.send("✅ Modul gelöscht!", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
-# ── Edit: Modul-Auswahl Dropdown ──────────────────────────────────────────────
-
 class RoleModuleSelectView(discord.ui.View):
     def __init__(self, modules: list[dict], guild: discord.Guild):
         super().__init__(timeout=60)
         self.guild = guild
-
         options = [
             discord.SelectOption(
                 label=(m.get("display_name") or m.get("role_name", "?"))[:100],
@@ -1339,20 +1182,16 @@ class RoleModuleSelectView(discord.ui.View):
             for m in modules[:25]
         ]
         self.modules_map = {str(m["id"]): m for m in modules}
-
         sel = discord.ui.Select(placeholder="Wähle ein Rollenmodul...", options=options)
         sel.callback = self.selected
         self.add_item(sel)
 
     async def selected(self, interaction: discord.Interaction):
         mod_id = interaction.data["values"][0]
-        # Frische Daten holen
         fresh = supabase.table("role_modules").select("*").eq("id", mod_id).execute()
         module = fresh.data[0] if fresh.data else self.modules_map[mod_id][0]
-
         display = module.get("display_name") or module.get("role_name", "?")
         role    = interaction.guild.get_role(int(module["role_id"]))
-
         embed = discord.Embed(
             title=f"✏️ Modul bearbeiten: {display}",
             description=(
@@ -1366,8 +1205,6 @@ class RoleModuleSelectView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=action_view)
 
 
-# ── Edit Command ──────────────────────────────────────────────────────────────
-
 @bot.tree.command(name="rollen_bearbeiten", description="Bearbeite oder lösche ein Rollenvergabe-Modul")
 async def rollen_bearbeiten(interaction: discord.Interaction):
     if not has_rights(interaction):
@@ -1375,20 +1212,18 @@ async def rollen_bearbeiten(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     try:
-        result = supabase.table("role_modules").select("*")                         .eq("guild_id", str(interaction.guild_id)).execute()
+        result = supabase.table("role_modules").select("*").eq("guild_id", str(interaction.guild_id)).execute()
         if not result.data:
             await interaction.followup.send(
                 "❌ Keine Rollenvergabe-Module gefunden. Nutze `/setup_rollen` zuerst.",
                 ephemeral=True
             )
             return
-
         embed = discord.Embed(
             title="✏️ Rollenvergabe bearbeiten",
             description="Wähle ein Modul das du bearbeiten möchtest:",
             color=discord.Color.blurple()
         )
-        # Zeige alle Module als Übersicht
         for m in result.data:
             display = m.get("display_name") or m.get("role_name", "?")
             role    = interaction.guild.get_role(int(m["role_id"]))
@@ -1397,17 +1232,11 @@ async def rollen_bearbeiten(interaction: discord.Interaction):
                 value=f"Rolle: {role.mention if role else '❓'} | {m.get('role_desc','')[:80]}",
                 inline=False
             )
-
         view = RoleModuleSelectView(result.data, interaction.guild)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-
-
-
-
-# ── Edit Modals ───────────────────────────────────────────────────────────────
 
 class EditRoleDisplayNameModal(discord.ui.Modal, title="Anzeigename ändern"):
     new_name = discord.ui.TextInput(
@@ -1446,10 +1275,7 @@ class EditRoleDescModal(discord.ui.Modal, title="Beschreibung ändern"):
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
-# ── Hilfsfunktion: Rollennachricht bearbeiten ─────────────────────────────────
-
 async def _update_role_message(guild: discord.Guild, module: dict, **overrides):
-    """Bearbeitet die gesendete Rollennachricht mit neuen Werten."""
     try:
         if not module.get("message_id") or not module.get("channel_id"):
             return
@@ -1457,18 +1283,15 @@ async def _update_role_message(guild: discord.Guild, module: dict, **overrides):
         if not channel:
             return
         msg = await channel.fetch_message(int(module["message_id"]))
-
         display_name = overrides.get("display_name", module.get("display_name") or module.get("role_name"))
         role_desc    = overrides.get("role_desc",    module.get("role_desc", ""))
         new_role_id  = overrides.get("role_id",      None)
-
         embed = discord.Embed(
             title=f"🏷️ {display_name}",
             description=role_desc,
             color=discord.Color.blurple()
         )
         embed.set_footer(text=f"Modul-ID: {module['id']}")
-
         role_id = int(new_role_id) if new_role_id else int(module["role_id"])
         view = RoleAssignView(role_id, module["id"])
         await msg.edit(embed=embed, view=view)
@@ -1476,13 +1299,7 @@ async def _update_role_message(guild: discord.Guild, module: dict, **overrides):
         print(f"[RoleSystem] _update_role_message Fehler: {e}")
 
 
-# ── Edit Select Views ─────────────────────────────────────────────────────────
-
-
-
-
 class RoleChangePickerView(discord.ui.View):
-    """Wählt neue Discord-Rolle für ein Modul."""
     def __init__(self, module: dict):
         super().__init__(timeout=60)
         self.module = module
@@ -1536,13 +1353,11 @@ class SetupWelcomerView(discord.ui.View):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         cfg = current_config or {}
-
         self.welcome_channel_id: str | None = str(cfg["welcome_channel_id"]) if cfg.get("welcome_channel_id") else None
         self.goodbye_channel_id: str | None = str(cfg["goodbye_channel_id"]) if cfg.get("goodbye_channel_id") else None
         self.welcome_enabled: bool = bool(cfg.get("welcome_enabled", True))
         self.goodbye_enabled: bool = bool(cfg.get("goodbye_enabled", True))
 
-        # Welcome Channel Select
         self.ch_welcome = discord.ui.ChannelSelect(
             placeholder="👋 Willkommens-Kanal auswählen",
             min_values=1, max_values=1,
@@ -1551,7 +1366,6 @@ class SetupWelcomerView(discord.ui.View):
         self.ch_welcome.callback = self.welcome_channel_callback
         self.add_item(self.ch_welcome)
 
-        # Goodbye Channel Select
         self.ch_goodbye = discord.ui.ChannelSelect(
             placeholder="👋 Abschied-Kanal auswählen (nur für Mods sichtbar)",
             min_values=1, max_values=1,
@@ -1563,11 +1377,9 @@ class SetupWelcomerView(discord.ui.View):
         self._add_buttons()
 
     def _add_buttons(self):
-        # Entferne alte Buttons
         for item in [i for i in self.children if isinstance(i, discord.ui.Button)]:
             self.remove_item(item)
 
-        # Welcome Toggle
         welcome_btn = discord.ui.Button(
             label=f"Willkommen: {'AN ✅' if self.welcome_enabled else 'AUS ❌'}",
             emoji="👋",
@@ -1580,7 +1392,6 @@ class SetupWelcomerView(discord.ui.View):
         welcome_btn.callback = toggle_welcome
         self.add_item(welcome_btn)
 
-        # Goodbye Toggle
         goodbye_btn = discord.ui.Button(
             label=f"Abschied: {'AN ✅' if self.goodbye_enabled else 'AUS ❌'}",
             emoji="🚪",
@@ -1593,7 +1404,6 @@ class SetupWelcomerView(discord.ui.View):
         goodbye_btn.callback = toggle_goodbye
         self.add_item(goodbye_btn)
 
-        # Save Button
         save_btn = discord.ui.Button(
             label="💾 Speichern",
             style=discord.ButtonStyle.primary,
@@ -1655,7 +1465,6 @@ class SetupWelcomerView(discord.ui.View):
             else:
                 supabase.table("settings").insert(data).execute()
             settings_cache.invalidate(str(self.guild_id))
-
             embed = self._build_embed()
             embed.color = discord.Color.green()
             embed.title = "✅ Welcomer gespeichert!"
@@ -1677,7 +1486,6 @@ TZ = timezone(timedelta(hours=1))  # MEZ
 
 
 async def has_event_rights(interaction: discord.Interaction) -> bool:
-    """Prüft ob User Event-Rechte hat (MBL, Admin, oder konfigurierte Rolle)."""
     if str(interaction.user.id) == str(os.getenv("MBL")):
         return True
     if interaction.user.guild_permissions.administrator:
@@ -1694,8 +1502,18 @@ async def has_event_rights(interaction: discord.Interaction) -> bool:
 
 
 def parse_event_time(time_str: str):
-    """Parst DD.MM.YYYY HH:MM oder HH:MM (= heute) in timezone-aware datetime."""
+    """
+    Parst DD.MM.YYYY HH:MM oder HH:MM (= heute) in timezone-aware datetime.
+    Gibt None zurück bei ungültigem Format.
+    Gibt das String-Sentinel 'tba' zurück wenn Eingabe '-1' ist (Datum noch unbekannt).
+    Gibt das String-Sentinel 'open_end' zurück wenn Eingabe '-1' für Endzeit ist (Ende unbekannt).
+    """
     time_str = time_str.strip()
+
+    # Sentinel für unbekanntes Datum
+    if time_str == "-1":
+        return "-1"
+
     tz = TZ
     for fmt in ["%d.%m.%Y %H:%M", "%d.%m. %H:%M"]:
         try:
@@ -1719,26 +1537,39 @@ def parse_event_time(time_str: str):
 def build_event_embed(event: dict) -> discord.Embed:
     """Erstellt das Embed für ein Event je nach Status."""
     status   = event.get("status", "upcoming")
-    start_dt = datetime.fromisoformat(event["start_time"]).replace(tzinfo=TZ) if event.get("start_time") else None
-    end_dt   = datetime.fromisoformat(event["end_time"]).replace(tzinfo=TZ)   if event.get("end_time")   else None
-    now      = datetime.now(TZ)
+    start_dt = None
+    end_dt   = None
 
+    if event.get("start_time"):
+        start_dt = datetime.fromisoformat(event["start_time"]).replace(tzinfo=TZ)
+    if event.get("end_time"):
+        end_dt = datetime.fromisoformat(event["end_time"]).replace(tzinfo=TZ)
+
+    now = datetime.now(TZ)
+
+    # ── Farben ────────────────────────────────────────────────────────────────
     color_map = {
-        "upcoming":  0x3498DB,
-        "live":      0x2ECC71,
-        "delayed":   0xE67E22,
-        "cancelled": 0xED4245,
-        "ended":     0x95A5A6,
+        "upcoming":  0x3498DB,   # Blau  – geplant
+        "tba":       0x9B59B6,   # Lila  – Datum unbekannt
+        "live":      0x2ECC71,   # Grün  – läuft
+        "open_end":  0x1ABC9C,   # Türkis – läuft, Ende unbekannt
+        "delayed":   0xE67E22,   # Orange – verschoben
+        "cancelled": 0xED4245,   # Rot   – abgesagt
+        "ended":     0x95A5A6,   # Grau  – beendet
     }
-    color = color_map.get(status, 0x3498DB)
 
+    # ── Status-Labels ─────────────────────────────────────────────────────────
     status_labels = {
         "upcoming":  "📅 Geplant",
+        "tba":       "❓ Datum noch unbekannt",
         "live":      "🟢 Läuft gerade",
+        "open_end":  "🟢 Läuft gerade (Ende unbekannt)",
         "delayed":   "⏸️ Verschoben (unbestimmt)",
         "cancelled": "❌ Abgesagt",
         "ended":     "✅ Beendet",
     }
+
+    color = color_map.get(status, 0x3498DB)
 
     embed = discord.Embed(
         title=f"🎉 {event['title']}",
@@ -1749,27 +1580,51 @@ def build_event_embed(event: dict) -> discord.Embed:
     embed.add_field(name="👥 Follower", value=str(len(event.get("followers") or [])), inline=True)
     embed.add_field(name="\u200b",      value="\u200b", inline=True)
 
-    if start_dt:
-        embed.add_field(name="🕐 Start", value=f"<t:{int(start_dt.timestamp())}:F>", inline=True)
-    if end_dt:
-        embed.add_field(name="🏁 Ende",  value=f"<t:{int(end_dt.timestamp())}:F>",   inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    # ── Zeitfelder ────────────────────────────────────────────────────────────
+    if status == "tba":
+        embed.add_field(name="🕐 Start", value="❓ Wird noch bekannt gegeben", inline=True)
+        embed.add_field(name="🏁 Ende",  value="❓ Wird noch bekannt gegeben", inline=True)
+        embed.add_field(name="\u200b",   value="\u200b", inline=True)
+        embed.add_field(
+            name="ℹ️ Hinweis",
+            value="Datum und Uhrzeit werden noch bekannt gegeben. Folge dem Event um benachrichtigt zu werden!",
+            inline=False
+        )
+    else:
+        if start_dt:
+            embed.add_field(name="🕐 Start", value=f"<t:{int(start_dt.timestamp())}:F>", inline=True)
+        else:
+            embed.add_field(name="🕐 Start", value="❓ Unbekannt", inline=True)
 
-    if status == "upcoming" and start_dt and start_dt > now:
-        embed.add_field(name="⏳ Startet in", value=f"<t:{int(start_dt.timestamp())}:R>", inline=False)
-    elif status == "live" and end_dt and end_dt > now:
-        embed.add_field(name="⏱️ Endet in",  value=f"<t:{int(end_dt.timestamp())}:R>",   inline=False)
-    elif status == "delayed":
-        embed.add_field(name="ℹ️ Hinweis", value="Das Event wurde auf unbestimmte Zeit verschoben.", inline=False)
-    elif status == "cancelled":
-        embed.add_field(name="ℹ️ Hinweis", value="Dieses Event wurde abgesagt.", inline=False)
+        if end_dt:
+            embed.add_field(name="🏁 Ende", value=f"<t:{int(end_dt.timestamp())}:F>", inline=True)
+        elif status in ("live", "open_end"):
+            embed.add_field(name="🏁 Ende", value="⏳ Ende nicht festgelegt", inline=True)
+        else:
+            embed.add_field(name="🏁 Ende", value="❓ Unbekannt", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+        # Dynamische Zeitfelder je nach Status
+        if status == "upcoming" and start_dt and start_dt > now:
+            embed.add_field(name="⏳ Startet in", value=f"<t:{int(start_dt.timestamp())}:R>", inline=False)
+        elif status == "live" and end_dt and end_dt > now:
+            embed.add_field(name="⏱️ Endet in", value=f"<t:{int(end_dt.timestamp())}:R>", inline=False)
+        elif status == "open_end":
+            embed.add_field(
+                name="ℹ️ Hinweis",
+                value="Das Event läuft bis es manuell beendet wird.",
+                inline=False
+            )
+        elif status == "delayed":
+            embed.add_field(name="ℹ️ Hinweis", value="Das Event wurde auf unbestimmte Zeit verschoben.", inline=False)
+        elif status == "cancelled":
+            embed.add_field(name="ℹ️ Hinweis", value="Dieses Event wurde abgesagt.", inline=False)
 
     embed.set_footer(text=f"Event-ID: {event.get('id', '?')}")
     return embed
 
 
 async def _update_event_message(event: dict):
-    """Aktualisiert die originale Event-Nachricht mit neuem Embed."""
     try:
         channel = bot.get_channel(int(event["channel_id"]))
         if not channel:
@@ -1781,7 +1636,6 @@ async def _update_event_message(event: dict):
 
 
 async def _notify_thread(event: dict, text: str, ping: bool = False):
-    """Sendet eine Nachricht in den Event-Thread, optional mit Follower-Pings."""
     try:
         thread = bot.get_channel(int(event["thread_id"]))
         if not thread:
@@ -1795,7 +1649,6 @@ async def _notify_thread(event: dict, text: str, ping: bool = False):
 
 
 async def _archive_event(event: dict):
-    """Archiviert Event-Thread und löscht DB-Eintrag."""
     try:
         thread = bot.get_channel(int(event["thread_id"]))
         if thread and isinstance(thread, discord.Thread):
@@ -1815,7 +1668,7 @@ class EventFollowView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Event folgen",      style=discord.ButtonStyle.success,   custom_id="event_follow",   emoji="🔔")
+    @discord.ui.button(label="Event folgen",       style=discord.ButtonStyle.success,   custom_id="event_follow",   emoji="🔔")
     async def follow_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle(interaction, follow=True)
 
@@ -1833,7 +1686,6 @@ class EventFollowView(discord.ui.View):
                 return
             event     = result.data[0]
             followers = list(event.get("followers") or [])
-
             if follow:
                 if user_id not in followers:
                     followers.append(user_id)
@@ -1842,7 +1694,6 @@ class EventFollowView(discord.ui.View):
                 was_in = user_id in followers
                 followers = [f for f in followers if f != user_id]
                 msg = "🔕 Du folgst dem Event nicht mehr." if was_in else "ℹ️ Du hast nicht gefolgt."
-
             supabase.table("events").update({"followers": followers}).eq("id", event["id"]).execute()
             updated = {**event, "followers": followers}
             await interaction.message.edit(embed=build_event_embed(updated), view=self)
@@ -1854,11 +1705,27 @@ class EventFollowView(discord.ui.View):
 # ── Modals ────────────────────────────────────────────────────────────────────
 
 class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
-    e_title = discord.ui.TextInput(label="Event-Name", placeholder="z.B. Community Turnier", required=True, max_length=100)
-    e_desc  = discord.ui.TextInput(label="Beschreibung", placeholder="Worum geht es?", required=False,
-                                   style=discord.TextStyle.paragraph, max_length=800)
-    e_start = discord.ui.TextInput(label="Startzeit", placeholder="z.B. 25.12.2025 20:00", required=True, max_length=30)
-    e_end   = discord.ui.TextInput(label="Endzeit",   placeholder="z.B. 25.12.2025 23:00", required=True, max_length=30)
+    e_title = discord.ui.TextInput(
+        label="Event-Name",
+        placeholder="z.B. Community Turnier",
+        required=True, max_length=100
+    )
+    e_desc = discord.ui.TextInput(
+        label="Beschreibung",
+        placeholder="Worum geht es?",
+        required=False,
+        style=discord.TextStyle.paragraph, max_length=800
+    )
+    e_start = discord.ui.TextInput(
+        label="Startzeit  (-1 = noch unbekannt)",
+        placeholder="z.B. 25.12.2025 20:00  |  -1 = TBA",
+        required=True, max_length=30
+    )
+    e_end = discord.ui.TextInput(
+        label="Endzeit  (-1 = kein festes Ende)",
+        placeholder="z.B. 25.12.2025 23:00  |  -1 = offen",
+        required=True, max_length=30
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -1872,20 +1739,60 @@ class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
                 await interaction.followup.send("❌ Event-Kanal nicht gefunden!", ephemeral=True)
                 return
 
-            start_dt = parse_event_time(self.e_start.value)
-            end_dt   = parse_event_time(self.e_end.value)
-            if not start_dt or not end_dt:
-                await interaction.followup.send("❌ Ungültiges Zeitformat! Nutze: DD.MM.YYYY HH:MM", ephemeral=True)
-                return
-            if end_dt <= start_dt:
-                await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
-                return
+            # ── Start parsen ──────────────────────────────────────────────────
+            raw_start = self.e_start.value.strip()
+            raw_end   = self.e_end.value.strip()
+
+            start_tba = raw_start == "-1"
+            end_open  = raw_end   == "-1"
+
+            start_dt = None
+            end_dt   = None
+
+            if not start_tba:
+                start_dt = parse_event_time(raw_start)
+                if start_dt is None or start_dt == "-1":
+                    await interaction.followup.send(
+                        "❌ Ungültiges Startzeit-Format! Nutze: DD.MM.YYYY HH:MM  oder  -1 für TBA",
+                        ephemeral=True
+                    )
+                    return
+
+            if not end_open:
+                end_dt = parse_event_time(raw_end)
+                if end_dt is None or end_dt == "-1":
+                    await interaction.followup.send(
+                        "❌ Ungültiges Endzeit-Format! Nutze: DD.MM.YYYY HH:MM  oder  -1 für offenes Ende",
+                        ephemeral=True
+                    )
+                    return
+                if start_dt and end_dt <= start_dt:
+                    await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
+                    return
+
+            # ── Initalen Status bestimmen ─────────────────────────────────────
+            # TBA  → Datum noch unbekannt (auch Endzeit egal, da kein Start)
+            # open_end → hat Startzeit, aber Ende unbekannt
+            # upcoming → hat Start + Ende
+            if start_tba:
+                initial_status = "tba"
+            elif end_open:
+                initial_status = "upcoming"   # Wird zu open_end sobald gestartet
+            else:
+                initial_status = "upcoming"
 
             tmp_event = {
-                "id": "?", "title": self.e_title.value, "description": self.e_desc.value or "",
-                "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
-                "status": "upcoming", "followers": []
+                "id":          "?",
+                "title":       self.e_title.value,
+                "description": self.e_desc.value or "",
+                "start_time":  start_dt.isoformat() if start_dt else None,
+                "end_time":    end_dt.isoformat()   if end_dt   else None,
+                "status":      initial_status,
+                "followers":   [],
+                # Merker ob Ende offen ist (für check_events)
+                "end_open":    end_open,
             }
+
             message = await channel.send(embed=build_event_embed(tmp_event), view=EventFollowView())
             thread  = await message.create_thread(name=f"💬 {self.e_title.value}", auto_archive_duration=10080)
             await thread.send(
@@ -1894,17 +1801,18 @@ class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
             )
 
             data = {
-                "guild_id":    str(interaction.guild_id),
-                "message_id":  str(message.id),
-                "thread_id":   str(thread.id),
-                "channel_id":  str(channel.id),
-                "title":       self.e_title.value,
-                "description": self.e_desc.value or "",
-                "start_time":  start_dt.isoformat(),
-                "end_time":    end_dt.isoformat(),
-                "status":      "upcoming",
-                "followers":   [],
-                "creator_id":  str(interaction.user.id),
+                "guild_id":       str(interaction.guild_id),
+                "message_id":     str(message.id),
+                "thread_id":      str(thread.id),
+                "channel_id":     str(channel.id),
+                "title":          self.e_title.value,
+                "description":    self.e_desc.value or "",
+                "start_time":     start_dt.isoformat() if start_dt else None,
+                "end_time":       end_dt.isoformat()   if end_dt   else None,
+                "end_open":       end_open,   # True = Ende unbekannt
+                "status":         initial_status,
+                "followers":      [],
+                "creator_id":     str(interaction.user.id),
                 "reminded_1h":    False,
                 "reminded_start": False,
                 "archived":       False,
@@ -1914,14 +1822,24 @@ class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
                 event_id = result.data[0]["id"]
                 await message.edit(embed=build_event_embed({**tmp_event, "id": event_id}))
 
-            await interaction.followup.send(f"✅ Event **{self.e_title.value}** erstellt! {message.jump_url}", ephemeral=True)
+            await interaction.followup.send(
+                f"✅ Event **{self.e_title.value}** erstellt! {message.jump_url}", ephemeral=True
+            )
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
 class EventRescheduleModal(discord.ui.Modal, title="Event verschieben"):
-    new_start = discord.ui.TextInput(label="Neue Startzeit", placeholder="DD.MM.YYYY HH:MM", required=True, max_length=30)
-    new_end   = discord.ui.TextInput(label="Neue Endzeit",   placeholder="DD.MM.YYYY HH:MM", required=True, max_length=30)
+    new_start = discord.ui.TextInput(
+        label="Neue Startzeit  (-1 = TBA)",
+        placeholder="DD.MM.YYYY HH:MM  |  -1 = Datum noch unbekannt",
+        required=True, max_length=30
+    )
+    new_end = discord.ui.TextInput(
+        label="Neue Endzeit  (-1 = kein festes Ende)",
+        placeholder="DD.MM.YYYY HH:MM  |  -1 = offenes Ende",
+        required=True, max_length=30
+    )
 
     def __init__(self, event: dict):
         super().__init__()
@@ -1930,34 +1848,76 @@ class EventRescheduleModal(discord.ui.Modal, title="Event verschieben"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            start_dt = parse_event_time(self.new_start.value)
-            end_dt   = parse_event_time(self.new_end.value)
-            if not start_dt or not end_dt:
-                await interaction.followup.send("❌ Ungültiges Format!", ephemeral=True)
-                return
-            if end_dt <= start_dt:
-                await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
-                return
-            updated = {**self.event, "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
-                       "status": "upcoming", "reminded_1h": False, "reminded_start": False}
+            raw_start = self.new_start.value.strip()
+            raw_end   = self.new_end.value.strip()
+
+            start_tba = raw_start == "-1"
+            end_open  = raw_end   == "-1"
+
+            start_dt = None
+            end_dt   = None
+
+            if not start_tba:
+                start_dt = parse_event_time(raw_start)
+                if start_dt is None or start_dt == "-1":
+                    await interaction.followup.send("❌ Ungültiges Startzeit-Format!", ephemeral=True)
+                    return
+
+            if not end_open:
+                end_dt = parse_event_time(raw_end)
+                if end_dt is None or end_dt == "-1":
+                    await interaction.followup.send("❌ Ungültiges Endzeit-Format!", ephemeral=True)
+                    return
+                if start_dt and end_dt <= start_dt:
+                    await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
+                    return
+
+            new_status = "tba" if start_tba else "upcoming"
+            updated = {
+                **self.event,
+                "start_time":     start_dt.isoformat() if start_dt else None,
+                "end_time":       end_dt.isoformat()   if end_dt   else None,
+                "end_open":       end_open,
+                "status":         new_status,
+                "reminded_1h":    False,
+                "reminded_start": False,
+            }
             supabase.table("events").update({
-                "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
-                "status": "upcoming", "reminded_1h": False, "reminded_start": False
+                "start_time":     start_dt.isoformat() if start_dt else None,
+                "end_time":       end_dt.isoformat()   if end_dt   else None,
+                "end_open":       end_open,
+                "status":         new_status,
+                "reminded_1h":    False,
+                "reminded_start": False,
             }).eq("id", self.event["id"]).execute()
+
             await _update_event_message(updated)
-            await _notify_thread(self.event,
-                f"📅 **Zeitänderung!**\n"
-                f"▶️ Start: <t:{int(start_dt.timestamp())}:F>\n"
-                f"🏁 Ende: <t:{int(end_dt.timestamp())}:F>",
-                ping=True)
+
+            if start_tba:
+                notif = "📅 **Zeitänderung!**\nStartzeit ist noch unbekannt – wird bekannt gegeben."
+            else:
+                notif = (
+                    f"📅 **Zeitänderung!**\n"
+                    f"▶️ Start: <t:{int(start_dt.timestamp())}:F>\n"
+                    f"🏁 Ende: {'Ende offen' if end_open else f'<t:{int(end_dt.timestamp())}:F>'}"
+                )
+            await _notify_thread(self.event, notif, ping=True)
             await interaction.followup.send("✅ Event neu terminiert!", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
 class EventResumeModal(discord.ui.Modal, title="Event fortsetzen"):
-    new_start = discord.ui.TextInput(label="Neue Startzeit", placeholder="DD.MM.YYYY HH:MM", required=True, max_length=30)
-    new_end   = discord.ui.TextInput(label="Neue Endzeit",   placeholder="DD.MM.YYYY HH:MM", required=True, max_length=30)
+    new_start = discord.ui.TextInput(
+        label="Neue Startzeit  (-1 = TBA)",
+        placeholder="DD.MM.YYYY HH:MM  |  -1 = Datum noch unbekannt",
+        required=True, max_length=30
+    )
+    new_end = discord.ui.TextInput(
+        label="Neue Endzeit  (-1 = kein festes Ende)",
+        placeholder="DD.MM.YYYY HH:MM  |  -1 = offenes Ende",
+        required=True, max_length=30
+    )
 
     def __init__(self, event: dict):
         super().__init__()
@@ -1966,23 +1926,60 @@ class EventResumeModal(discord.ui.Modal, title="Event fortsetzen"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            start_dt = parse_event_time(self.new_start.value)
-            end_dt   = parse_event_time(self.new_end.value)
-            if not start_dt or not end_dt:
-                await interaction.followup.send("❌ Ungültiges Format!", ephemeral=True)
-                return
-            updated = {**self.event, "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
-                       "status": "upcoming", "reminded_1h": False, "reminded_start": False}
+            raw_start = self.new_start.value.strip()
+            raw_end   = self.new_end.value.strip()
+
+            start_tba = raw_start == "-1"
+            end_open  = raw_end   == "-1"
+
+            start_dt = None
+            end_dt   = None
+
+            if not start_tba:
+                start_dt = parse_event_time(raw_start)
+                if start_dt is None or start_dt == "-1":
+                    await interaction.followup.send("❌ Ungültiges Startzeit-Format!", ephemeral=True)
+                    return
+
+            if not end_open:
+                end_dt = parse_event_time(raw_end)
+                if end_dt is None or end_dt == "-1":
+                    await interaction.followup.send("❌ Ungültiges Endzeit-Format!", ephemeral=True)
+                    return
+                if start_dt and end_dt <= start_dt:
+                    await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
+                    return
+
+            new_status = "tba" if start_tba else "upcoming"
+            updated = {
+                **self.event,
+                "start_time":     start_dt.isoformat() if start_dt else None,
+                "end_time":       end_dt.isoformat()   if end_dt   else None,
+                "end_open":       end_open,
+                "status":         new_status,
+                "reminded_1h":    False,
+                "reminded_start": False,
+            }
             supabase.table("events").update({
-                "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
-                "status": "upcoming", "reminded_1h": False, "reminded_start": False
+                "start_time":     start_dt.isoformat() if start_dt else None,
+                "end_time":       end_dt.isoformat()   if end_dt   else None,
+                "end_open":       end_open,
+                "status":         new_status,
+                "reminded_1h":    False,
+                "reminded_start": False,
             }).eq("id", self.event["id"]).execute()
+
             await _update_event_message(updated)
-            await _notify_thread(self.event,
-                f"🔄 **Event fortgesetzt!**\n"
-                f"▶️ Start: <t:{int(start_dt.timestamp())}:F>\n"
-                f"🏁 Ende: <t:{int(end_dt.timestamp())}:F>",
-                ping=True)
+
+            if start_tba:
+                notif = "🔄 **Event fortgesetzt!**\nStartzeit wird noch bekannt gegeben."
+            else:
+                notif = (
+                    f"🔄 **Event fortgesetzt!**\n"
+                    f"▶️ Start: <t:{int(start_dt.timestamp())}:F>\n"
+                    f"🏁 Ende: {'Ende offen' if end_open else f'<t:{int(end_dt.timestamp())}:F>'}"
+                )
+            await _notify_thread(self.event, notif, ping=True)
             await interaction.followup.send("✅ Event fortgesetzt!", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
@@ -2042,7 +2039,6 @@ class EventEditSelectView(discord.ui.View):
 
     async def select_callback(self, interaction: discord.Interaction):
         event_id = interaction.data["values"][0]
-        # Immer frische Daten holen
         fresh = supabase.table("events").select("*").eq("id", event_id).execute()
         event = fresh.data[0] if fresh.data else self.events_map[event_id]
 
@@ -2062,14 +2058,96 @@ class EventEditSelectView(discord.ui.View):
             await _notify_thread(event, "⏸️ **Das Event wurde auf unbestimmte Zeit verschoben.**", ping=True)
             await interaction.followup.send("✅ Event als 'delayed' markiert.", ephemeral=True)
         elif action == "resume":
-            if event.get("status") != "delayed":
-                await interaction.response.send_message("❌ Das Event ist nicht 'delayed' – Resume nicht möglich.", ephemeral=True)
+            if event.get("status") not in ("delayed", "tba"):
+                await interaction.response.send_message(
+                    "❌ Das Event ist weder 'delayed' noch 'tba' – Resume nicht möglich.", ephemeral=True
+                )
                 return
             await interaction.response.send_modal(EventResumeModal(event))
         elif action in ("title", "description", "news"):
             await interaction.response.send_modal(EventTextEditModal(event, action))
+        elif action == "end_now":
+            # Manuell beenden (z.B. für open_end Events)
+            await interaction.response.defer(ephemeral=True)
+            supabase.table("events").update({"status": "ended"}).eq("id", event_id).execute()
+            await _update_event_message({**event, "status": "ended"})
+            await _notify_thread(event, "✅ **Das Event wurde manuell beendet. Danke fürs Mitmachen!**", ping=True)
+            await interaction.followup.send("✅ Event manuell beendet.", ephemeral=True)
+        elif action == "set_date":
+            # TBA-Event: Datum nachträglich setzen
+            await interaction.response.send_modal(EventSetDateModal(event))
         else:
             await interaction.response.send_message("❌ Unbekannte Aktion.", ephemeral=True)
+
+
+# ── Neues Modal: Datum für TBA-Event nachträglich setzen ─────────────────────
+
+class EventSetDateModal(discord.ui.Modal, title="Datum festlegen"):
+    new_start = discord.ui.TextInput(
+        label="Startzeit",
+        placeholder="DD.MM.YYYY HH:MM",
+        required=True, max_length=30
+    )
+    new_end = discord.ui.TextInput(
+        label="Endzeit  (-1 = kein festes Ende)",
+        placeholder="DD.MM.YYYY HH:MM  |  -1 = offenes Ende",
+        required=True, max_length=30
+    )
+
+    def __init__(self, event: dict):
+        super().__init__()
+        self.event = event
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            raw_start = self.new_start.value.strip()
+            raw_end   = self.new_end.value.strip()
+            end_open  = raw_end == "-1"
+
+            start_dt = parse_event_time(raw_start)
+            if start_dt is None or start_dt == "-1":
+                await interaction.followup.send("❌ Ungültiges Startzeit-Format!", ephemeral=True)
+                return
+
+            end_dt = None
+            if not end_open:
+                end_dt = parse_event_time(raw_end)
+                if end_dt is None or end_dt == "-1":
+                    await interaction.followup.send("❌ Ungültiges Endzeit-Format!", ephemeral=True)
+                    return
+                if end_dt <= start_dt:
+                    await interaction.followup.send("❌ Endzeit muss nach Startzeit liegen!", ephemeral=True)
+                    return
+
+            updated = {
+                **self.event,
+                "start_time":     start_dt.isoformat(),
+                "end_time":       end_dt.isoformat() if end_dt else None,
+                "end_open":       end_open,
+                "status":         "upcoming",
+                "reminded_1h":    False,
+                "reminded_start": False,
+            }
+            supabase.table("events").update({
+                "start_time":     start_dt.isoformat(),
+                "end_time":       end_dt.isoformat() if end_dt else None,
+                "end_open":       end_open,
+                "status":         "upcoming",
+                "reminded_1h":    False,
+                "reminded_start": False,
+            }).eq("id", self.event["id"]).execute()
+
+            await _update_event_message(updated)
+            notif = (
+                f"📅 **Datum wurde festgelegt!**\n"
+                f"▶️ Start: <t:{int(start_dt.timestamp())}:F>\n"
+                f"🏁 Ende: {'Ende offen' if end_open else f'<t:{int(end_dt.timestamp())}:F>'}"
+            )
+            await _notify_thread(self.event, notif, ping=True)
+            await interaction.followup.send("✅ Datum gesetzt! Status auf 'Geplant' geändert.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
 # ── Setup Event View ──────────────────────────────────────────────────────────
@@ -2142,14 +2220,12 @@ class SetupEventView(discord.ui.View):
             else:
                 supabase.table("settings").insert(data).execute()
             settings_cache.invalidate(str(self.guild_id))
-
             embed = self._build_embed()
             embed.color = discord.Color.green()
             embed.title = "✅ Event-Setup gespeichert!"
             for item in self.children:
                 item.disabled = True
             await interaction.response.edit_message(embed=embed, view=self)
-
         except Exception as e:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
@@ -2206,14 +2282,16 @@ async def event_list(interaction: discord.Interaction):
 @bot.tree.command(name="event_edit", description="Bearbeite ein bestehendes Event")
 @app_commands.describe(aktion="Was soll geändert werden?")
 @app_commands.choices(aktion=[
-    app_commands.Choice(name="⏰ Startzeit ändern",     value="start_time"),
-    app_commands.Choice(name="🏁 Endzeit ändern",       value="end_time"),
-    app_commands.Choice(name="❌ Absagen",              value="cancel"),
-    app_commands.Choice(name="⏸️ Delay (unbestimmt)",  value="delay"),
-    app_commands.Choice(name="▶️ Resume (nach Delay)", value="resume"),
-    app_commands.Choice(name="✏️ Titel ändern",        value="title"),
-    app_commands.Choice(name="📝 Beschreibung ändern", value="description"),
-    app_commands.Choice(name="📢 News senden",          value="news"),
+    app_commands.Choice(name="⏰ Startzeit ändern",          value="start_time"),
+    app_commands.Choice(name="🏁 Endzeit ändern",            value="end_time"),
+    app_commands.Choice(name="❌ Absagen",                   value="cancel"),
+    app_commands.Choice(name="⏸️ Delay (unbestimmt)",       value="delay"),
+    app_commands.Choice(name="▶️ Resume (nach Delay/TBA)",  value="resume"),
+    app_commands.Choice(name="📅 Datum festlegen (TBA)",     value="set_date"),
+    app_commands.Choice(name="🏁 Manuell beenden",           value="end_now"),
+    app_commands.Choice(name="✏️ Titel ändern",             value="title"),
+    app_commands.Choice(name="📝 Beschreibung ändern",       value="description"),
+    app_commands.Choice(name="📢 News senden",               value="news"),
 ])
 async def event_edit(interaction: discord.Interaction, aktion: str):
     if not await has_event_rights(interaction):
@@ -2249,43 +2327,84 @@ async def check_events():
         for ev in result.data:
             try:
                 status   = ev.get("status", "upcoming")
-                start_dt = datetime.fromisoformat(ev["start_time"]).replace(tzinfo=TZ) if ev.get("start_time") else None
-                end_dt   = datetime.fromisoformat(ev["end_time"]).replace(tzinfo=TZ)   if ev.get("end_time")   else None
+                end_open = ev.get("end_open", False)
 
+                start_dt = None
+                end_dt   = None
+                if ev.get("start_time"):
+                    start_dt = datetime.fromisoformat(ev["start_time"]).replace(tzinfo=TZ)
+                if ev.get("end_time"):
+                    end_dt = datetime.fromisoformat(ev["end_time"]).replace(tzinfo=TZ)
+
+                # ── Bereits abgeschlossene / statische Stati ──────────────────
                 if status in ("cancelled", "delayed", "ended"):
+                    # Nach 24h archivieren
                     if end_dt and (now - end_dt).total_seconds() >= 86400:
                         await _archive_event(ev)
+                    elif status == "ended" and not end_dt:
+                        # ended ohne Endzeit → nach 24h ab jetzt nicht archivierbar,
+                        # aber wir merken uns keinen ended_at → einmalig nach 24h ab Jetzt nicht löschen
+                        # Lösung: DB-Feld ended_at setzen wenn vorhanden, sonst skip
+                        pass
                     continue
 
-                updates = {}
+                # ── TBA – Datum noch unbekannt, nichts automatisch tun ────────
+                if status == "tba":
+                    continue
 
-                if start_dt and end_dt:
-                    if status == "upcoming" and now >= start_dt and now < end_dt:
+                # ── open_end – läuft, kein Auto-Ende ─────────────────────────
+                if status == "open_end":
+                    continue
+
+                # ── upcoming → live / open_end ────────────────────────────────
+                if status == "upcoming" and start_dt and now >= start_dt:
+                    updates = {}
+                    if end_open or not end_dt:
+                        # Kein festes Ende → open_end Status
+                        updates["status"] = "open_end"
+                        status = "open_end"
+                        await _notify_thread(
+                            ev,
+                            "🟢 **Das Event hat begonnen!** (Kein festes Ende – wird manuell beendet)",
+                            ping=True
+                        )
+                    else:
+                        # Normaler Start mit Endzeit
                         updates["status"] = "live"
                         status = "live"
                         await _notify_thread(ev, "🟢 **Das Event hat begonnen!**", ping=True)
 
-                    elif status == "live" and now >= end_dt:
-                        updates["status"] = "ended"
-                        status = "ended"
-                        await _notify_thread(ev, "✅ **Das Event ist beendet. Danke fürs Mitmachen!**", ping=True)
+                    if not ev.get("reminded_start"):
+                        updates["reminded_start"] = True
 
-                if start_dt and status == "upcoming":
+                    supabase.table("events").update(updates).eq("id", ev["id"]).execute()
+                    await _update_event_message({**ev, **updates})
+                    continue
+
+                # ── live → ended ──────────────────────────────────────────────
+                if status == "live" and end_dt and now >= end_dt:
+                    updates = {"status": "ended"}
+                    supabase.table("events").update(updates).eq("id", ev["id"]).execute()
+                    await _notify_thread(ev, "✅ **Das Event ist beendet. Danke fürs Mitmachen!**", ping=True)
+                    await _update_event_message({**ev, **updates})
+                    continue
+
+                # ── Erinnerungen für upcoming ─────────────────────────────────
+                if status == "upcoming" and start_dt:
                     diff_min = (start_dt - now).total_seconds() / 60
+                    updates = {}
+
                     if 59 <= diff_min <= 61 and not ev.get("reminded_1h"):
                         updates["reminded_1h"] = True
                         await _notify_thread(ev, "⏰ **Noch 1 Stunde bis zum Event!**", ping=True)
-                    if -1 <= diff_min <= 1 and not ev.get("reminded_start"):
-                        updates["reminded_start"] = True
 
-                if end_dt and status == "ended":
+                    if updates:
+                        supabase.table("events").update(updates).eq("id", ev["id"]).execute()
+
+                # ── Archivierung ended Events ─────────────────────────────────
+                if status == "ended" and end_dt:
                     if (now - end_dt).total_seconds() >= 86400:
                         await _archive_event(ev)
-                        continue
-
-                if updates:
-                    supabase.table("events").update(updates).eq("id", ev["id"]).execute()
-                    await _update_event_message({**ev, **updates})
 
             except Exception as e:
                 print(f"[check_events] Event {ev.get('id')}: {e}")
@@ -2310,17 +2429,13 @@ async def on_app_command_error(interaction: discord.Interaction, error):
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Bot-Nachrichten ignorieren
     if message.author.bot:
         await bot.process_commands(message)
         return
-
-    # Nur in Gilden
     if not message.guild:
         await bot.process_commands(message)
         return
 
-    # ── Anhänge klassifizieren ────────────────────────────────────────────────
     image_attachments = []
     video_attachments = []
     for a in message.attachments:
@@ -2330,7 +2445,6 @@ async def on_message(message: discord.Message):
         if is_image:   image_attachments.append(a)
         elif is_video: video_attachments.append(a)
 
-    # ── Links im Nachrichtentext suchen ───────────────────────────────────────
     youtube_urls = YOUTUBE_PATTERN.findall(message.content) if message.content else []
     twitch_urls  = TWITCH_CLIP_PATTERN.findall(message.content) if message.content else []
 
@@ -2340,7 +2454,6 @@ async def on_message(message: discord.Message):
         return
 
     try:
-        # ── Settings aus Cache (eine einzige DB-Abfrage alle 15 Min) ─────────
         config = await get_settings(str(message.guild.id))
         if not config:
             await bot.process_commands(message)
@@ -2356,13 +2469,11 @@ async def on_message(message: discord.Message):
             await bot.process_commands(message)
             return
 
-        # ── Feature-Flags aus Config ──────────────────────────────────────────
         fw_images  = config.get("forward_images",  True)
         fw_videos  = config.get("forward_videos",  True)
         fw_youtube = config.get("forward_youtube", True)
         fw_twitch  = config.get("forward_twitch",  True)
 
-        # Früh abbrechen wenn nichts aktiv ist
         active = (
             (fw_images  and image_attachments) or
             (fw_videos  and video_attachments) or
@@ -2373,26 +2484,21 @@ async def on_message(message: discord.Message):
             await bot.process_commands(message)
             return
 
-        # ── Deduplizierung ────────────────────────────────────────────────────
         await asyncio.sleep(INSTANCE_DELAY)
         if await check_already_posted(image_channel, message.id):
             print(f"[Dedup] Nachricht {message.id} bereits weitergeleitet – skip.")
             await bot.process_commands(message)
             return
 
-        # ── Weiterleiten ──────────────────────────────────────────────────────
         if fw_images:
             for attachment in image_attachments:
                 await forward_image(image_channel, attachment, message)
-
         if fw_videos:
             for attachment in video_attachments:
                 await forward_video(image_channel, attachment, message)
-
         if fw_youtube:
             for url in youtube_urls:
                 await forward_youtube(image_channel, url, message)
-
         if fw_twitch:
             for url in twitch_urls:
                 await forward_twitch_clip(image_channel, url, message)
