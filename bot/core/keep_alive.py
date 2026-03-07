@@ -15,15 +15,6 @@ Benötigte .env Variablen:
     # Optional – eigene Zertifikatsdateien (sonst wird beim Start auto-generiert):
     SSL_CERT                 = certs/localhost.pem
     SSL_KEY                  = certs/localhost-key.pem
-
-SSL-Zertifikat:
-    Beim ersten Start ohne SSL_CERT/SSL_KEY wird automatisch ein selbst-
-    signiertes Zertifikat im Ordner "certs/" erstellt (Python-stdlib, kein Tool).
-    Browser zeigen einmalig eine Warnung → "Trotzdem fortfahren" klicken.
-    Wenn du kein Browser-Warning willst → mkcert verwenden und Pfade in .env setzen.
-
-Discord Developer Portal:
-    OAuth2 → Redirects → https://localhost:5000/auth/callback
 """
 
 from __future__ import annotations
@@ -50,8 +41,7 @@ log = logging.getLogger("web")
 DISCORD_API = "https://discord.com/api/v10"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lazy config helpers  (lesen .env erst beim ersten Request-Handling,
-# also garantiert NACH load_dotenv() in server.py)
+# Lazy config helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _cfg(key: str, default: str = "") -> str:
@@ -71,7 +61,7 @@ def _redirect_uri() -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SESSION  (signiertes Cookie, kein Server-Side-Storage nötig)
+# SESSION
 # ═════════════════════════════════════════════════════════════════════════════
 
 _SESSION_COOKIE = "insel_session"
@@ -84,7 +74,6 @@ def _sign(payload: str) -> str:
 
 
 def _verify(cookie: str) -> str | None:
-    """Gibt den payload zurück wenn die Signatur stimmt, sonst None."""
     try:
         payload, sig = cookie.rsplit(".", 1)
         expected = hmac.new(_secret_key(), payload.encode(), hashlib.sha256).hexdigest()
@@ -120,7 +109,7 @@ def _set_session(response: web.Response, data: dict) -> None:
         max_age=_SESSION_TTL,
         httponly=True,
         samesite="Lax",
-        secure=True,   # nur über HTTPS übertragen
+        secure=True,
     )
 
 
@@ -129,7 +118,7 @@ def _clear_session(response: web.Response) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# DISCORD API CALLS  (async, nutzt denselben aiohttp-ClientSession wie d.py)
+# DISCORD API CALLS
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def _exchange_code(code: str) -> dict | None:
@@ -169,7 +158,107 @@ def _is_authorized(member: dict | None) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TEMPLATES  (HTML-Strings, kein Template-Engine nötig)
+# DISCORD BOT API  – Server/Guild Infos über Bot-Token
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def _bot_get(path: str) -> dict | list | None:
+    """Fetch from Discord API using the bot token."""
+    token = _cfg("DISCORD_TOKEN")
+    if not token:
+        return None
+    async with aiohttp.ClientSession() as s:
+        resp = await s.get(
+            f"{DISCORD_API}{path}",
+            headers={"Authorization": f"Bot {token}"},
+        )
+        if resp.ok:
+            return await resp.json()
+        return None
+
+
+async def _get_guild_info(guild_id: str) -> dict | None:
+    """Get guild name and icon from Discord API."""
+    return await _bot_get(f"/guilds/{guild_id}")
+
+
+async def _get_guild_members(guild_id: str, query: str = "", limit: int = 10) -> list:
+    """Search guild members by name. Returns list of member dicts."""
+    if query:
+        data = await _bot_get(f"/guilds/{guild_id}/members/search?query={query}&limit={limit}")
+    else:
+        data = await _bot_get(f"/guilds/{guild_id}/members?limit={limit}")
+    return data if isinstance(data, list) else []
+
+
+async def _get_member(guild_id: str, user_id: str) -> dict | None:
+    """Get a specific member by user_id."""
+    return await _bot_get(f"/guilds/{guild_id}/members/{user_id}")
+
+
+def _guild_icon_url(guild: dict) -> str | None:
+    """Build Discord guild icon URL."""
+    if not guild:
+        return None
+    icon = guild.get("icon")
+    gid  = guild.get("id")
+    if icon and gid:
+        ext = "gif" if icon.startswith("a_") else "png"
+        return f"https://cdn.discordapp.com/icons/{gid}/{icon}.{ext}?size=64"
+    return None
+
+
+def _member_display_name(member: dict) -> str:
+    """Get display name from a Discord member object."""
+    if not member:
+        return "Unbekannt"
+    nick = member.get("nick")
+    if nick:
+        return nick
+    user = member.get("user", {})
+    return user.get("global_name") or user.get("username") or "Unbekannt"
+
+
+def _member_avatar_url(member: dict) -> str | None:
+    """Get avatar URL from a Discord member object."""
+    if not member:
+        return None
+    user = member.get("user", {})
+    uid  = user.get("id")
+    # Server avatar first
+    guild_avatar = member.get("avatar")
+    if guild_avatar and uid:
+        return f"https://cdn.discordapp.com/guilds/{uid}/users/{uid}/avatars/{guild_avatar}.png?size=32"
+    # User avatar
+    avatar = user.get("avatar")
+    if avatar and uid:
+        return f"https://cdn.discordapp.com/avatars/{uid}/{avatar}.png?size=32"
+    # Default
+    disc = int(user.get("discriminator") or 0) % 5
+    return f"https://cdn.discordapp.com/embed/avatars/{disc}.png"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GUILD INFO CACHE  (5 Minuten)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_guild_cache: dict[str, dict] = {}
+_guild_cache_ts: dict[str, float] = {}
+_GUILD_CACHE_TTL = 300
+
+
+async def _cached_guild_info(guild_id: str) -> dict | None:
+    now = time.time()
+    if guild_id in _guild_cache and (now - _guild_cache_ts.get(guild_id, 0)) < _GUILD_CACHE_TTL:
+        return _guild_cache[guild_id]
+    info = await _get_guild_info(guild_id)
+    if info:
+        _guild_cache[guild_id] = info
+        _guild_cache_ts[guild_id] = now
+    return info
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TEMPLATES
 # ═════════════════════════════════════════════════════════════════════════════
 
 _DISCORD_SVG = (
@@ -262,14 +351,12 @@ def _render_login(error: str = "", *, next_url: str = "") -> web.Response:
         <div style="background:rgba(56,189,248,.07);border:1px solid rgba(56,189,248,.18);
           color:#94a3b8;border-radius:10px;padding:10px 16px;font-size:.82rem;margin-top:18px">
           Nur autorisierte Servermitglieder haben Zugriff.</div>
-        <!-- state + next_url als versteckte Meta-Tags für den Callback -->
         <meta name="oauth-state" content="{state_input}">
         <meta name="next-url" content="{next_url}">
       </div>
     </div>"""
 
     resp = _page("Insel Bot – Login", body)
-    # State im Cookie speichern (für CSRF-Prüfung beim Callback)
     if state_input:
         resp.set_cookie("oauth_state", state_input, httponly=True, secure=True, samesite="Lax", max_age=300)
     if next_url:
@@ -317,44 +404,20 @@ def _render_home(user: dict | None) -> web.Response:
             margin-right:8px;display:inline-block"></span>System Aktiv</div>
         <br>
         {topbar}
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px">
-          {"".join(f'''<div style="background:#1e293b;border:1px solid #334155;padding:24px;
-            border-radius:16px;text-align:left">
-            <i class="fas fa-{icon}" style="font-size:1.5rem;color:#38bdf8;margin-bottom:12px;display:block"></i>
-            <h3 style="margin:0 0 8px;color:#fff">{name}</h3>
-            <p style="margin:0;font-size:.9rem;color:#94a3b8">{desc}</p></div>'''
-            for icon, name, desc in [
-              ("gamepad","Spieleabende","Erstelle und verwalte Spieleabende mit RSVP-System"),
-              ("photo-video","Medien","Automatische Weiterleitung von Bildern, Videos und Links"),
-              ("calendar-star","Events","Event-System mit Follow, Erinnerungen und Live-Status"),
-              ("door-open","Welcomer","Willkommens- und Abschiedsnachrichten"),
-              ("tags","Rollenvergabe","Selbst-Rollenvergabe per Button"),
-              ("ticket-alt","Ticket-System","Modulares Support-Ticket-System"),
-            ])}
-        </div>
       </div>
-    </div>
-    <footer style="margin-top:60px;padding:30px 0;border-top:1px solid #334155;
-      text-align:center;font-size:.9rem;color:#94a3b8">
-      &copy; 2026 Insel Bot &bull; Made with ❤ for Die Insel Community</footer>"""
+    </div>"""
 
     return _page("Insel Bot – Übersicht", body)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# JINJA-like Template-Rendering für ticket_list.html / ticket_view.html
-# (Die bestehenden HTML-Template-Dateien bleiben unverändert nutzbar)
+# JINJA Template Rendering
 # ═════════════════════════════════════════════════════════════════════════════
 
 _TEMPLATE_DIR = Path(__file__).parent / "web"
 
 
 def _render_template(name: str, **ctx) -> web.Response:
-    """
-    Minimaler Template-Renderer für die vorhandenen Jinja2-Templates.
-    Nutzt Jinja2 falls installiert (discord.py zieht es manchmal mit),
-    fällt sonst auf string.replace zurück.
-    """
     path = _TEMPLATE_DIR / name
     try:
         from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -365,7 +428,6 @@ def _render_template(name: str, **ctx) -> web.Response:
         tmpl = env.get_template(name)
         html = tmpl.render(**ctx)
     except ImportError:
-        # Jinja2 nicht verfügbar → rohe HTML-Datei zurückgeben
         html = path.read_text(encoding="utf-8")
     return web.Response(text=html, content_type="text/html")
 
@@ -388,13 +450,11 @@ async def handle_login(request: web.Request) -> web.Response:
 
 
 async def handle_callback(request: web.Request) -> web.Response:
-    # CSRF state check
     returned_state = request.rel_url.query.get("state", "")
     expected_state = request.cookies.get("oauth_state", "")
     if not returned_state or returned_state != expected_state:
         return _render_login("❌ Ungültiger State. Bitte erneut anmelden.")
 
-    # Discord-Fehler abfangen
     if "error" in request.rel_url.query:
         desc = request.rel_url.query.get("error_description", "Zugriff verweigert.")
         return _render_login(f"❌ {desc}")
@@ -403,19 +463,16 @@ async def handle_callback(request: web.Request) -> web.Response:
     if not code:
         return _render_login("❌ Kein Autorisierungscode erhalten.")
 
-    # Code → Token
     token_data = await _exchange_code(code)
     if not token_data or "access_token" not in token_data:
         return _render_login("❌ Token-Austausch fehlgeschlagen.")
 
     access_token = token_data["access_token"]
 
-    # User laden
     discord_user = await _discord_get("/users/@me", access_token)
     if not discord_user or "id" not in discord_user:
         return _render_login("❌ Discord-Profil konnte nicht geladen werden.")
 
-    # Guild-Check
     member   = None
     guild_id = _guild_id()
     if guild_id:
@@ -423,7 +480,6 @@ async def handle_callback(request: web.Request) -> web.Response:
         if not _is_authorized(member):
             return _render_login("❌ Du bist kein autorisiertes Mitglied dieses Servers.")
 
-    # Avatar
     avatar_hash = discord_user.get("avatar")
     avatar_url  = (
         f"https://cdn.discordapp.com/avatars/{discord_user['id']}/{avatar_hash}.png?size=64"
@@ -453,6 +509,47 @@ async def handle_logout(request: web.Request) -> web.Response:
     return resp
 
 
+# ── API: Member Search ────────────────────────────────────────────────────────
+
+async def handle_api_members(request: web.Request) -> web.Response:
+    """API endpoint: search guild members by name query for autocomplete."""
+    sess = _get_session(request)
+    if "user" not in sess:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+
+    query     = request.rel_url.query.get("q", "").strip()
+    server_id = request.rel_url.query.get("server_id", "").strip()
+
+    if not server_id or not query or len(query) < 2:
+        return web.json_response([])
+
+    try:
+        members = await _get_guild_members(server_id, query=query, limit=15)
+        results = []
+        for m in members:
+            user = m.get("user", {})
+            uid  = user.get("id", "")
+            display = m.get("nick") or user.get("global_name") or user.get("username") or uid
+            username = user.get("username") or ""
+            # Avatar
+            avatar = user.get("avatar")
+            if avatar and uid:
+                avatar_url = f"https://cdn.discordapp.com/avatars/{uid}/{avatar}.png?size=32"
+            else:
+                disc = int(user.get("discriminator") or 0) % 5
+                avatar_url = f"https://cdn.discordapp.com/embed/avatars/{disc}.png"
+            results.append({
+                "id":       uid,
+                "display":  display,
+                "username": username,
+                "avatar":   avatar_url,
+            })
+        return web.json_response(results)
+    except Exception as e:
+        log.error(f"[api_members] {e}")
+        return web.json_response([])
+
+
 # ── Ticket Dashboard ──────────────────────────────────────────────────────────
 
 async def handle_ticket_list(request: web.Request) -> web.Response:
@@ -464,7 +561,17 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
     from bot.core.supabase_client import get_supabase
     user      = sess["user"]
     supabase  = get_supabase()
-    servers   = supabase.table("ticket_servers").select("*").execute().data or []
+    raw_servers = supabase.table("ticket_servers").select("*").execute().data or []
+
+    # Enrich servers with guild info (name + icon)
+    servers = []
+    for srv in raw_servers:
+        sid   = srv.get("server_id", "")
+        guild = await _cached_guild_info(sid)
+        srv["guild_name"] = guild.get("name", sid) if guild else sid
+        srv["guild_icon"] = _guild_icon_url(guild) if guild else None
+        servers.append(srv)
+
     server_id = request.rel_url.query.get("server_id")
     tickets   = []
     selected  = None
@@ -477,15 +584,46 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
                 q = q.eq("status", request.rel_url.query["status"])
             if request.rel_url.query.get("module"):
                 q = q.eq("module", request.rel_url.query["module"])
+            # Filter by creator_id (user search)
+            if request.rel_url.query.get("creator_id"):
+                q = q.eq("creator_id", request.rel_url.query["creator_id"])
             sort    = request.rel_url.query.get("sort", "newest")
             q       = q.order("created_at", desc=(sort != "oldest"))
-            tickets = q.execute().data or []
+            raw_tickets = q.execute().data or []
+
+            # Enrich tickets: resolve creator_id → display name
+            enriched = []
+            member_cache: dict[str, dict] = {}
+            for t in raw_tickets:
+                creator_id = t.get("creator_id", "")
+                if creator_id and creator_id not in member_cache:
+                    member = await _get_member(server_id, creator_id)
+                    member_cache[creator_id] = member
+                else:
+                    member = member_cache.get(creator_id)
+                t["creator_display"] = _member_display_name(member) if member else (creator_id or "Unbekannt")
+                t["creator_avatar"]  = _member_avatar_url(member) if member else None
+                enriched.append(t)
+            tickets = enriched
+
+    # For user search filter: get selected creator info
+    selected_creator = None
+    if request.rel_url.query.get("creator_id") and server_id:
+        cid = request.rel_url.query["creator_id"]
+        m   = await _get_member(server_id, cid)
+        if m:
+            selected_creator = {
+                "id":      cid,
+                "display": _member_display_name(m),
+                "avatar":  _member_avatar_url(m),
+            }
 
     return _render_template(
         "ticket_list.html",
         user=user, servers=servers, tickets=tickets,
         selected=selected, server_id=server_id,
         filters=request.rel_url.query,
+        selected_creator=selected_creator,
     )
 
 
@@ -502,6 +640,24 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
     ticket    = load_ticket(server_id, ticket_id)
     if not ticket:
         raise web.HTTPNotFound()
+
+    # Enrich: resolve creator_id → display name
+    creator_id = ticket.get("creator_id", "")
+    if creator_id:
+        member = await _get_member(server_id, creator_id)
+        ticket["creator_display"] = _member_display_name(member) if member else ticket.get("creator_name", creator_id)
+        ticket["creator_avatar"]  = _member_avatar_url(member) if member else None
+    else:
+        ticket["creator_display"] = ticket.get("creator_name", "Unbekannt")
+        ticket["creator_avatar"]  = None
+
+    # Enrich: resolve claimed_by ID → display name
+    claimed_id = ticket.get("claimed_by")
+    if claimed_id:
+        claimed_member = await _get_member(server_id, claimed_id)
+        ticket["claimed_by_display"] = _member_display_name(claimed_member) if claimed_member else claimed_id
+    else:
+        ticket["claimed_by_display"] = None
 
     messages = load_messages(server_id, ticket_id)
     return _render_template(
@@ -527,7 +683,7 @@ async def handle_static(request: web.Request) -> web.Response:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SSL  –  selbstsigniertes Zertifikat auto-generieren (Python stdlib)
+# SSL
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_ssl_context() -> ssl.SSLContext:
@@ -545,16 +701,10 @@ def _get_ssl_context() -> ssl.SSLContext:
 
 
 def _generate_self_signed(cert_path: str, key_path: str) -> None:
-    """
-    Erstellt ein selbstsigniertes Zertifikat ohne externe Tools.
-    Nutzt nur Pythons stdlib (cryptography ist NICHT nötig).
-    Fällt auf subprocess+openssl zurück falls vorhanden, sonst dummy-cert.
-    """
     import subprocess, shutil
 
     Path(cert_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Versuch 1: openssl (auf Windows oft als Git-Bash-Tool verfügbar)
     if shutil.which("openssl"):
         try:
             subprocess.run([
@@ -568,7 +718,6 @@ def _generate_self_signed(cert_path: str, key_path: str) -> None:
         except subprocess.CalledProcessError:
             pass
 
-    # Versuch 2: cryptography-Bibliothek (falls installiert)
     try:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
@@ -605,7 +754,7 @@ def _generate_self_signed(cert_path: str, key_path: str) -> None:
 
     raise RuntimeError(
         "Konnte kein SSL-Zertifikat erstellen.\n"
-        "Lösung A: openssl installieren (z.B. via Git for Windows)\n"
+        "Lösung A: openssl installieren\n"
         "Lösung B: pip install cryptography\n"
         "Lösung C: mkcert nutzen und SSL_CERT / SSL_KEY in .env setzen"
     )
@@ -623,6 +772,7 @@ def _build_app() -> web.Application:
     app.router.add_get("/logout",                        handle_logout)
     app.router.add_get("/dashboard/tickets",             handle_ticket_list)
     app.router.add_get("/dashboard/tickets/{ticket_id}", handle_ticket_detail)
+    app.router.add_get("/api/members",                   handle_api_members)
     app.router.add_get("/static/{filename}",             handle_static)
     return app
 
@@ -638,20 +788,7 @@ async def _run_server() -> None:
 
 
 async def keep_alive() -> None:
-    """
-    Startet den aiohttp-Server.
-    Muss mit await aufgerufen werden, BEVOR bot.start() awaited wird:
-
-        async def main():
-            async with bot:
-                await keep_alive()       # ← Server starten
-                await bot.start(TOKEN)   # ← Bot starten
-
-    keep_alive() kehrt sofort zurück – der Server läuft im Hintergrund
-    als asyncio-Task im selben Event Loop.
-    """
     asyncio.get_event_loop().create_task(_run_server())
-    # Kurz yielden damit der Task registriert wird bevor bot.start() blockiert
     await asyncio.sleep(0)
 
 

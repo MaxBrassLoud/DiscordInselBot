@@ -27,7 +27,8 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
         except ValueError:
             max_t = 1
 
-        view = ModuleRolePickerView(
+        # Go to role + category picker
+        view = ModuleRoleAndCategoryPickerView(
             name=self.name.value,
             description=self.description.value,
             max_tickets=max_t,
@@ -36,34 +37,121 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
         )
         await interaction.response.send_message(
             embed=discord.Embed(
-                title="🎭 Staff-Rollen wählen",
-                description=f"Modul **{self.name.value}** – Wähle die Staff-Rollen die Zugriff haben sollen.",
+                title="🎭 Modul konfigurieren",
+                description=(
+                    f"**Modul: {self.name.value}**\n\n"
+                    "**Schritt 1:** Wähle die Staff-Rollen, die Zugriff auf dieses Modul haben.\n"
+                    "**Schritt 2:** Wähle eine eigene Kategorie für dieses Modul (optional – "
+                    "sonst wird die globale Kategorie genutzt)."
+                ),
                 color=discord.Color.blurple()
             ),
             view=view, ephemeral=True
         )
 
 
-class ModuleRolePickerView(discord.ui.View):
-    def __init__(self, name: str, description: str, max_tickets: int, modal_question: str, setup_view: "TicketSetupView"):
-        super().__init__(timeout=120)
-        self.mod_data   = {"name": name, "description": description, "max_tickets": max_tickets, "modal_question": modal_question}
-        self.setup_view = setup_view
+class ModuleRoleAndCategoryPickerView(discord.ui.View):
+    """
+    Lets admins pick staff roles AND an optional per-module ticket category.
+    The category is optional: if not selected, the global category from TicketSetupView is used.
+    """
 
-        role_sel = discord.ui.RoleSelect(placeholder="Staff-Rollen wählen...", min_values=1, max_values=10)
+    def __init__(self, name: str, description: str, max_tickets: int,
+                 modal_question: str, setup_view: "TicketSetupView"):
+        super().__init__(timeout=180)
+        self.mod_data = {
+            "name":           name,
+            "description":    description,
+            "max_tickets":    max_tickets,
+            "modal_question": modal_question,
+            "staff_role_ids": [],
+            "category_id":    None,   # per-module override
+        }
+        self.setup_view     = setup_view
+        self._roles_chosen  = False
+        self._cat_chosen    = False
+
+        # ── Staff Roles ───────────────────────────────────────────────────────
+        role_sel = discord.ui.RoleSelect(
+            placeholder="👮 Staff-Rollen wählen (Pflicht)…",
+            min_values=1, max_values=10,
+        )
         role_sel.callback = self.roles_selected
         self.add_item(role_sel)
 
+        # ── Per-module Category (optional) ────────────────────────────────────
+        cat_sel = discord.ui.ChannelSelect(
+            placeholder="📁 Eigene Kategorie (optional, leer = global)",
+            min_values=0, max_values=1,
+            channel_types=[discord.ChannelType.category],
+        )
+        cat_sel.callback = self.category_selected
+        self.add_item(cat_sel)
+
+        # ── Confirm button (enabled once roles are chosen) ────────────────────
+        self._confirm_btn = discord.ui.Button(
+            label="✅ Modul hinzufügen",
+            style=discord.ButtonStyle.success,
+            disabled=True,
+        )
+        self._confirm_btn.callback = self.confirm_callback
+        self.add_item(self._confirm_btn)
+
+    def _build_embed(self) -> discord.Embed:
+        roles_val = (
+            ", ".join(f"<@&{r}>" for r in self.mod_data["staff_role_ids"])
+            if self.mod_data["staff_role_ids"] else "*noch nicht gewählt*"
+        )
+        cat_val = (
+            f"<#{self.mod_data['category_id']}>"
+            if self.mod_data["category_id"]
+            else "*globale Kategorie (Standard)*"
+        )
+        embed = discord.Embed(
+            title=f"⚙️ Modul: {self.mod_data['name']}",
+            color=discord.Color.blurple() if not self._roles_chosen else discord.Color.green(),
+        )
+        embed.add_field(name="👮 Staff-Rollen", value=roles_val, inline=False)
+        embed.add_field(name="📁 Eigene Kategorie", value=cat_val, inline=False)
+        if self._roles_chosen:
+            embed.set_footer(text="✅ Rollen ausgewählt – du kannst jetzt speichern oder noch eine Kategorie wählen.")
+        return embed
+
     async def roles_selected(self, interaction: discord.Interaction):
         self.mod_data["staff_role_ids"] = interaction.data["values"]
+        self._roles_chosen = True
+        self._confirm_btn.disabled = False
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def category_selected(self, interaction: discord.Interaction):
+        vals = interaction.data.get("values", [])
+        self.mod_data["category_id"] = vals[0] if vals else None
+        self._cat_chosen = bool(vals)
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def confirm_callback(self, interaction: discord.Interaction):
+        if not self.mod_data["staff_role_ids"]:
+            await interaction.response.send_message("❌ Bitte zuerst Staff-Rollen wählen.", ephemeral=True)
+            return
         self.setup_view.pending_modules.append(self.mod_data)
         self.setup_view._rebuild()
+
+        cat_info = (
+            f"<#{self.mod_data['category_id']}>"
+            if self.mod_data["category_id"]
+            else "globale Kategorie"
+        )
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="✅ Modul gespeichert",
-                description=f"**{self.mod_data['name']}** mit {len(self.mod_data['staff_role_ids'])} Staff-Rolle(n) hinzugefügt.",
+                description=(
+                    f"**{self.mod_data['name']}** wurde hinzugefügt.\n"
+                    f"Staff-Rollen: {len(self.mod_data['staff_role_ids'])}\n"
+                    f"Kategorie: {cat_info}"
+                ),
                 color=discord.Color.green()
-            ), view=None
+            ),
+            view=None
         )
         try:
             await self.setup_view._original_interaction.edit_original_response(
@@ -79,10 +167,10 @@ class TicketSetupView(discord.ui.View):
         self.guild_id              = guild_id
         self.bot                   = bot
         self.pending_modules       = []
-        self.panel_channel_id: str | None  = None
-        self.category_id: str | None       = None
-        self.log_channel_id: str | None    = None   # NEW: Ticket-Log Kanal
-        self.staff_ping_channel_id: str | None = None  # NEW: Staff-Ping Kanal
+        self.panel_channel_id: str | None      = None
+        self.category_id: str | None           = None   # global fallback
+        self.log_channel_id: str | None        = None
+        self.staff_ping_channel_id: str | None = None
         self._original_interaction = None
         self._rebuild()
 
@@ -101,9 +189,9 @@ class TicketSetupView(discord.ui.View):
         ch_sel.callback = ch_cb
         self.add_item(ch_sel)
 
-        # Kategorie
+        # Globale Kategorie (Fallback für Module ohne eigene Kategorie)
         cat_sel = discord.ui.ChannelSelect(
-            placeholder="📁 Kategorie für neue Ticket-Kanäle",
+            placeholder="📁 Standard-Kategorie für Ticket-Kanäle (globaler Fallback)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.category]
         )
         async def cat_cb(interaction: discord.Interaction):
@@ -113,7 +201,7 @@ class TicketSetupView(discord.ui.View):
         cat_sel.callback = cat_cb
         self.add_item(cat_sel)
 
-        # Log-Kanal (NEU)
+        # Log-Kanal
         log_sel = discord.ui.ChannelSelect(
             placeholder="📋 Ticket-Log Kanal (Links zu allen Tickets)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -125,7 +213,7 @@ class TicketSetupView(discord.ui.View):
         log_sel.callback = log_cb
         self.add_item(log_sel)
 
-        # Staff-Ping Kanal (NEU)
+        # Staff-Ping Kanal
         ping_sel = discord.ui.ChannelSelect(
             placeholder="🔔 Staff-Ping Kanal (Benachrichtigung bei neuem Ticket)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -169,25 +257,47 @@ class TicketSetupView(discord.ui.View):
         self.add_item(save_btn)
 
     def _build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="⚙️ Ticket-System Setup", color=discord.Color.blurple(),
-                              description="Konfiguriere das Ticket-System für diesen Server.")
-        embed.add_field(name="📢 Panel-Kanal",
-                        value=f"<#{self.panel_channel_id}>" if self.panel_channel_id else "*Nicht ausgewählt*", inline=True)
-        embed.add_field(name="📁 Kategorie",
-                        value=f"<#{self.category_id}>" if self.category_id else "*Nicht ausgewählt*", inline=True)
-        embed.add_field(name="📋 Log-Kanal",
-                        value=f"<#{self.log_channel_id}>" if self.log_channel_id else "*Nicht ausgewählt*", inline=True)
-        embed.add_field(name="🔔 Staff-Ping Kanal",
-                        value=f"<#{self.staff_ping_channel_id}>" if self.staff_ping_channel_id else "*Nicht ausgewählt*", inline=True)
+        embed = discord.Embed(
+            title="⚙️ Ticket-System Setup",
+            color=discord.Color.blurple(),
+            description="Konfiguriere das Ticket-System für diesen Server.",
+        )
+        embed.add_field(
+            name="📢 Panel-Kanal",
+            value=f"<#{self.panel_channel_id}>" if self.panel_channel_id else "*Nicht ausgewählt*",
+            inline=True,
+        )
+        embed.add_field(
+            name="📁 Standard-Kategorie",
+            value=f"<#{self.category_id}>" if self.category_id else "*Nicht ausgewählt*",
+            inline=True,
+        )
+        embed.add_field(
+            name="📋 Log-Kanal",
+            value=f"<#{self.log_channel_id}>" if self.log_channel_id else "*Nicht ausgewählt*",
+            inline=True,
+        )
+        embed.add_field(
+            name="🔔 Staff-Ping Kanal",
+            value=f"<#{self.staff_ping_channel_id}>" if self.staff_ping_channel_id else "*Nicht ausgewählt*",
+            inline=True,
+        )
         embed.add_field(name="\u200b", value="\u200b", inline=True)
         embed.add_field(name="\u200b", value="\u200b", inline=True)
+
         if self.pending_modules:
             for i, mod in enumerate(self.pending_modules, 1):
-                roles = ", ".join(f"<@&{r}>" for r in mod.get("staff_role_ids", [])) or "*keine*"
+                roles  = ", ".join(f"<@&{r}>" for r in mod.get("staff_role_ids", [])) or "*keine*"
+                cat    = f"<#{mod['category_id']}>" if mod.get("category_id") else "*global*"
                 embed.add_field(
                     name=f"📂 Modul {i}: {mod['name']}",
-                    value=f"Beschreibung: {mod['description']}\nMax Tickets: {mod['max_tickets']}\nStaff: {roles}",
-                    inline=False
+                    value=(
+                        f"Beschreibung: {mod['description']}\n"
+                        f"Max Tickets: {mod['max_tickets']}\n"
+                        f"Kategorie: {cat}\n"
+                        f"Staff: {roles}"
+                    ),
+                    inline=False,
                 )
         else:
             embed.add_field(name="📂 Module", value="*Noch keine Module hinzugefügt*", inline=False)
@@ -205,8 +315,8 @@ class TicketSetupView(discord.ui.View):
                 "server_id":             guild_id,
                 "category_id":           self.category_id,
                 "panel_channel_id":      self.panel_channel_id,
-                "log_channel_id":        self.log_channel_id,        # NEW
-                "staff_ping_channel_id": self.staff_ping_channel_id, # NEW
+                "log_channel_id":        self.log_channel_id,
+                "staff_ping_channel_id": self.staff_ping_channel_id,
             }
             if existing.data:
                 supabase.table("ticket_servers").update(server_data).eq("server_id", guild_id).execute()
@@ -224,16 +334,22 @@ class TicketSetupView(discord.ui.View):
             from .views import TicketPanelView
             db_modules = []
             for mod in self.pending_modules:
+                # Per-module category overrides global; fallback to global
+                effective_category = mod.get("category_id") or self.category_id
+
                 result = supabase.table("ticket_modules").insert({
                     "server_id":      guild_id,
                     "name":           mod["name"],
                     "description":    mod["description"],
                     "max_tickets":    mod["max_tickets"],
                     "modal_question": mod["modal_question"],
+                    "category_id":    effective_category,   # ← per-module category stored
                 }).execute()
+
                 if result.data:
                     mod_id = result.data[0]["id"]
                     mod["id"] = mod_id
+                    mod["effective_category"] = effective_category
                     for role_id in mod.get("staff_role_ids", []):
                         supabase.table("ticket_module_roles").insert({
                             "module_id": mod_id, "role_id": str(role_id)
@@ -248,19 +364,25 @@ class TicketSetupView(discord.ui.View):
 
             embed = discord.Embed(
                 title="🎫 Support-Tickets",
-                description="Wähle ein Modul aus dem Dropdown um ein Ticket zu erstellen.",
+                description="Wähle ein Modul aus den Buttons unten um ein Ticket zu erstellen.",
                 color=discord.Color.blurple()
             )
             for mod in db_modules:
-                embed.add_field(name=f"📂 {mod['name']}", value=mod["description"], inline=False)
+                cat_note = f" | Kategorie: <#{mod.get('effective_category')}>" if mod.get("effective_category") else ""
+                embed.add_field(name=f"📂 {mod['name']}", value=mod["description"] + cat_note, inline=False)
 
-            panel_view = TicketPanelView(modules=db_modules, category_id=int(self.category_id), bot=self.bot)
+            panel_view = TicketPanelView(
+                modules=db_modules,
+                category_id=int(self.category_id),
+                bot=self.bot,
+            )
             await panel_channel.send(embed=embed, view=panel_view)
 
             for item in self.children:
                 item.disabled = True
             await interaction.followup.send(
-                f"✅ Ticket-System eingerichtet! Panel wurde in <#{self.panel_channel_id}> gesendet.", ephemeral=True
+                f"✅ Ticket-System eingerichtet! Panel wurde in <#{self.panel_channel_id}> gesendet.",
+                ephemeral=True,
             )
         except Exception as e:
             logger.error(f"[TicketSetupView.save] {e}")

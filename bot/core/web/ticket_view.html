@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ticket #{{ ticket.ticket_id }} – Dashboard</title>
 <link rel="stylesheet" href="/static/ticket.css">
+<style>
+  .creator-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .creator-info img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(56,189,248,.3);
+  }
+  .creator-info .creator-name {
+    font-weight: 600;
+    font-size: .95rem;
+  }
+</style>
 </head>
 <body>
 <nav class="navbar">
@@ -14,7 +32,7 @@
   </div>
   <div class="nav-user">
     <a href="/dashboard/tickets?server_id={{ server_id }}" class="btn btn-secondary btn-small">← Zurück</a>
-    👤 {{ user.username }}
+    👤 {{ user.display_name or user.username }}
   </div>
 </nav>
 
@@ -29,7 +47,14 @@
       </div>
       <div class="meta-item">
         <div class="meta-label">Ersteller</div>
-        <div class="meta-value">{{ ticket.creator_name }} ({{ ticket.creator_id }})</div>
+        <div class="meta-value">
+          <div class="creator-info">
+            {% if ticket.creator_avatar %}
+              <img src="{{ ticket.creator_avatar }}" alt="{{ ticket.creator_display }}">
+            {% endif %}
+            <span class="creator-name">{{ ticket.creator_display or ticket.creator_name or ticket.creator_id }}</span>
+          </div>
+        </div>
       </div>
       <div class="meta-item">
         <div class="meta-label">Status</div>
@@ -41,7 +66,7 @@
       </div>
       <div class="meta-item">
         <div class="meta-label">Übernommen von</div>
-        <div class="meta-value">{{ ticket.claimed_by or '–' }}</div>
+        <div class="meta-value">{{ ticket.claimed_by_display or ticket.claimed_by or '–' }}</div>
       </div>
       <div class="meta-item">
         <div class="meta-label">Erstellt am</div>

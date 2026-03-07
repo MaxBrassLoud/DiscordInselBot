@@ -6,8 +6,171 @@
 <title>Tickets – Dashboard</title>
 <link rel="stylesheet" href="/static/ticket.css">
 <style>
-  .web-link { color: #818cf8; text-decoration: none; font-size: .82rem; }
-  .web-link:hover { text-decoration: underline; }
+  .server-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .server-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .server-icon-placeholder {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #5865F2, #38bdf8);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .75rem;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .creator-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .creator-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  /* ── User Search Filter ────────────────────────────────────────── */
+  .user-search-wrap {
+    position: relative;
+  }
+  .user-search-input {
+    background: #0f172a;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: .9rem;
+    width: 220px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .user-search-input:focus {
+    border-color: var(--primary);
+  }
+  .user-search-input.has-value {
+    border-color: var(--primary);
+    background: rgba(56,189,248,.07);
+  }
+  .user-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 280px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6);
+    z-index: 200;
+    overflow: hidden;
+    display: none;
+  }
+  .user-dropdown.visible {
+    display: block;
+  }
+  .user-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .user-dropdown-item:hover,
+  .user-dropdown-item.focused {
+    background: rgba(56,189,248,.1);
+  }
+  .user-dropdown-item img {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .user-dropdown-item .uname {
+    font-size: .9rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .user-dropdown-item .utag {
+    font-size: .75rem;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+  .user-dropdown-empty {
+    padding: 14px 16px;
+    color: var(--muted);
+    font-size: .85rem;
+    text-align: center;
+  }
+  .user-dropdown-loading {
+    padding: 14px 16px;
+    color: var(--muted);
+    font-size: .85rem;
+    text-align: center;
+  }
+
+  /* Selected user chip */
+  .selected-user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(56,189,248,.12);
+    border: 1px solid rgba(56,189,248,.3);
+    border-radius: 20px;
+    padding: 4px 10px 4px 6px;
+    font-size: .85rem;
+    color: var(--primary);
+    margin-left: 6px;
+  }
+  .selected-user-chip img {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+  }
+  .selected-user-chip .chip-clear {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: .75rem;
+    margin-left: 2px;
+    padding: 0 2px;
+    transition: color .15s;
+  }
+  .selected-user-chip .chip-clear:hover {
+    color: var(--danger);
+  }
+
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .filter-label {
+    font-size: .75rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    margin-bottom: 6px;
+  }
+  .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
 </style>
 </head>
 <body>
@@ -16,17 +179,26 @@
     <a href="/" style="color:var(--primary);text-decoration:none;margin-right:16px">🏠</a>
     🎫 Insel Bot – Tickets
   </div>
-  <div class="nav-user">👤 {{ user.username }}</div>
+  <div class="nav-user">👤 {{ user.display_name or user.username }}</div>
 </nav>
 
 <div class="container">
+
+  <!-- Server Selection -->
   <div class="card">
     <h2>🖥️ Server auswählen</h2>
     <div class="server-grid">
       {% for server in servers %}
       <a href="?server_id={{ server.server_id }}"
          class="server-btn {% if server_id == server.server_id %}active{% endif %}">
-        {{ server.server_id }}
+        {% if server.guild_icon %}
+          <img src="{{ server.guild_icon }}" alt="" class="server-icon">
+        {% else %}
+          <span class="server-icon-placeholder">
+            {{ (server.guild_name or server.server_id)[:1].upper() }}
+          </span>
+        {% endif %}
+        <span>{{ server.guild_name or server.server_id }}</span>
       </a>
       {% else %}
       <p class="muted">Keine Server gefunden.</p>
@@ -35,27 +207,89 @@
   </div>
 
   {% if selected %}
+  <!-- Filters -->
   <div class="card">
     <h2>🔍 Filter</h2>
-    <form method="GET" class="filter-form">
+    <form method="GET" id="filterForm" class="filter-row">
       <input type="hidden" name="server_id" value="{{ server_id }}">
-      <select name="status">
-        <option value="">Alle Status</option>
-        <option value="open"   {% if filters.get('status')=='open'   %}selected{% endif %}>Offen</option>
-        <option value="closed" {% if filters.get('status')=='closed' %}selected{% endif %}>Geschlossen</option>
-      </select>
-      <input type="text" name="module" placeholder="Modul filtern…" value="{{ filters.get('module','') }}">
-      <select name="sort">
-        <option value="newest" {% if filters.get('sort','newest')=='newest' %}selected{% endif %}>Neueste zuerst</option>
-        <option value="oldest" {% if filters.get('sort')=='oldest'          %}selected{% endif %}>Älteste zuerst</option>
-      </select>
-      <button type="submit" class="btn btn-primary">Anwenden</button>
-      <a href="?server_id={{ server_id }}" class="btn btn-secondary">Zurücksetzen</a>
+
+      <!-- Hidden creator_id field (set by JS) -->
+      <input type="hidden" name="creator_id" id="creatorIdInput" value="{{ filters.get('creator_id','') }}">
+
+      <div class="filter-group">
+        <div class="filter-label">Status</div>
+        <select name="status">
+          <option value="">Alle Status</option>
+          <option value="open"   {% if filters.get('status')=='open'   %}selected{% endif %}>Offen</option>
+          <option value="closed" {% if filters.get('status')=='closed' %}selected{% endif %}>Geschlossen</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">Modul</div>
+        <input type="text" name="module" placeholder="z.B. Support" value="{{ filters.get('module','') }}"
+               style="background:#0f172a;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 12px;font-size:.9rem;">
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">Sortierung</div>
+        <select name="sort">
+          <option value="newest" {% if filters.get('sort','newest')=='newest' %}selected{% endif %}>Neueste zuerst</option>
+          <option value="oldest" {% if filters.get('sort')=='oldest'          %}selected{% endif %}>Älteste zuerst</option>
+        </select>
+      </div>
+
+      <!-- User Search Filter -->
+      <div class="filter-group">
+        <div class="filter-label">Benutzer</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div class="user-search-wrap">
+            <input
+              type="text"
+              id="userSearchInput"
+              class="user-search-input {% if selected_creator %}has-value{% endif %}"
+              placeholder="Name eingeben…"
+              autocomplete="off"
+              value=""
+            >
+            <div class="user-dropdown" id="userDropdown">
+              <div class="user-dropdown-loading" id="dropdownMsg">Suche läuft…</div>
+            </div>
+          </div>
+
+          {% if selected_creator %}
+          <span class="selected-user-chip" id="selectedChip">
+            <img src="{{ selected_creator.avatar }}" alt="">
+            <span>{{ selected_creator.display }}</span>
+            <span class="chip-clear" title="Filter entfernen" onclick="clearUserFilter()">✕</span>
+          </span>
+          {% else %}
+          <span class="selected-user-chip" id="selectedChip" style="display:none">
+            <img src="" alt="" id="chipAvatar">
+            <span id="chipName"></span>
+            <span class="chip-clear" title="Filter entfernen" onclick="clearUserFilter()">✕</span>
+          </span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="filter-group" style="justify-content:flex-end;flex-direction:row;gap:8px;align-self:flex-end;">
+        <button type="submit" class="btn btn-primary">Anwenden</button>
+        <a href="?server_id={{ server_id }}" class="btn btn-secondary">Reset</a>
+      </div>
     </form>
   </div>
 
+  <!-- Ticket Table -->
   <div class="card">
-    <h2>📋 Tickets ({{ tickets|length }})</h2>
+    <h2>
+      📋 Tickets ({{ tickets|length }})
+      {% if selected_creator %}
+        <span style="font-size:.85rem;color:var(--muted);font-weight:400;margin-left:8px">
+          von {{ selected_creator.display }}
+        </span>
+      {% endif %}
+    </h2>
     {% if tickets %}
     <table class="ticket-table">
       <thead>
@@ -64,7 +298,7 @@
           <th>Modul</th>
           <th>Ersteller</th>
           <th>Status</th>
-          <th>Übernommen</th>
+          <th>Übernommen von</th>
           <th>Erstellt</th>
           <th></th>
         </tr>
@@ -74,13 +308,20 @@
         <tr>
           <td><strong>#{{ t.ticket_id }}</strong></td>
           <td><span class="badge badge-module">{{ t.module }}</span></td>
-          <td>{{ t.creator_id }}</td>
+          <td>
+            <div class="creator-cell">
+              {% if t.creator_avatar %}
+                <img src="{{ t.creator_avatar }}" alt="" class="creator-avatar">
+              {% endif %}
+              <span>{{ t.creator_display or t.creator_id }}</span>
+            </div>
+          </td>
           <td>
             <span class="badge {% if t.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
               {{ '🟢 Offen' if t.status == 'open' else '🔴 Geschlossen' }}
             </span>
           </td>
-          <td>{{ t.claimed_by or '–' }}</td>
+          <td class="muted">{{ t.claimed_by or '–' }}</td>
           <td class="muted">{{ t.created_at[:16] if t.created_at else '–' }}</td>
           <td>
             <a href="/dashboard/tickets/{{ t.ticket_id }}?server_id={{ server_id }}"
@@ -95,6 +336,146 @@
     {% endif %}
   </div>
   {% endif %}
+
 </div>
+
+<script>
+(function() {
+  const serverId    = {{ ('"' + server_id + '"') if server_id else 'null' }};
+  const input       = document.getElementById('userSearchInput');
+  const dropdown    = document.getElementById('userDropdown');
+  const dropdownMsg = document.getElementById('dropdownMsg');
+  const chip        = document.getElementById('selectedChip');
+  const chipAvatar  = document.getElementById('chipAvatar');
+  const chipName    = document.getElementById('chipName');
+  const creatorId   = document.getElementById('creatorIdInput');
+
+  if (!input) return;
+
+  let debounceTimer = null;
+  let focusedIndex  = -1;
+  let currentItems  = [];
+
+  // ── Autocomplete ──────────────────────────────────────────────
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 2) {
+      hideDropdown();
+      return;
+    }
+    showDropdownLoading();
+    debounceTimer = setTimeout(() => fetchMembers(q), 280);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (!dropdown.classList.contains('visible')) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusedIndex = Math.min(focusedIndex + 1, currentItems.length - 1);
+      renderFocus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusedIndex = Math.max(focusedIndex - 1, 0);
+      renderFocus();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (focusedIndex >= 0 && currentItems[focusedIndex]) {
+        selectUser(currentItems[focusedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      hideDropdown();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      hideDropdown();
+    }
+  });
+
+  async function fetchMembers(q) {
+    if (!serverId) { hideDropdown(); return; }
+    try {
+      const resp = await fetch(`/api/members?server_id=${encodeURIComponent(serverId)}&q=${encodeURIComponent(q)}`);
+      const data = await resp.json();
+      currentItems  = data;
+      focusedIndex  = -1;
+      renderDropdown(data);
+    } catch(err) {
+      dropdownMsg.textContent = '❌ Fehler beim Laden';
+      dropdownMsg.style.display = 'block';
+      currentItems = [];
+    }
+  }
+
+  function renderDropdown(items) {
+    dropdown.innerHTML = '';
+    if (!items || items.length === 0) {
+      const el = document.createElement('div');
+      el.className = 'user-dropdown-empty';
+      el.textContent = 'Keine Mitglieder gefunden';
+      dropdown.appendChild(el);
+    } else {
+      items.forEach((m, i) => {
+        const el = document.createElement('div');
+        el.className = 'user-dropdown-item';
+        el.dataset.index = i;
+        el.innerHTML = `
+          <img src="${m.avatar}" alt="" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+          <div>
+            <div class="uname">${escHtml(m.display)}</div>
+            ${m.username && m.username !== m.display ? `<div class="utag">@${escHtml(m.username)}</div>` : ''}
+          </div>`;
+        el.addEventListener('click', () => selectUser(m));
+        el.addEventListener('mouseenter', () => { focusedIndex = i; renderFocus(); });
+        dropdown.appendChild(el);
+      });
+    }
+    dropdown.classList.add('visible');
+  }
+
+  function renderFocus() {
+    dropdown.querySelectorAll('.user-dropdown-item').forEach((el, i) => {
+      el.classList.toggle('focused', i === focusedIndex);
+    });
+  }
+
+  function showDropdownLoading() {
+    dropdown.innerHTML = '<div class="user-dropdown-loading">Suche läuft…</div>';
+    dropdown.classList.add('visible');
+  }
+
+  function hideDropdown() {
+    dropdown.classList.remove('visible');
+    focusedIndex = -1;
+  }
+
+  function selectUser(m) {
+    hideDropdown();
+    input.value = '';
+    creatorId.value = m.id;
+    // Show chip
+    if (chipAvatar) { chipAvatar.src = m.avatar; chipAvatar.alt = m.display; }
+    if (chipName)   { chipName.textContent = m.display; }
+    chip.style.display = 'inline-flex';
+    input.classList.add('has-value');
+  }
+
+  window.clearUserFilter = function() {
+    creatorId.value = '';
+    chip.style.display = 'none';
+    input.value = '';
+    input.classList.remove('has-value');
+    // Submit form to remove filter
+    document.getElementById('filterForm').submit();
+  };
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+})();
+</script>
+
 </body>
 </html>

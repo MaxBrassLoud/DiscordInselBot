@@ -21,7 +21,7 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
     def __init__(self, module: dict, category_id: int, bot: discord.Client):
         super().__init__(title=f"Ticket: {module['name']}")
         self.module      = module
-        self.category_id = category_id
+        self.category_id = category_id   # global fallback; module may override
         self.bot         = bot
         self.beschreibung.placeholder = module.get("modal_question", "Bitte beschreibe dein Anliegen.")
 
@@ -39,6 +39,7 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
                 )
                 return
 
+            # Pass global category_id; manager.create_ticket checks module["category_id"] for override
             channel, ticket_id = await TicketManager.create_ticket(
                 guild=interaction.guild,
                 creator=interaction.user,
@@ -67,9 +68,7 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TICKET PANEL  –  BUTTONS statt Dropdown
-# FIX Problem 3: Discord-Dropdowns feuern keinen Event wenn dieselbe Option
-# erneut ausgewählt wird. Buttons hingegen funktionieren immer zuverlässig.
+# TICKET PANEL  –  Ein Button pro Modul
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TicketPanelView(discord.ui.View):
@@ -78,7 +77,7 @@ class TicketPanelView(discord.ui.View):
     def __init__(self, modules: list[dict], category_id: int, bot: discord.Client):
         super().__init__(timeout=None)
         self.modules     = modules
-        self.category_id = category_id
+        self.category_id = category_id   # global fallback
         self.bot         = bot
         self._build_buttons()
 
@@ -100,18 +99,21 @@ class TicketPanelView(discord.ui.View):
         if not module:
             await interaction.response.send_message("❌ Modul nicht gefunden.", ephemeral=True)
             return
+
+        # Use per-module category if set, otherwise use global from server config
         server_cfg  = await TicketManager.get_server_config(str(interaction.guild_id))
-        category_id = int(server_cfg["category_id"]) if server_cfg else self.category_id
-        modal       = TicketDescriptionModal(module=module, category_id=category_id, bot=self.bot)
+        global_cat  = int(server_cfg["category_id"]) if server_cfg else self.category_id
+        # module["category_id"] may be set from DB; manager.create_ticket will apply the override
+        modal = TicketDescriptionModal(
+            module=module,
+            category_id=global_cat,
+            bot=self.bot,
+        )
         await interaction.response.send_modal(modal)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TICKET CHANNEL BUTTONS
-# FIX Problem 1:
-#   - custom_ids sind ticket-spezifisch  (ticket_close_<ticket_id>)
-#   - Discord-Antwort kommt VOR channel.delete()
-#   - load_ticket hat einen Fallback falls die JSON-Datei fehlt
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TicketChannelView(discord.ui.View):
@@ -126,7 +128,6 @@ class TicketChannelView(discord.ui.View):
         self._claimed_by_id: str | None = None
         self._build_buttons()
 
-    # ── Button-Aufbau (wird nach claim/unclaim neu gebaut) ────────────────────
     def _build_buttons(self):
         self.clear_items()
         tid = self.ticket_id
@@ -155,14 +156,12 @@ class TicketChannelView(discord.ui.View):
         add_btn.callback = self._adduser_callback
         self.add_item(add_btn)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
     def _is_staff(self, member: discord.Member) -> bool:
         if member.guild_permissions.administrator:
             return True
         return any(str(r.id) in self.module.get("staff_role_ids", []) for r in member.roles)
 
     def _get_ticket(self) -> dict:
-        """Load ticket from disk, fall back to minimal dict if file missing."""
         t = load_ticket(self.server_id, self.ticket_id)
         if t:
             return t
@@ -177,7 +176,6 @@ class TicketChannelView(discord.ui.View):
             "claimed_by":   self._claimed_by_id,
         }
 
-    # ── Callbacks ─────────────────────────────────────────────────────────────
     async def _claim_callback(self, interaction: discord.Interaction):
         if not self._is_staff(interaction.user):
             await interaction.response.send_message("❌ Nur Staff kann Tickets übernehmen.", ephemeral=True)
@@ -253,8 +251,6 @@ class TicketChannelView(discord.ui.View):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLOSE CONFIRM
-# FIX Problem 1: Erst Discord antworten (ephemeral, überlebt Kanal-Löschung),
-# dann close_ticket ausführen das am Ende channel.delete() aufruft.
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TicketCloseConfirmView(discord.ui.View):
@@ -269,7 +265,6 @@ class TicketCloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Bestätigen", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Zuerst Discord antworten – DANN Kanal löschen
         await interaction.response.send_message("🔒 Ticket wird geschlossen…", ephemeral=True)
         self.stop()
         try:
