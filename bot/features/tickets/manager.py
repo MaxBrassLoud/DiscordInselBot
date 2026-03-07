@@ -16,6 +16,114 @@ def ticket_web_url(server_id: str, ticket_id: int) -> str:
     return f"{WEB_BASE_URL}/dashboard/tickets/{ticket_id}?server_id={server_id}"
 
 
+def _build_log_html(ticket: dict, messages: list[dict], closer) -> bytes:
+    """Build a self-contained HTML file with the full ticket conversation log."""
+    from html import escape
+
+    ticket_id = ticket.get("ticket_id", "?")
+    module = escape(str(ticket.get("module", "?")))
+    creator = escape(str(ticket.get("creator_name", "Unbekannt")))
+    description = escape(str(ticket.get("description", "")))
+    created_at = ticket.get("created_at", "")[:19].replace("T", " ") if ticket.get("created_at") else "?"
+    closed_by = escape(closer.display_name)
+
+    rows = ""
+    for msg in messages:
+        user = escape(str(msg.get("user", "?")))
+        content = escape(str(msg.get("content", "")))
+        ts = str(msg.get("timestamp", ""))[:19].replace("T", " ")
+        initials = user[:2].upper()
+        attachments_html = ""
+        for url in msg.get("attachments", []):
+            safe_url = escape(url)
+            attachments_html += (
+                f'<div style="margin-top:6px">'
+                f'<a href="{safe_url}" style="color:#38bdf8;font-size:.82rem">'
+                f'📎 {escape(url.split("/")[-1].split("?")[0])}</a></div>'
+            )
+        rows += f"""
+        <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #1e293b">
+          <div style="flex-shrink:0;width:36px;height:36px;border-radius:50%;
+            background:linear-gradient(135deg,#38bdf8,#818cf8);
+            display:flex;align-items:center;justify-content:center;
+            font-weight:700;font-size:.8rem;color:#0f172a">{initials}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+              <span style="font-weight:600;color:#e2e8f0">{user}</span>
+              <span style="font-size:.75rem;color:#475569">{ts}</span>
+            </div>
+            <div style="color:#cbd5e1;line-height:1.5;white-space:pre-wrap;word-break:break-word">{content}</div>
+            {attachments_html}
+          </div>
+        </div>"""
+
+    if not rows:
+        rows = '<p style="color:#475569;text-align:center;padding:24px 0">Keine Nachrichten aufgezeichnet.</p>'
+
+    html = f"""<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ticket #{ticket_id} – Log</title>
+  <style>
+    *,*::before,*::after{{box-sizing:border-box}}
+    body{{margin:0;font-family:'Segoe UI',Roboto,sans-serif;
+      background:#0f172a;color:#f1f5f9;min-height:100vh;padding:24px}}
+    .card{{background:#1e293b;border:1px solid #334155;border-radius:16px;
+      padding:24px;max-width:800px;margin:0 auto}}
+    .badge{{display:inline-block;padding:3px 10px;border-radius:20px;
+      font-size:.78rem;font-weight:600}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;
+      padding-bottom:20px;border-bottom:1px solid #334155">
+      <div style="font-size:2.2rem">🎫</div>
+      <div>
+        <h1 style="margin:0;font-size:1.4rem;color:#e2e8f0">Ticket #{ticket_id} – Gesprächs-Log</h1>
+        <div style="color:#64748b;font-size:.85rem;margin-top:4px">Modul: {module}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+      gap:12px;margin-bottom:20px">
+      <div style="background:#0f172a;border-radius:10px;padding:12px">
+        <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">👤 Ersteller</div>
+        <div style="font-weight:600">{creator}</div>
+      </div>
+      <div style="background:#0f172a;border-radius:10px;padding:12px">
+        <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">🕐 Erstellt am</div>
+        <div style="font-weight:600">{created_at}</div>
+      </div>
+      <div style="background:#0f172a;border-radius:10px;padding:12px">
+        <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">🔒 Geschlossen von</div>
+        <div style="font-weight:600">{closed_by}</div>
+      </div>
+      <div style="background:#0f172a;border-radius:10px;padding:12px">
+        <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">💬 Nachrichten</div>
+        <div style="font-weight:600">{len(messages)}</div>
+      </div>
+    </div>
+
+    <div style="background:#0f172a;border-radius:10px;padding:14px;margin-bottom:20px">
+      <div style="font-size:.78rem;color:#64748b;margin-bottom:6px">📝 Ursprüngliche Beschreibung</div>
+      <div style="color:#cbd5e1;white-space:pre-wrap">{description}</div>
+    </div>
+
+    <h2 style="font-size:1rem;color:#94a3b8;margin:0 0 4px">💬 Nachrichten</h2>
+    <div>{rows}</div>
+
+    <div style="text-align:center;color:#334155;font-size:.75rem;margin-top:20px">
+      Automatisch generiert beim Schließen des Tickets
+    </div>
+  </div>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
+
 class TicketManager:
     """Handles all ticket creation and lifecycle operations."""
 
@@ -202,7 +310,7 @@ class TicketManager:
             ticket: dict,
             closer: discord.Member,
     ):
-        """Closes ticket: exports HTML, updates DB, sends DM with link, deletes channel."""
+        """Closes ticket: exports HTML, sends log file as DM to creator, dashboard link to closer."""
         supabase = get_supabase()
         server_id = ticket["server_id"]
         ticket_id = ticket["ticket_id"]
@@ -213,34 +321,54 @@ class TicketManager:
         save_html_export(server_id, ticket_id, ticket, messages)
 
         update_ticket(server_id, ticket_id, {"status": "closed", "closed_at": now, "closed_by": str(closer.id)})
-
         supabase.table("tickets").update({"status": "closed", "closed_at": now}) \
             .eq("ticket_id", ticket_id).eq("server_id", server_id).execute()
 
-        dm_embed = discord.Embed(
-            title=f"🎫 Ticket #{ticket_id} geschlossen",
-            description="Dein Ticket wurde geschlossen. Du kannst den Verlauf im Dashboard einsehen.",
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        dm_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
-        dm_embed.add_field(name="🔒 Geschlossen von", value=closer.display_name, inline=True)
-        dm_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
-
+        # ── DM an Ticket-Ersteller: Log als HTML-Datei ────────────────────────
         creator_id = ticket.get("creator_id")
         if creator_id:
             try:
                 creator = guild.get_member(int(creator_id))
-                if creator and creator.id != closer.id:
-                    await creator.send(embed=dm_embed)
+                if creator:
+                    html_bytes = _build_log_html(ticket, messages, closer)
+                    file = discord.File(
+                        fp=__import__("io").BytesIO(html_bytes),
+                        filename=f"ticket-{ticket_id}-log.html",
+                    )
+                    creator_embed = discord.Embed(
+                        title=f"🎫 Dein Ticket #{ticket_id} wurde geschlossen",
+                        description=(
+                            "Im Anhang findest du das vollständige Gesprächs-Log als HTML-Datei.\n"
+                            "Öffne die Datei in deinem Browser um das Gespräch zu lesen."
+                        ),
+                        color=discord.Color.blurple(),
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                    creator_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
+                    creator_embed.add_field(name="🔒 Geschlossen von", value=closer.display_name, inline=True)
+                    creator_embed.add_field(name="💬 Nachrichten", value=str(len(messages)), inline=True)
+                    creator_embed.set_footer(text=f"Server: {guild.name}")
+                    await creator.send(embed=creator_embed, file=file)
             except Exception as e:
                 logger.warning(f"[close_ticket] DM an Ersteller fehlgeschlagen: {e}")
 
+        # ── DM an Schließer: Dashboard-Link (Staff) ───────────────────────────
         try:
-            await closer.send(embed=dm_embed)
+            staff_embed = discord.Embed(
+                title=f"🔒 Ticket #{ticket_id} geschlossen",
+                description="Das Ticket wurde erfolgreich geschlossen.",
+                color=discord.Color.green(),
+                timestamp=datetime.now(timezone.utc),
+            )
+            staff_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
+            staff_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
+            # Only send to closer if they're not the creator (avoid double DM)
+            if str(closer.id) != str(creator_id):
+                await closer.send(embed=staff_embed)
         except Exception as e:
             logger.warning(f"[close_ticket] DM an Schließer fehlgeschlagen: {e}")
 
+        # ── Log-Kanal ─────────────────────────────────────────────────────────
         server_cfg = await TicketManager.get_server_config(server_id)
         if server_cfg and server_cfg.get("log_channel_id"):
             log_channel = guild.get_channel(int(server_cfg["log_channel_id"]))
@@ -252,7 +380,8 @@ class TicketManager:
                 )
                 close_embed.add_field(name="🔒 Geschlossen von", value=closer.mention, inline=True)
                 close_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
-                close_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
+                close_embed.add_field(name="💬 Nachrichten", value=str(len(messages)), inline=True)
+                close_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard]({web_url})", inline=False)
                 try:
                     await log_channel.send(embed=close_embed)
                 except Exception as e:

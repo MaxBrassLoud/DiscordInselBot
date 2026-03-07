@@ -157,6 +157,46 @@ def _is_authorized(member: dict | None) -> bool:
     return bool(set(member.get("roles", [])) & allowed)
 
 
+def _user_has_server_access(user: dict, server_id: str) -> bool:
+    """
+    True if the logged-in user may view tickets for this server.
+    They must be a member of the guild (guild_id matches) AND
+    have at least one of the DISCORD_ALLOWED_ROLE_IDS (or no restriction set).
+    """
+    if not server_id:
+        return False
+    # Guild must match the one used during login
+    if user.get("guild_id") and user["guild_id"] != server_id:
+        return False
+    allowed = _allowed_roles()
+    if not allowed:
+        return True
+    return bool(set(user.get("roles", [])) & allowed)
+
+
+def _user_can_see_ticket(user: dict, ticket: dict, server_id: str,
+                          staff_role_ids: list[str]) -> bool:
+    """
+    True if the logged-in user may view this specific ticket.
+    Rules:
+      • User is the ticket creator  →  always allowed
+      • User has at least one staff role for this module  →  allowed
+      • User has DISCORD_ALLOWED_ROLE_IDS and the ticket is on their server  →  allowed
+    """
+    uid = user.get("id", "")
+    if uid and str(ticket.get("creator_id", "")) == uid:
+        return True
+    user_roles = set(user.get("roles", []))
+    # Staff roles specific to this module
+    if staff_role_ids and user_roles & set(staff_role_ids):
+        return True
+    # Global allowed roles (dashboard admins)
+    allowed = _allowed_roles()
+    if allowed and user_roles & allowed:
+        return True
+    return False
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # DISCORD BOT API  – Server/Guild Infos über Bot-Token
 # ═════════════════════════════════════════════════════════════════════════════
@@ -488,11 +528,14 @@ async def handle_callback(request: web.Request) -> web.Response:
     )
 
     nick = (member or {}).get("nick") if member else None
+    member_roles = (member or {}).get("roles", []) if member else []
     user_data = {
         "id":           discord_user["id"],
         "username":     discord_user.get("global_name") or discord_user.get("username", "?"),
         "avatar":       avatar_url,
         "display_name": nick or discord_user.get("global_name") or discord_user.get("username", "?"),
+        "guild_id":     guild_id,       # which guild this session was verified for
+        "roles":        member_roles,   # guild role IDs – used for ticket access checks
     }
 
     next_url = request.cookies.get("next_url", "/dashboard/tickets") or "/dashboard/tickets"
@@ -522,6 +565,10 @@ async def handle_api_members(request: web.Request) -> web.Response:
 
     if not server_id or not query or len(query) < 2:
         return web.json_response([])
+
+    # Must have access to this server
+    if not _user_has_server_access(sess["user"], server_id):
+        return web.json_response({"error": "Forbidden"}, status=403)
 
     try:
         members = await _get_guild_members(server_id, query=query, limit=15)
@@ -564,9 +611,13 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
     raw_servers = supabase.table("ticket_servers").select("*").execute().data or []
 
     # Enrich servers with guild info (name + icon)
+    # ── Only show servers this user is allowed to access ─────────────────────
     servers = []
     for srv in raw_servers:
         sid   = srv.get("server_id", "")
+        # Access check: user must belong to this guild and have required roles
+        if not _user_has_server_access(user, sid):
+            continue
         guild = await _cached_guild_info(sid)
         srv["guild_name"] = guild.get("name", sid) if guild else sid
         srv["guild_icon"] = _guild_icon_url(guild) if guild else None
@@ -578,7 +629,18 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
 
     if server_id:
         selected = next((s for s in servers if s["server_id"] == server_id), None)
+        # ── Guard: user must have access to the selected server ───────────────
+        if selected is None:
+            raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
+
         if selected:
+            # Load all staff role IDs for this server (across all modules)
+            all_staff_roles = []
+            mods_result = supabase.table("ticket_modules").select("id").eq("server_id", server_id).execute()
+            for mod_row in (mods_result.data or []):
+                roles_result = supabase.table("ticket_module_roles").select("role_id").eq("module_id", mod_row["id"]).execute()
+                all_staff_roles.extend(r["role_id"] for r in (roles_result.data or []))
+
             q = supabase.table("tickets").select("*").eq("server_id", server_id)
             if request.rel_url.query.get("status"):
                 q = q.eq("status", request.rel_url.query["status"])
@@ -592,9 +654,13 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
             raw_tickets = q.execute().data or []
 
             # Enrich tickets: resolve creator_id → display name
+            # AND filter to only tickets this user may see
             enriched = []
             member_cache: dict[str, dict] = {}
             for t in raw_tickets:
+                # Permission check per ticket
+                if not _user_can_see_ticket(user, t, server_id, all_staff_roles):
+                    continue
                 creator_id = t.get("creator_id", "")
                 if creator_id and creator_id not in member_cache:
                     member = await _get_member(server_id, creator_id)
@@ -634,12 +700,33 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
         raise web.HTTPFound(f"/login?next={next_url}")
 
     from bot.features.tickets.storage import load_ticket, load_messages
+    from bot.core.supabase_client import get_supabase
     user      = sess["user"]
     ticket_id = int(request.match_info["ticket_id"])
     server_id = request.rel_url.query.get("server_id", "")
-    ticket    = load_ticket(server_id, ticket_id)
+
+    # ── Server access check ───────────────────────────────────────────────────
+    if not _user_has_server_access(user, server_id):
+        raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
+
+    ticket = load_ticket(server_id, ticket_id)
     if not ticket:
         raise web.HTTPNotFound()
+
+    # ── Ticket access check: load staff roles for this module ─────────────────
+    supabase = get_supabase()
+    mod_name = ticket.get("module", "")
+    staff_role_ids: list[str] = []
+    if mod_name:
+        mod_rows = supabase.table("ticket_modules").select("id")\
+            .eq("server_id", server_id).eq("name", mod_name).execute().data or []
+        for mod_row in mod_rows:
+            roles = supabase.table("ticket_module_roles").select("role_id")\
+                .eq("module_id", mod_row["id"]).execute().data or []
+            staff_role_ids.extend(r["role_id"] for r in roles)
+
+    if not _user_can_see_ticket(user, ticket, server_id, staff_role_ids):
+        raise web.HTTPForbidden(reason="Du hast keinen Zugriff auf dieses Ticket.")
 
     # Enrich: resolve creator_id → display name
     creator_id = ticket.get("creator_id", "")
@@ -765,7 +852,7 @@ def _generate_self_signed(cert_path: str, key_path: str) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_error_middleware])
     app.router.add_get("/",                              handle_home)
     app.router.add_get("/login",                         handle_login)
     app.router.add_get("/auth/callback",                 handle_callback)
@@ -775,6 +862,41 @@ def _build_app() -> web.Application:
     app.router.add_get("/api/members",                   handle_api_members)
     app.router.add_get("/static/{filename}",             handle_static)
     return app
+
+
+@web.middleware
+async def _error_middleware(request: web.Request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPForbidden as e:
+        reason = e.reason or "Kein Zugriff."
+        body = f"""
+        <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+          <div style="background:#1e293b;border:1px solid #334155;border-radius:24px;
+            padding:48px 40px;width:100%;max-width:460px;text-align:center">
+            <div style="font-size:3.5rem;margin-bottom:16px">🚫</div>
+            <h1 style="margin:0 0 10px;font-size:1.8rem;color:#f87171">Kein Zugriff</h1>
+            <p style="color:#94a3b8;margin:0 0 28px">{reason}</p>
+            <a href="/dashboard/tickets" style="display:inline-block;background:#38bdf8;color:#0f172a;
+              padding:10px 24px;border-radius:10px;font-weight:700;margin-right:10px">← Dashboard</a>
+            <a href="/logout" style="display:inline-block;background:#334155;color:#f1f5f9;
+              padding:10px 24px;border-radius:10px;font-weight:700">Abmelden</a>
+          </div>
+        </div>"""
+        return _page("403 – Kein Zugriff", body)
+    except web.HTTPNotFound:
+        body = """
+        <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+          <div style="background:#1e293b;border:1px solid #334155;border-radius:24px;
+            padding:48px 40px;width:100%;max-width:460px;text-align:center">
+            <div style="font-size:3.5rem;margin-bottom:16px">🔍</div>
+            <h1 style="margin:0 0 10px;font-size:1.8rem;color:#94a3b8">Nicht gefunden</h1>
+            <p style="color:#64748b;margin:0 0 28px">Diese Seite oder dieses Ticket existiert nicht.</p>
+            <a href="/dashboard/tickets" style="display:inline-block;background:#38bdf8;color:#0f172a;
+              padding:10px 24px;border-radius:10px;font-weight:700">← Dashboard</a>
+          </div>
+        </div>"""
+        return _page("404 – Nicht gefunden", body)
 
 
 async def _run_server() -> None:
