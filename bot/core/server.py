@@ -19,7 +19,7 @@ init_supabase(
     key=os.getenv("SUPABASE_KEY"),
 )
 
-keep_alive()
+
 
 # ── Bot Setup ─────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -62,6 +62,7 @@ async def Ping(ctx):
 
 
 async def main():
+    await keep_alive()
     async with bot:
         for cog in FEATURE_COGS:
             try:

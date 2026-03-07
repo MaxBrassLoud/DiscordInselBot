@@ -210,4 +210,8 @@ __marimo__/
 .idea/
 *.db
 
+*.pem
+
+/cert/
+
 /Tickets

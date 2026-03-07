@@ -5,10 +5,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tickets – Dashboard</title>
 <link rel="stylesheet" href="/static/ticket.css">
+<style>
+  .web-link { color: #818cf8; text-decoration: none; font-size: .82rem; }
+  .web-link:hover { text-decoration: underline; }
+</style>
 </head>
 <body>
 <nav class="navbar">
-  <div class="nav-brand">🎫 Insel Bot – Tickets</div>
+  <div class="nav-brand">
+    <a href="/" style="color:var(--primary);text-decoration:none;margin-right:16px">🏠</a>
+    🎫 Insel Bot – Tickets
+  </div>
   <div class="nav-user">👤 {{ user.username }}</div>
 </nav>
 
@@ -40,7 +47,7 @@
       <input type="text" name="module" placeholder="Modul filtern…" value="{{ filters.get('module','') }}">
       <select name="sort">
         <option value="newest" {% if filters.get('sort','newest')=='newest' %}selected{% endif %}>Neueste zuerst</option>
-        <option value="oldest" {% if filters.get('sort')=='oldest' %}selected{% endif %}>Älteste zuerst</option>
+        <option value="oldest" {% if filters.get('sort')=='oldest'          %}selected{% endif %}>Älteste zuerst</option>
       </select>
       <button type="submit" class="btn btn-primary">Anwenden</button>
       <a href="?server_id={{ server_id }}" class="btn btn-secondary">Zurücksetzen</a>
@@ -52,7 +59,15 @@
     {% if tickets %}
     <table class="ticket-table">
       <thead>
-        <tr><th>#</th><th>Modul</th><th>Ersteller</th><th>Status</th><th>Übernommen</th><th>Erstellt</th><th></th></tr>
+        <tr>
+          <th>#</th>
+          <th>Modul</th>
+          <th>Ersteller</th>
+          <th>Status</th>
+          <th>Übernommen</th>
+          <th>Erstellt</th>
+          <th></th>
+        </tr>
       </thead>
       <tbody>
         {% for t in tickets %}
@@ -60,11 +75,17 @@
           <td><strong>#{{ t.ticket_id }}</strong></td>
           <td><span class="badge badge-module">{{ t.module }}</span></td>
           <td>{{ t.creator_id }}</td>
-          <td><span class="badge {% if t.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
-            {{ '🟢 Offen' if t.status == 'open' else '🔴 Geschlossen' }}</span></td>
+          <td>
+            <span class="badge {% if t.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
+              {{ '🟢 Offen' if t.status == 'open' else '🔴 Geschlossen' }}
+            </span>
+          </td>
           <td>{{ t.claimed_by or '–' }}</td>
           <td class="muted">{{ t.created_at[:16] if t.created_at else '–' }}</td>
-          <td><a href="/dashboard/tickets/{{ t.ticket_id }}?server_id={{ server_id }}" class="btn btn-small btn-primary">Details</a></td>
+          <td>
+            <a href="/dashboard/tickets/{{ t.ticket_id }}?server_id={{ server_id }}"
+               class="btn btn-small btn-primary">Details</a>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

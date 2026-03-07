@@ -7,6 +7,14 @@ from .html_export import save_html_export
 
 logger = get_logger("tickets.manager")
 
+# Base URL for the web dashboard – set via env var WEB_BASE_URL, e.g. https://yourbot.repl.co
+import os
+WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000")
+
+
+def ticket_web_url(server_id: str, ticket_id: int) -> str:
+    return f"{WEB_BASE_URL}/dashboard/tickets/{ticket_id}?server_id={server_id}"
+
 
 class TicketManager:
     """Handles all ticket creation and lifecycle operations."""
@@ -14,7 +22,7 @@ class TicketManager:
     @staticmethod
     async def get_next_ticket_id(server_id: str) -> int:
         supabase = get_supabase()
-        result = supabase.table("ticket_servers").select("ticket_counter").eq("server_id", str(server_id)).execute()
+        result   = supabase.table("ticket_servers").select("ticket_counter").eq("server_id", str(server_id)).execute()
         if not result.data:
             return 1
         counter = result.data[0].get("ticket_counter", 0) + 1
@@ -24,7 +32,7 @@ class TicketManager:
     @staticmethod
     async def get_open_tickets_for_user(server_id: str, user_id: str, module_name: str) -> int:
         supabase = get_supabase()
-        result = supabase.table("tickets").select("ticket_id")\
+        result   = supabase.table("tickets").select("ticket_id")\
             .eq("server_id", str(server_id))\
             .eq("creator_id", str(user_id))\
             .eq("module", module_name)\
@@ -41,6 +49,12 @@ class TicketManager:
         roles  = supabase.table("ticket_module_roles").select("role_id").eq("module_id", module_id).execute()
         module["staff_role_ids"] = [r["role_id"] for r in (roles.data or [])]
         return module
+
+    @staticmethod
+    async def get_server_config(server_id: str) -> dict | None:
+        supabase = get_supabase()
+        result   = supabase.table("ticket_servers").select("*").eq("server_id", str(server_id)).execute()
+        return result.data[0] if result.data else None
 
     @staticmethod
     async def get_server_modules(server_id: str) -> list[dict]:
@@ -118,6 +132,52 @@ class TicketManager:
             "channel_id": str(channel.id),
         }).execute()
 
+        # ── Log-Kanal: Link eintragen ─────────────────────────────────────────
+        server_cfg = await TicketManager.get_server_config(server_id)
+        web_url    = ticket_web_url(server_id, ticket_id)
+
+        if server_cfg and server_cfg.get("log_channel_id"):
+            log_channel = guild.get_channel(int(server_cfg["log_channel_id"]))
+            if log_channel:
+                log_embed = discord.Embed(
+                    title=f"🎫 Neues Ticket #{ticket_id}",
+                    color=discord.Color.blurple(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                log_embed.add_field(name="👤 Ersteller",  value=creator.mention, inline=True)
+                log_embed.add_field(name="📂 Modul",      value=module["name"],  inline=True)
+                log_embed.add_field(name="💬 Kanal",      value=channel.mention, inline=True)
+                log_embed.add_field(name="🌐 Web-Link",   value=f"[Dashboard öffnen]({web_url})", inline=False)
+                log_embed.add_field(name="📝 Beschreibung", value=description[:500], inline=False)
+                try:
+                    await log_channel.send(embed=log_embed)
+                except Exception as e:
+                    logger.error(f"[create_ticket] Log-Kanal Fehler: {e}")
+
+        # ── Staff-Ping Kanal ──────────────────────────────────────────────────
+        if server_cfg and server_cfg.get("staff_ping_channel_id"):
+            ping_channel = guild.get_channel(int(server_cfg["staff_ping_channel_id"]))
+            if ping_channel:
+                role_mentions = " ".join(
+                    f"<@&{rid}>" for rid in module.get("staff_role_ids", [])
+                    if guild.get_role(int(rid))
+                )
+                ping_embed = discord.Embed(
+                    title=f"🔔 Neues Ticket: {module['name']} #{ticket_id}",
+                    description=description[:800],
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                ping_embed.add_field(name="👤 Ersteller", value=creator.mention,  inline=True)
+                ping_embed.add_field(name="💬 Kanal",     value=channel.mention,  inline=True)
+                ping_embed.add_field(name="🌐 Dashboard", value=f"[Ticket öffnen]({web_url})", inline=False)
+                ping_embed.set_footer(text=f"Ticket #{ticket_id}")
+                try:
+                    content = role_mentions if role_mentions else None
+                    await ping_channel.send(content=content, embed=ping_embed)
+                except Exception as e:
+                    logger.error(f"[create_ticket] Staff-Ping Fehler: {e}")
+
         return channel, ticket_id
 
     @staticmethod
@@ -127,11 +187,12 @@ class TicketManager:
         ticket: dict,
         closer: discord.Member,
     ):
-        """Closes ticket: exports HTML, updates DB, deletes channel."""
+        """Closes ticket: exports HTML, updates DB, sends DM with link, deletes channel."""
         supabase  = get_supabase()
         server_id = ticket["server_id"]
         ticket_id = ticket["ticket_id"]
         now       = datetime.now(timezone.utc).isoformat()
+        web_url   = ticket_web_url(server_id, ticket_id)
 
         # ── HTML Export ───────────────────────────────────────────────────────
         messages = load_messages(server_id, ticket_id)
@@ -143,6 +204,51 @@ class TicketManager:
         # ── Supabase aktualisieren ────────────────────────────────────────────
         supabase.table("tickets").update({"status": "closed", "closed_at": now})\
             .eq("ticket_id", ticket_id).eq("server_id", server_id).execute()
+
+        # ── DM an Ersteller & Schließer mit Web-Link ──────────────────────────
+        dm_embed = discord.Embed(
+            title=f"🎫 Ticket #{ticket_id} geschlossen",
+            description=f"Dein Ticket wurde geschlossen. Du kannst den Verlauf im Dashboard einsehen.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        dm_embed.add_field(name="📂 Modul",    value=ticket.get("module", "?"),        inline=True)
+        dm_embed.add_field(name="🔒 Geschlossen von", value=closer.display_name,       inline=True)
+        dm_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
+
+        # DM an Ticket-Ersteller
+        creator_id = ticket.get("creator_id")
+        if creator_id:
+            try:
+                creator = guild.get_member(int(creator_id))
+                if creator and creator.id != closer.id:
+                    await creator.send(embed=dm_embed)
+            except Exception as e:
+                logger.warning(f"[close_ticket] DM an Ersteller fehlgeschlagen: {e}")
+
+        # DM an Schließer (falls nicht der Ersteller)
+        try:
+            await closer.send(embed=dm_embed)
+        except Exception as e:
+            logger.warning(f"[close_ticket] DM an Schließer fehlgeschlagen: {e}")
+
+        # ── Log-Kanal: Ticket als geschlossen markieren ───────────────────────
+        server_cfg = await TicketManager.get_server_config(server_id)
+        if server_cfg and server_cfg.get("log_channel_id"):
+            log_channel = guild.get_channel(int(server_cfg["log_channel_id"]))
+            if log_channel:
+                close_embed = discord.Embed(
+                    title=f"🔒 Ticket #{ticket_id} geschlossen",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                close_embed.add_field(name="🔒 Geschlossen von", value=closer.mention, inline=True)
+                close_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
+                close_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
+                try:
+                    await log_channel.send(embed=close_embed)
+                except Exception as e:
+                    logger.error(f"[close_ticket] Log-Kanal Fehler: {e}")
 
         # ── Kanal löschen ─────────────────────────────────────────────────────
         try:

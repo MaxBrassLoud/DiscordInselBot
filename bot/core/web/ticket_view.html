@@ -8,7 +8,10 @@
 </head>
 <body>
 <nav class="navbar">
-  <div class="nav-brand">🎫 Insel Bot – Tickets</div>
+  <div class="nav-brand">
+    <a href="/" style="color:var(--primary);text-decoration:none;margin-right:16px">🏠</a>
+    🎫 Insel Bot – Tickets
+  </div>
   <div class="nav-user">
     <a href="/dashboard/tickets?server_id={{ server_id }}" class="btn btn-secondary btn-small">← Zurück</a>
     👤 {{ user.username }}
@@ -44,6 +47,12 @@
         <div class="meta-label">Erstellt am</div>
         <div class="meta-value muted">{{ ticket.created_at[:19] if ticket.created_at else '–' }}</div>
       </div>
+      {% if ticket.closed_at %}
+      <div class="meta-item">
+        <div class="meta-label">Geschlossen am</div>
+        <div class="meta-value muted">{{ ticket.closed_at[:19] }}</div>
+      </div>
+      {% endif %}
     </div>
   </div>
 

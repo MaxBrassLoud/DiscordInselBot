@@ -80,7 +80,7 @@ def generate_html_export(ticket: dict, messages: list) -> str:
 
 
 def save_html_export(server_id: str, ticket_id: int, ticket: dict, messages: list) -> Path:
-    from features.tickets.storage import _ticket_dir
+    from bot.features.tickets.storage import _ticket_dir
     html    = generate_html_export(ticket, messages)
     outpath = _ticket_dir(server_id, ticket_id) / "export.html"
     with open(outpath, "w", encoding="utf-8") as f:

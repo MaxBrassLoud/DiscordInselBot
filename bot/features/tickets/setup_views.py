@@ -27,7 +27,6 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
         except ValueError:
             max_t = 1
 
-        # Open staff role picker
         view = ModuleRolePickerView(
             name=self.name.value,
             description=self.description.value,
@@ -48,7 +47,7 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
 class ModuleRolePickerView(discord.ui.View):
     def __init__(self, name: str, description: str, max_tickets: int, modal_question: str, setup_view: "TicketSetupView"):
         super().__init__(timeout=120)
-        self.mod_data = {"name": name, "description": description, "max_tickets": max_tickets, "modal_question": modal_question}
+        self.mod_data   = {"name": name, "description": description, "max_tickets": max_tickets, "modal_question": modal_question}
         self.setup_view = setup_view
 
         role_sel = discord.ui.RoleSelect(placeholder="Staff-Rollen wählen...", min_values=1, max_values=10)
@@ -80,15 +79,17 @@ class TicketSetupView(discord.ui.View):
         self.guild_id              = guild_id
         self.bot                   = bot
         self.pending_modules       = []
-        self.panel_channel_id: str | None = None
-        self.category_id: str | None      = None
+        self.panel_channel_id: str | None  = None
+        self.category_id: str | None       = None
+        self.log_channel_id: str | None    = None   # NEW: Ticket-Log Kanal
+        self.staff_ping_channel_id: str | None = None  # NEW: Staff-Ping Kanal
         self._original_interaction = None
         self._rebuild()
 
     def _rebuild(self):
         self.clear_items()
 
-        # Kanal-Auswahl
+        # Panel-Kanal
         ch_sel = discord.ui.ChannelSelect(
             placeholder="📢 Panel-Kanal (wo das Ticket-Panel erscheint)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -100,7 +101,7 @@ class TicketSetupView(discord.ui.View):
         ch_sel.callback = ch_cb
         self.add_item(ch_sel)
 
-        # Kategorie-Auswahl
+        # Kategorie
         cat_sel = discord.ui.ChannelSelect(
             placeholder="📁 Kategorie für neue Ticket-Kanäle",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.category]
@@ -111,6 +112,30 @@ class TicketSetupView(discord.ui.View):
             await interaction.response.edit_message(embed=self._build_embed(), view=self)
         cat_sel.callback = cat_cb
         self.add_item(cat_sel)
+
+        # Log-Kanal (NEU)
+        log_sel = discord.ui.ChannelSelect(
+            placeholder="📋 Ticket-Log Kanal (Links zu allen Tickets)",
+            min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
+        )
+        async def log_cb(interaction: discord.Interaction):
+            self.log_channel_id = interaction.data["values"][0]
+            self._rebuild()
+            await interaction.response.edit_message(embed=self._build_embed(), view=self)
+        log_sel.callback = log_cb
+        self.add_item(log_sel)
+
+        # Staff-Ping Kanal (NEU)
+        ping_sel = discord.ui.ChannelSelect(
+            placeholder="🔔 Staff-Ping Kanal (Benachrichtigung bei neuem Ticket)",
+            min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
+        )
+        async def ping_cb(interaction: discord.Interaction):
+            self.staff_ping_channel_id = interaction.data["values"][0]
+            self._rebuild()
+            await interaction.response.edit_message(embed=self._build_embed(), view=self)
+        ping_sel.callback = ping_cb
+        self.add_item(ping_sel)
 
         # Modul hinzufügen
         if len(self.pending_modules) < MAX_MODULES:
@@ -150,6 +175,11 @@ class TicketSetupView(discord.ui.View):
                         value=f"<#{self.panel_channel_id}>" if self.panel_channel_id else "*Nicht ausgewählt*", inline=True)
         embed.add_field(name="📁 Kategorie",
                         value=f"<#{self.category_id}>" if self.category_id else "*Nicht ausgewählt*", inline=True)
+        embed.add_field(name="📋 Log-Kanal",
+                        value=f"<#{self.log_channel_id}>" if self.log_channel_id else "*Nicht ausgewählt*", inline=True)
+        embed.add_field(name="🔔 Staff-Ping Kanal",
+                        value=f"<#{self.staff_ping_channel_id}>" if self.staff_ping_channel_id else "*Nicht ausgewählt*", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
         embed.add_field(name="\u200b", value="\u200b", inline=True)
         if self.pending_modules:
             for i, mod in enumerate(self.pending_modules, 1):
@@ -172,9 +202,11 @@ class TicketSetupView(discord.ui.View):
             # ── ticket_servers upsert ─────────────────────────────────────────
             existing = supabase.table("ticket_servers").select("server_id").eq("server_id", guild_id).execute()
             server_data = {
-                "server_id":        guild_id,
-                "category_id":      self.category_id,
-                "panel_channel_id": self.panel_channel_id,
+                "server_id":             guild_id,
+                "category_id":           self.category_id,
+                "panel_channel_id":      self.panel_channel_id,
+                "log_channel_id":        self.log_channel_id,        # NEW
+                "staff_ping_channel_id": self.staff_ping_channel_id, # NEW
             }
             if existing.data:
                 supabase.table("ticket_servers").update(server_data).eq("server_id", guild_id).execute()
@@ -193,10 +225,10 @@ class TicketSetupView(discord.ui.View):
             db_modules = []
             for mod in self.pending_modules:
                 result = supabase.table("ticket_modules").insert({
-                    "server_id":     guild_id,
-                    "name":          mod["name"],
-                    "description":   mod["description"],
-                    "max_tickets":   mod["max_tickets"],
+                    "server_id":      guild_id,
+                    "name":           mod["name"],
+                    "description":    mod["description"],
+                    "max_tickets":    mod["max_tickets"],
                     "modal_question": mod["modal_question"],
                 }).execute()
                 if result.data:
