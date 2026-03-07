@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tickets – Dashboard</title>
+<link rel="stylesheet" href="/static/ticket.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">🎫 Insel Bot – Tickets</div>
+  <div class="nav-user">👤 {{ user.username }}</div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h2>🖥️ Server auswählen</h2>
+    <div class="server-grid">
+      {% for server in servers %}
+      <a href="?server_id={{ server.server_id }}"
+         class="server-btn {% if server_id == server.server_id %}active{% endif %}">
+        {{ server.server_id }}
+      </a>
+      {% else %}
+      <p class="muted">Keine Server gefunden.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if selected %}
+  <div class="card">
+    <h2>🔍 Filter</h2>
+    <form method="GET" class="filter-form">
+      <input type="hidden" name="server_id" value="{{ server_id }}">
+      <select name="status">
+        <option value="">Alle Status</option>
+        <option value="open"   {% if filters.get('status')=='open'   %}selected{% endif %}>Offen</option>
+        <option value="closed" {% if filters.get('status')=='closed' %}selected{% endif %}>Geschlossen</option>
+      </select>
+      <input type="text" name="module" placeholder="Modul filtern…" value="{{ filters.get('module','') }}">
+      <select name="sort">
+        <option value="newest" {% if filters.get('sort','newest')=='newest' %}selected{% endif %}>Neueste zuerst</option>
+        <option value="oldest" {% if filters.get('sort')=='oldest' %}selected{% endif %}>Älteste zuerst</option>
+      </select>
+      <button type="submit" class="btn btn-primary">Anwenden</button>
+      <a href="?server_id={{ server_id }}" class="btn btn-secondary">Zurücksetzen</a>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>📋 Tickets ({{ tickets|length }})</h2>
+    {% if tickets %}
+    <table class="ticket-table">
+      <thead>
+        <tr><th>#</th><th>Modul</th><th>Ersteller</th><th>Status</th><th>Übernommen</th><th>Erstellt</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for t in tickets %}
+        <tr>
+          <td><strong>#{{ t.ticket_id }}</strong></td>
+          <td><span class="badge badge-module">{{ t.module }}</span></td>
+          <td>{{ t.creator_id }}</td>
+          <td><span class="badge {% if t.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
+            {{ '🟢 Offen' if t.status == 'open' else '🔴 Geschlossen' }}</span></td>
+          <td>{{ t.claimed_by or '–' }}</td>
+          <td class="muted">{{ t.created_at[:16] if t.created_at else '–' }}</td>
+          <td><a href="/dashboard/tickets/{{ t.ticket_id }}?server_id={{ server_id }}" class="btn btn-small btn-primary">Details</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Keine Tickets gefunden.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+</body>
+</html>

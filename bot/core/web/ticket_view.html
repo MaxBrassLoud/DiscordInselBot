@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ticket #{{ ticket.ticket_id }} – Dashboard</title>
+<link rel="stylesheet" href="/static/ticket.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">🎫 Insel Bot – Tickets</div>
+  <div class="nav-user">
+    <a href="/dashboard/tickets?server_id={{ server_id }}" class="btn btn-secondary btn-small">← Zurück</a>
+    👤 {{ user.username }}
+  </div>
+</nav>
+
+<div class="container">
+  <!-- Ticket Header -->
+  <div class="card ticket-header">
+    <h1>🎫 Ticket #{{ ticket.ticket_id }}</h1>
+    <div class="ticket-meta-grid">
+      <div class="meta-item">
+        <div class="meta-label">Modul</div>
+        <div class="meta-value"><span class="badge badge-module">{{ ticket.module }}</span></div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Ersteller</div>
+        <div class="meta-value">{{ ticket.creator_name }} ({{ ticket.creator_id }})</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Status</div>
+        <div class="meta-value">
+          <span class="badge {% if ticket.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
+            {{ '🟢 Offen' if ticket.status == 'open' else '🔴 Geschlossen' }}
+          </span>
+        </div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Übernommen von</div>
+        <div class="meta-value">{{ ticket.claimed_by or '–' }}</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Erstellt am</div>
+        <div class="meta-value muted">{{ ticket.created_at[:19] if ticket.created_at else '–' }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Beschreibung -->
+  <div class="card">
+    <h2>📝 Beschreibung</h2>
+    <div class="description-box">{{ ticket.description }}</div>
+  </div>
+
+  <!-- Chatverlauf -->
+  <div class="card">
+    <h2>💬 Chatverlauf ({{ messages|length }} Nachrichten)</h2>
+    {% if messages %}
+    <div class="messages">
+      {% for msg in messages %}
+      <div class="message">
+        <div class="message-meta">
+          <span class="message-user">{{ msg.user }}</span>
+          <span class="message-ts muted">{{ msg.timestamp[:19] if msg.timestamp else '' }}</span>
+        </div>
+        <div class="message-body">{{ msg.message }}</div>
+        {% if msg.attachments %}
+        <div class="message-attachments">
+          {% for att in msg.attachments %}
+          <a href="{{ att }}" target="_blank" class="att-link">📎 Anhang</a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">Keine Nachrichten aufgezeichnet.</p>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>
