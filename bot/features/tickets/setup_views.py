@@ -16,6 +16,11 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
     modal_question = discord.ui.TextInput(label="Modal-Anweisung",
                                           placeholder="Was soll der User beschreiben?",
                                           style=discord.TextStyle.paragraph, required=True, max_length=300)
+    button_emoji = discord.ui.TextInput(
+        label="Button-Emoji  (Unicode oder <:name:id>)",
+        placeholder="🎫  oder  <:support:123456789>  — leer = 🎫",
+        required=False, max_length=100,
+    )
 
     def __init__(self, setup_view: "TicketSetupView"):
         super().__init__()
@@ -27,12 +32,15 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
         except ValueError:
             max_t = 1
 
+        raw_emoji = self.button_emoji.value.strip() or "🎫"
+
         # Go to role + category picker
         view = ModuleRoleAndCategoryPickerView(
             name=self.name.value,
             description=self.description.value,
             max_tickets=max_t,
             modal_question=self.modal_question.value,
+            button_emoji=raw_emoji,
             setup_view=self.setup_view,
         )
         await interaction.response.send_message(
@@ -57,7 +65,7 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
     """
 
     def __init__(self, name: str, description: str, max_tickets: int,
-                 modal_question: str, setup_view: "TicketSetupView"):
+                 modal_question: str, setup_view: "TicketSetupView", button_emoji: str = "🎫"):
         super().__init__(timeout=180)
         self.mod_data = {
             "name":           name,
@@ -65,7 +73,8 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
             "max_tickets":    max_tickets,
             "modal_question": modal_question,
             "staff_role_ids": [],
-            "category_id":    None,   # per-module override
+            "category_id":    None,
+            "button_emoji":   button_emoji,
         }
         self.setup_view     = setup_view
         self._roles_chosen  = False
@@ -343,7 +352,8 @@ class TicketSetupView(discord.ui.View):
                     "description":    mod["description"],
                     "max_tickets":    mod["max_tickets"],
                     "modal_question": mod["modal_question"],
-                    "category_id":    effective_category,   # ← per-module category stored
+                    "category_id":    effective_category,
+                    "button_emoji":   mod.get("button_emoji", "🎫"),
                 }).execute()
 
                 if result.data:
@@ -368,15 +378,24 @@ class TicketSetupView(discord.ui.View):
                 color=discord.Color.blurple()
             )
             for mod in db_modules:
-                cat_note = f" | Kategorie: <#{mod.get('effective_category')}>" if mod.get("effective_category") else ""
-                embed.add_field(name=f"📂 {mod['name']}", value=mod["description"] + cat_note, inline=False)
+                emoji = mod.get("button_emoji") or "🎫"
+                embed.add_field(
+                    name=f"{emoji} {mod['name']}",
+                    value=mod.get("description", "–"),
+                    inline=False,
+                )
 
             panel_view = TicketPanelView(
                 modules=db_modules,
                 category_id=int(self.category_id),
                 bot=self.bot,
             )
-            await panel_channel.send(embed=embed, view=panel_view)
+            panel_msg = await panel_channel.send(embed=embed, view=panel_view)
+
+            # Nachrichten-ID für späteres Bearbeiten in DB speichern
+            supabase.table("ticket_servers").update({
+                "panel_message_id": str(panel_msg.id),
+            }).eq("server_id", guild_id).execute()
 
             for item in self.children:
                 item.disabled = True

@@ -51,7 +51,6 @@ class TicketsCog(commands.Cog):
             for t in tickets:
                 try:
                     module = None
-                    # Find the module for this ticket by name & server
                     mods = supabase.table("ticket_modules")\
                         .select("*")\
                         .eq("server_id", t["server_id"])\
@@ -70,7 +69,6 @@ class TicketsCog(commands.Cog):
                         module=module,
                         bot=self.bot,
                     )
-                    # Restore claimed_by state
                     local = load_ticket(t["server_id"], t["ticket_id"])
                     if local and local.get("claimed_by"):
                         view._claimed_by_id = local["claimed_by"]
@@ -110,6 +108,8 @@ class TicketsCog(commands.Cog):
         except Exception:
             pass
 
+    # ── /ticket_setup ─────────────────────────────────────────────────────────
+
     @app_commands.command(name="ticket_setup", description="Richte das Ticket-System ein")
     async def ticket_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
@@ -118,6 +118,38 @@ class TicketsCog(commands.Cog):
         view = TicketSetupView(guild_id=interaction.guild_id, bot=self.bot)
         view._original_interaction = interaction
         await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
+
+    # ── /ticket_bearbeiten ────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="ticket_bearbeiten",
+        description="Bearbeite das Ticket-System (Module, Kanäle, Kategorie, Panel)",
+    )
+    async def ticket_bearbeiten(self, interaction: discord.Interaction):
+        if not has_admin_rights(interaction):
+            await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+            return
+
+        from .ticket_edit_views import TicketEditMainView
+
+        # Check ticket system exists
+        supabase = get_supabase()
+        srv = supabase.table("ticket_servers").select("server_id")\
+            .eq("server_id", str(interaction.guild_id)).execute()
+        if not srv.data:
+            await interaction.response.send_message(
+                "❌ Das Ticket-System ist noch nicht eingerichtet. Nutze zuerst `/ticket_setup`.",
+                ephemeral=True,
+            )
+            return
+
+        view = TicketEditMainView(guild_id=interaction.guild_id, bot=self.bot)
+        view._original_interaction = interaction
+        await interaction.response.send_message(
+            embed=view.build_embed(), view=view, ephemeral=True
+        )
+
+    # ── /ticket_info ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="ticket_info", description="Zeigt Informationen über das Ticket-System")
     async def ticket_info(self, interaction: discord.Interaction):
@@ -136,13 +168,13 @@ class TicketsCog(commands.Cog):
             if server.data:
                 s = server.data[0]
                 embed.add_field(name="📢 Panel-Kanal",
-                                value=f"<#{s.get('panel_channel_id', '?')}>" if s.get("panel_channel_id") else "*nicht gesetzt*", inline=True)
+                                value=f"<#{s.get('panel_channel_id')}>" if s.get("panel_channel_id") else "*nicht gesetzt*", inline=True)
                 embed.add_field(name="📁 Kategorie",
-                                value=f"<#{s.get('category_id', '?')}>" if s.get("category_id") else "*nicht gesetzt*", inline=True)
+                                value=f"<#{s.get('category_id')}>" if s.get("category_id") else "*nicht gesetzt*", inline=True)
                 embed.add_field(name="📋 Log-Kanal",
-                                value=f"<#{s.get('log_channel_id', '?')}>" if s.get("log_channel_id") else "*nicht gesetzt*", inline=True)
+                                value=f"<#{s.get('log_channel_id')}>" if s.get("log_channel_id") else "*nicht gesetzt*", inline=True)
                 embed.add_field(name="🔔 Staff-Ping Kanal",
-                                value=f"<#{s.get('staff_ping_channel_id', '?')}>" if s.get("staff_ping_channel_id") else "*nicht gesetzt*", inline=True)
+                                value=f"<#{s.get('staff_ping_channel_id')}>" if s.get("staff_ping_channel_id") else "*nicht gesetzt*", inline=True)
                 embed.add_field(name="🔢 Tickets gesamt",
                                 value=str(s.get("ticket_counter", 0)), inline=True)
             else:
@@ -150,13 +182,18 @@ class TicketsCog(commands.Cog):
 
             if modules.data:
                 for mod in modules.data:
-                    embed.add_field(name=f"📂 {mod['name']}", value=f"Max/User: {mod['max_tickets']}", inline=True)
+                    cat = f"<#{mod['category_id']}>" if mod.get("category_id") else "*global*"
+                    embed.add_field(
+                        name=f"📂 {mod['name']}",
+                        value=f"Max/User: {mod['max_tickets']} | Kategorie: {cat}",
+                        inline=True,
+                    )
 
             if tickets.data:
                 open_t   = sum(1 for t in tickets.data if t["status"] == "open")
                 closed_t = sum(1 for t in tickets.data if t["status"] == "closed")
-                embed.add_field(name="📊 Offene Tickets",       value=str(open_t),   inline=True)
-                embed.add_field(name="✅ Geschlossene Tickets",  value=str(closed_t), inline=True)
+                embed.add_field(name="📊 Offene Tickets",      value=str(open_t),   inline=True)
+                embed.add_field(name="✅ Geschlossene Tickets", value=str(closed_t), inline=True)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:

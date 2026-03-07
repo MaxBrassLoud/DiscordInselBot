@@ -83,9 +83,22 @@ class TicketPanelView(discord.ui.View):
 
     def _build_buttons(self):
         for mod in self.modules[:25]:
+            raw_emoji = mod.get("button_emoji") or "🎫"
+            # Parse custom emoji (<:name:id>) into PartialEmoji so discord.py accepts it
+            if raw_emoji.startswith("<") and raw_emoji.endswith(">"):
+                try:
+                    animated = raw_emoji.startswith("<a:")
+                    inner    = raw_emoji[3:].rstrip(">") if animated else raw_emoji[2:].rstrip(">")
+                    parts    = inner.rsplit(":", 1)
+                    parsed_emoji = discord.PartialEmoji(name=parts[0], id=int(parts[1]), animated=animated)
+                except Exception:
+                    parsed_emoji = "🎫"
+            else:
+                parsed_emoji = raw_emoji
+
             btn = discord.ui.Button(
                 label=mod["name"][:80],
-                emoji="🎫",
+                emoji=parsed_emoji,
                 style=discord.ButtonStyle.primary,
                 custom_id=f"ticket_open_{mod['id']}",
             )
