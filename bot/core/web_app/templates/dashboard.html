@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashboard – Insel Bot</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-icon">🎫</div>
+      <div class="sidebar-brand-name">Insel Bot</div>
+      <div class="sidebar-brand-status">
+        <span class="dot"></span> System aktiv
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Navigation</div>
+
+      {% set sid_param = ("?server_id=" ~ server_id) if server_id else "" %}
+
+      <a href="/dashboard/tickets{{ sid_param }}"
+         class="nav-item {% if active_tab == 'tickets' %}active{% endif %}">
+        <span class="nav-icon">🎫</span>
+        Tickets
+      </a>
+
+      <a href="/dashboard/applications{{ sid_param }}"
+         class="nav-item {% if active_tab == 'applications' %}active{% endif %}">
+        <span class="nav-icon">⛏️</span>
+        Bewerbungen
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <img src="{{ user.avatar }}" alt="{{ user.display_name }}">
+        <span class="user-chip-name">{{ user.display_name or user.username }}</span>
+        <a href="/logout" class="logout-link" title="Abmelden">⏻</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ────────────────────────────────────────────────────── -->
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-title">
+        {% if active_tab == 'tickets' %}🎫 Ticket Dashboard{% else %}⛏️ Bewerbungs Dashboard{% endif %}
+      </div>
+      <div class="topbar-right">
+        {% if selected %}
+          <span class="badge badge-module">{{ selected.guild_name or server_id }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- Server Selection -->
+      <div class="card">
+        <div class="card-title">🖥️ Server auswählen</div>
+        <div class="server-grid">
+          {% for server in servers %}
+          <a href="?server_id={{ server.server_id }}"
+             class="server-btn {% if server_id == server.server_id %}active{% endif %}">
+            {% if server.guild_icon %}
+              <img src="{{ server.guild_icon }}" alt="" class="server-icon">
+            {% else %}
+              <span class="server-icon-placeholder">{{ (server.guild_name or server.server_id)[:1].upper() }}</span>
+            {% endif %}
+            {{ server.guild_name or server.server_id }}
+          </a>
+          {% else %}
+          <p class="muted">Kein Server verfügbar oder kein Zugriff.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      {% if selected %}
+
+      <!-- Tab Switch -->
+      <div class="tabs">
+        <a href="/dashboard/tickets?server_id={{ server_id }}"
+           class="tab {% if active_tab == 'tickets' %}active{% endif %}">
+          🎫 Tickets
+          {% if active_tab == 'tickets' %}({{ tickets|length }}){% endif %}
+        </a>
+        <a href="/dashboard/applications?server_id={{ server_id }}"
+           class="tab {% if active_tab == 'applications' %}active{% endif %}">
+          ⛏️ Bewerbungen
+          {% if active_tab == 'applications' %}({{ applications|length }}){% endif %}
+        </a>
+      </div>
+
+      <!-- Filter Card -->
+      <div class="card">
+        <div class="card-title">🔍 Filter</div>
+        <form method="GET" id="filterForm" class="filter-row">
+          <input type="hidden" name="server_id" value="{{ server_id }}">
+          <input type="hidden" name="creator_id" id="creatorIdInput" value="{{ filters.get('creator_id','') }}">
+
+          <!-- Status -->
+          <div class="filter-group">
+            <div class="filter-label">Status</div>
+            <select name="status">
+              <option value="">Alle</option>
+              <option value="open"     {% if filters.get('status')=='open'     %}selected{% endif %}>
+                {% if active_tab=='tickets' %}Offen{% else %}Offen{% endif %}
+              </option>
+              <option value="closed"   {% if filters.get('status')=='closed'   %}selected{% endif %} {% if active_tab=='applications' %}style="display:none"{% endif %}>Geschlossen</option>
+              {% if active_tab == 'applications' %}
+              <option value="accepted" {% if filters.get('status')=='accepted' %}selected{% endif %}>Angenommen</option>
+              <option value="rejected" {% if filters.get('status')=='rejected' %}selected{% endif %}>Abgelehnt</option>
+              {% endif %}
+            </select>
+          </div>
+
+          {% if active_tab == 'tickets' %}
+          <!-- Module filter -->
+          <div class="filter-group">
+            <div class="filter-label">Modul</div>
+            <input type="text" name="module" placeholder="z.B. Support"
+                   value="{{ filters.get('module','') }}" style="width:140px">
+          </div>
+          {% endif %}
+
+          <!-- Sort -->
+          <div class="filter-group">
+            <div class="filter-label">Sortierung</div>
+            <select name="sort">
+              <option value="newest" {% if filters.get('sort','newest')=='newest' %}selected{% endif %}>Neueste zuerst</option>
+              <option value="oldest" {% if filters.get('sort')=='oldest'          %}selected{% endif %}>Älteste zuerst</option>
+            </select>
+          </div>
+
+          <!-- User Search -->
+          <div class="filter-group">
+            <div class="filter-label">Benutzer</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="user-search-wrap">
+                <input type="text" id="userSearchInput"
+                       class="user-search-input {% if selected_creator %}has-value{% endif %}"
+                       placeholder="Name eingeben…" autocomplete="off" value="">
+                <div class="user-dropdown" id="userDropdown">
+                  <div class="user-dropdown-loading">Suche läuft…</div>
+                </div>
+              </div>
+              {% if selected_creator %}
+              <span class="selected-chip" id="selectedChip">
+                <img src="{{ selected_creator.avatar }}" alt="">
+                <span>{{ selected_creator.display }}</span>
+                <span class="chip-clear" onclick="clearUserFilter()">✕</span>
+              </span>
+              {% else %}
+              <span class="selected-chip" id="selectedChip" style="display:none">
+                <img src="" alt="" id="chipAvatar">
+                <span id="chipName"></span>
+                <span class="chip-clear" onclick="clearUserFilter()">✕</span>
+              </span>
+              {% endif %}
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="filter-group" style="flex-direction:row;gap:8px;align-self:flex-end">
+            <button type="submit" class="btn btn-primary btn-sm">Anwenden</button>
+            <a href="?server_id={{ server_id }}" class="btn btn-ghost btn-sm">Reset</a>
+          </div>
+        </form>
+      </div>
+
+      <!-- ── TICKETS TABLE ── -->
+      {% if active_tab == 'tickets' %}
+      <div class="card">
+        <div class="card-title">
+          📋 Tickets
+          <span style="font-size:.82rem;color:var(--text-3);font-weight:400;margin-left:4px">({{ tickets|length }})</span>
+          {% if selected_creator %}
+          <span style="font-size:.82rem;color:var(--text-2);font-weight:400;margin-left:8px">
+            von {{ selected_creator.display }}
+          </span>
+          {% endif %}
+        </div>
+        {% if tickets %}
+        <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Modul</th>
+              <th>Ersteller</th>
+              <th>Status</th>
+              <th>Übernommen</th>
+              <th>Erstellt</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in tickets %}
+            <tr>
+              <td><span class="ticket-id">#{{ t.ticket_id }}</span></td>
+              <td><span class="badge badge-module">{{ t.module }}</span></td>
+              <td>
+                <div class="creator-cell">
+                  {% if t.creator_avatar %}
+                    <img src="{{ t.creator_avatar }}" alt="" class="creator-avatar">
+                  {% endif %}
+                  <span>{{ t.creator_display or t.creator_id }}</span>
+                </div>
+              </td>
+              <td>
+                <span class="badge {% if t.status=='open' %}badge-open{% else %}badge-closed{% endif %}">
+                  {{ '🟢 Offen' if t.status=='open' else '🔴 Geschlossen' }}
+                </span>
+              </td>
+              <td class="muted">{{ t.claimed_by or '–' }}</td>
+              <td class="muted" style="font-family:'JetBrains Mono',monospace;font-size:.82rem">
+                {{ t.created_at[:16] if t.created_at else '–' }}
+              </td>
+              <td>
+                <a href="/dashboard/tickets/{{ t.ticket_id }}?server_id={{ server_id }}"
+                   class="btn btn-primary btn-sm">Details →</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-icon">🎫</div>
+          <strong>Keine Tickets gefunden</strong>
+          <p>Passe die Filter an oder wähle einen anderen Server.</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- ── APPLICATIONS TABLE ── -->
+      {% else %}
+      <div class="card">
+        <div class="card-title">
+          ⛏️ Bewerbungen
+          <span style="font-size:.82rem;color:var(--text-3);font-weight:400;margin-left:4px">({{ applications|length }})</span>
+          {% if selected_creator %}
+          <span style="font-size:.82rem;color:var(--text-2);font-weight:400;margin-left:8px">
+            von {{ selected_creator.display }}
+          </span>
+          {% endif %}
+        </div>
+        {% if applications %}
+        <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Minecraft Name</th>
+              <th>Discord</th>
+              <th>Status</th>
+              <th>Übernommen</th>
+              <th>Eingereicht</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in applications %}
+            <tr>
+              <td><span class="ticket-id">#{{ a.app_id }}</span></td>
+              <td>
+                <span style="font-weight:600;color:var(--primary)">⛏️ {{ a.minecraft_name }}</span>
+              </td>
+              <td>
+                <div class="creator-cell">
+                  {% if a.creator_avatar %}
+                    <img src="{{ a.creator_avatar }}" alt="" class="creator-avatar">
+                  {% endif %}
+                  <span>{{ a.creator_display or a.creator_id }}</span>
+                </div>
+              </td>
+              <td>
+                {% if a.status == 'open' %}
+                  <span class="badge badge-open">⏳ Offen</span>
+                {% elif a.status == 'accepted' %}
+                  <span class="badge badge-accepted">✅ Angenommen</span>
+                {% else %}
+                  <span class="badge badge-rejected">❌ Abgelehnt</span>
+                {% endif %}
+              </td>
+              <td class="muted">{{ a.claimed_by or '–' }}</td>
+              <td class="muted" style="font-family:'JetBrains Mono',monospace;font-size:.82rem">
+                {{ a.created_at[:16] if a.created_at else '–' }}
+              </td>
+              <td>
+                <a href="/dashboard/applications/{{ a.app_id }}?server_id={{ server_id }}"
+                   class="btn btn-primary btn-sm">Details →</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-icon">⛏️</div>
+          <strong>Keine Bewerbungen gefunden</strong>
+          <p>Passe die Filter an oder wähle einen anderen Server.</p>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% endif %}{# /if selected #}
+    </div>{# /content #}
+  </main>
+</div>
+
+<script>
+(function(){
+  const serverId   = {{ ('"' ~ server_id ~ '"') if server_id else 'null' }};
+  const input      = document.getElementById('userSearchInput');
+  const dropdown   = document.getElementById('userDropdown');
+  const chip       = document.getElementById('selectedChip');
+  const chipAvatar = document.getElementById('chipAvatar');
+  const chipName   = document.getElementById('chipName');
+  const creatorId  = document.getElementById('creatorIdInput');
+  if (!input) return;
+
+  let debounce=null, focusIdx=-1, items=[];
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = input.value.trim();
+    if (q.length < 2){ hideDD(); return; }
+    showLoading();
+    debounce = setTimeout(()=>fetch(q), 280);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (!dropdown.classList.contains('visible')) return;
+    if (e.key==='ArrowDown'){ e.preventDefault(); focusIdx=Math.min(focusIdx+1,items.length-1); renderFocus(); }
+    else if (e.key==='ArrowUp'){ e.preventDefault(); focusIdx=Math.max(focusIdx-1,0); renderFocus(); }
+    else if (e.key==='Enter'){ e.preventDefault(); if(focusIdx>=0&&items[focusIdx]) select(items[focusIdx]); }
+    else if (e.key==='Escape') hideDD();
+  });
+
+  document.addEventListener('click', e => {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) hideDD();
+  });
+
+  async function fetch(q){
+    if(!serverId){ hideDD(); return; }
+    try {
+      const data = await window.fetch(`/api/members?server_id=${encodeURIComponent(serverId)}&q=${encodeURIComponent(q)}`).then(r=>r.json());
+      items=data; focusIdx=-1; renderDD(data);
+    } catch { dropdown.innerHTML='<div class="user-dropdown-empty">❌ Fehler</div>'; }
+  }
+
+  function renderDD(its){
+    dropdown.innerHTML='';
+    if(!its.length){ dropdown.innerHTML='<div class="user-dropdown-empty">Keine Mitglieder gefunden</div>'; }
+    else its.forEach((m,i)=>{
+      const el=document.createElement('div');
+      el.className='user-dropdown-item'; el.dataset.index=i;
+      el.innerHTML=`<img src="${m.avatar}" alt=""><div><div class="uname">${esc(m.display)}</div>${m.username&&m.username!==m.display?`<div class="utag">@${esc(m.username)}</div>`:''}</div>`;
+      el.addEventListener('click',()=>select(m));
+      el.addEventListener('mouseenter',()=>{ focusIdx=i; renderFocus(); });
+      dropdown.appendChild(el);
+    });
+    dropdown.classList.add('visible');
+  }
+
+  function renderFocus(){ dropdown.querySelectorAll('.user-dropdown-item').forEach((el,i)=>el.classList.toggle('focused',i===focusIdx)); }
+  function showLoading(){ dropdown.innerHTML='<div class="user-dropdown-loading">Suche läuft…</div>'; dropdown.classList.add('visible'); }
+  function hideDD(){ dropdown.classList.remove('visible'); focusIdx=-1; }
+
+  function select(m){
+    hideDD(); input.value=''; creatorId.value=m.id;
+    if(chipAvatar) chipAvatar.src=m.avatar;
+    if(chipName) chipName.textContent=m.display;
+    chip.style.display='inline-flex';
+    input.classList.add('has-value');
+  }
+
+  window.clearUserFilter=function(){
+    creatorId.value=''; chip.style.display='none';
+    input.value=''; input.classList.remove('has-value');
+    document.getElementById('filterForm').submit();
+  };
+
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+})();
+</script>
+</body>
+</html>

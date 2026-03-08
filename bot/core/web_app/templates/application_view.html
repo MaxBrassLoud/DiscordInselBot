@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bewerbung #{{ app.app_id }} – Insel Bot</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-icon">🎫</div>
+      <div class="sidebar-brand-name">Insel Bot</div>
+      <div class="sidebar-brand-status">
+        <span class="dot"></span> System aktiv
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Navigation</div>
+      {% set sid_param = ("?server_id=" ~ server_id) if server_id else "" %}
+      <a href="/dashboard/tickets{{ sid_param }}" class="nav-item">
+        <span class="nav-icon">🎫</span> Tickets
+      </a>
+      <a href="/dashboard/applications{{ sid_param }}" class="nav-item active">
+        <span class="nav-icon">⛏️</span> Bewerbungen
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <img src="{{ user.avatar }}" alt="{{ user.display_name }}">
+        <span class="user-chip-name">{{ user.display_name or user.username }}</span>
+        <a href="/logout" class="logout-link" title="Abmelden">⏻</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ─────────────────────────────────────────────────────────────── -->
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-title">
+        <a href="/dashboard/applications{{ ('?server_id=' ~ server_id) if server_id else '' }}"
+           style="color:var(--text-2);font-size:.9rem;font-weight:500">← Bewerbungen</a>
+        <span style="margin:0 8px;color:var(--text-3)">/</span>
+        Bewerbung <span style="color:var(--primary);font-family:'JetBrains Mono',monospace">#{{ app.app_id }}</span>
+      </div>
+      <div class="topbar-right">
+        {% if app.status == 'open' %}
+          <span class="badge badge-open">⏳ Offen</span>
+        {% elif app.status == 'accepted' %}
+          <span class="badge badge-accepted">✅ Angenommen</span>
+        {% else %}
+          <span class="badge badge-rejected">❌ Abgelehnt</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- Info Grid -->
+      <div class="info-grid">
+        <div class="info-box">
+          <div class="info-label">Bewerbungs-ID</div>
+          <div class="info-value" style="font-family:'JetBrains Mono',monospace;color:var(--primary)">#{{ app.app_id }}</div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">Minecraft Name</div>
+          <div class="info-value" style="color:var(--primary)">⛏️ {{ app.minecraft_name or '–' }}</div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">Status</div>
+          <div class="info-value">
+            {% if app.status == 'open' %}
+              <span class="badge badge-open">⏳ Offen</span>
+            {% elif app.status == 'accepted' %}
+              <span class="badge badge-accepted">✅ Angenommen</span>
+            {% else %}
+              <span class="badge badge-rejected">❌ Abgelehnt</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">Eingereicht</div>
+          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
+            {{ app.created_at[:16] if app.created_at else '–' }}
+          </div>
+        </div>
+        {% if app.reviewed_at %}
+        <div class="info-box">
+          <div class="info-label">Entschieden</div>
+          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
+            {{ app.reviewed_at[:16] }}
+          </div>
+        </div>
+        {% endif %}
+        {% if app.claimed_by %}
+        <div class="info-box">
+          <div class="info-label">Bearbeitet von</div>
+          <div class="info-value">{{ app.claimed_by }}</div>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Bewerber -->
+      <div class="card">
+        <div class="card-title">👤 Bewerber</div>
+        <div class="creator-cell" style="font-size:1rem">
+          {% if app.creator_avatar %}
+            <img src="{{ app.creator_avatar }}" alt="" class="creator-avatar" style="width:36px;height:36px">
+          {% endif %}
+          <div>
+            <div style="font-weight:700;font-size:.95rem">{{ app.creator_display or app.creator_id }}</div>
+            <div style="font-size:.78rem;color:var(--text-3);font-family:'JetBrains Mono',monospace">
+              {{ app.creator_id }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bewerbungstext -->
+      {% if app.content or app.application_text %}
+      <div class="card">
+        <div class="card-title">📋 Bewerbungstext</div>
+        <div class="desc-box">{{ app.content or app.application_text }}</div>
+      </div>
+      {% endif %}
+
+      <!-- Antworten / Fragen -->
+      {% if app.answers %}
+      <div class="card">
+        <div class="card-title">❓ Antworten</div>
+        {% for item in app.answers %}
+        <div style="margin-bottom:16px">
+          <div style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--text-3);margin-bottom:6px">
+            {{ item.question }}
+          </div>
+          <div class="desc-box" style="border-left-color:var(--primary)">{{ item.answer }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- Ablehnungsgrund -->
+      {% if app.status == 'rejected' and app.rejection_reason %}
+      <div class="card" style="border-color:var(--red-b)">
+        <div class="card-title" style="color:var(--red)">❌ Ablehnungsgrund</div>
+        <div class="desc-box" style="border-left-color:var(--red)">{{ app.rejection_reason }}</div>
+      </div>
+      {% endif %}
+
+      <!-- Bewerbungsverlauf / Nachrichten -->
+      {% if messages %}
+      <div class="card">
+        <div class="card-title">
+          💬 Verlauf
+          <span style="font-size:.82rem;color:var(--text-3);font-weight:400;margin-left:4px">({{ messages|length }})</span>
+        </div>
+        <div class="messages-list">
+          {% for msg in messages %}
+          <div class="message-item">
+            <div class="message-avatar">
+              {% if msg.author_avatar %}
+                <img src="{{ msg.author_avatar }}" alt="" style="width:36px;height:36px;border-radius:50%">
+              {% else %}
+                {{ (msg.author_display or '?')[:1].upper() }}
+              {% endif %}
+            </div>
+            <div class="message-body">
+              <div class="message-meta">
+                <span class="message-author">{{ msg.author_display or msg.author_id }}</span>
+                <span class="message-time">{{ msg.created_at[:16] if msg.created_at else '' }}</span>
+              </div>
+              <div class="message-content">{{ msg.content }}</div>
+              {% if msg.attachments %}
+              <div style="margin-top:6px">
+                {% for att in msg.attachments %}
+                <a href="{{ att.url }}" target="_blank" class="attachment-link">📎 {{ att.filename or 'Anhang' }}</a>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </main>
+</div>
+</body>
+</html>
