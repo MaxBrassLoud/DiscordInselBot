@@ -35,6 +35,7 @@ FEATURE_COGS = [
     "bot.features.welcomer.cog",
     "bot.features.rollen.cog",
     "bot.features.tickets.cog",
+    "bot.features.applications.cog",
 ]
 
 

@@ -419,6 +419,10 @@ def _render_home(user: dict | None) -> web.Response:
             background:#38bdf8;color:#0f172a;padding:10px 22px;
             border-radius:12px;font-size:.95rem;font-weight:700">
             🎫 Ticket Dashboard</a>
+          <a href="/dashboard/applications" style="display:inline-flex;align-items:center;gap:8px;
+            background:#4ade80;color:#0f172a;padding:10px 22px;
+            border-radius:12px;font-size:.95rem;font-weight:700">
+            ⛏️ Bewerbungen</a>
         </div>"""
     else:
         topbar = """
@@ -851,16 +855,132 @@ def _generate_self_signed(cert_path: str, key_path: str) -> None:
 # APP FACTORY + KEEP-ALIVE
 # ═════════════════════════════════════════════════════════════════════════════
 
+async def handle_application_list(request: web.Request) -> web.Response:
+    sess = _get_session(request)
+    if "user" not in sess:
+        raise web.HTTPFound(f"/login?next={request.rel_url}")
+
+    from bot.core.supabase_client import get_supabase
+    user     = sess["user"]
+    supabase = get_supabase()
+
+    # Load application servers accessible to this user
+    raw_servers = supabase.table("application_servers").select("*").execute().data or []
+    servers = []
+    for srv in raw_servers:
+        sid = srv.get("server_id", "")
+        if not _user_has_server_access(user, sid):
+            continue
+        guild = await _cached_guild_info(sid)
+        srv["guild_name"] = guild.get("name", sid) if guild else sid
+        srv["guild_icon"] = _guild_icon_url(guild) if guild else None
+        servers.append(srv)
+
+    server_id   = request.rel_url.query.get("server_id")
+    applications = []
+    selected    = None
+
+    if server_id:
+        selected = next((s for s in servers if s["server_id"] == server_id), None)
+        if selected is None:
+            raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
+
+        q = supabase.table("applications").select("*").eq("server_id", server_id)
+        status_filter = request.rel_url.query.get("status")
+        if status_filter:
+            q = q.eq("status", status_filter)
+        if request.rel_url.query.get("creator_id"):
+            q = q.eq("creator_id", request.rel_url.query["creator_id"])
+        sort = request.rel_url.query.get("sort", "newest")
+        q = q.order("created_at", desc=(sort != "oldest"))
+        raw_apps = q.execute().data or []
+
+        # Enrich with display names
+        member_cache: dict[str, dict] = {}
+        enriched = []
+        for a in raw_apps:
+            cid = a.get("creator_id", "")
+            if cid and cid not in member_cache:
+                member_cache[cid] = await _get_member(server_id, cid)
+            m = member_cache.get(cid)
+            a["creator_display"] = _member_display_name(m) if m else cid
+            a["creator_avatar"]  = _member_avatar_url(m) if m else None
+            enriched.append(a)
+        applications = enriched
+
+    selected_creator = None
+    if request.rel_url.query.get("creator_id") and server_id:
+        cid = request.rel_url.query["creator_id"]
+        m = await _get_member(server_id, cid)
+        if m:
+            selected_creator = {"id": cid, "display": _member_display_name(m), "avatar": _member_avatar_url(m)}
+
+    return _render_template(
+        "application_list.html",
+        user=user, servers=servers, applications=applications,
+        selected=selected, server_id=server_id,
+        filters=request.rel_url.query,
+        selected_creator=selected_creator,
+    )
+
+
+async def handle_application_detail(request: web.Request) -> web.Response:
+    sess = _get_session(request)
+    if "user" not in sess:
+        raise web.HTTPFound(f"/login?next={request.rel_url}")
+
+    from bot.features.applications.manager import load_application, load_app_messages
+    from bot.core.supabase_client import get_supabase
+    user      = sess["user"]
+    app_id    = int(request.match_info["app_id"])
+    server_id = request.rel_url.query.get("server_id", "")
+
+    if not _user_has_server_access(user, server_id):
+        raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
+
+    app = load_application(server_id, app_id)
+    if not app:
+        raise web.HTTPNotFound()
+
+    # Permission: creator or staff
+    supabase = get_supabase()
+    cfg_r = supabase.table("application_servers").select("staff_role_ids").eq("server_id", server_id).execute()
+    staff_role_ids = []
+    if cfg_r.data:
+        staff_role_ids = [r.strip() for r in (cfg_r.data[0].get("staff_role_ids") or "").split(",") if r.strip()]
+
+    if not _user_can_see_ticket(user, {"creator_id": app.get("creator_id")}, server_id, staff_role_ids):
+        raise web.HTTPForbidden(reason="Du hast keinen Zugriff auf diese Bewerbung.")
+
+    # Enrich creator
+    creator_id = app.get("creator_id", "")
+    if creator_id:
+        m = await _get_member(server_id, creator_id)
+        app["creator_display"] = _member_display_name(m) if m else app.get("creator_name", creator_id)
+        app["creator_avatar"]  = _member_avatar_url(m) if m else None
+    else:
+        app["creator_display"] = app.get("creator_name", "Unbekannt")
+        app["creator_avatar"]  = None
+
+    messages = load_app_messages(server_id, app_id)
+    return _render_template(
+        "application_view.html",
+        user=user, app=app, messages=messages, server_id=server_id,
+    )
+
+
 def _build_app() -> web.Application:
     app = web.Application(middlewares=[_error_middleware])
-    app.router.add_get("/",                              handle_home)
-    app.router.add_get("/login",                         handle_login)
-    app.router.add_get("/auth/callback",                 handle_callback)
-    app.router.add_get("/logout",                        handle_logout)
-    app.router.add_get("/dashboard/tickets",             handle_ticket_list)
-    app.router.add_get("/dashboard/tickets/{ticket_id}", handle_ticket_detail)
-    app.router.add_get("/api/members",                   handle_api_members)
-    app.router.add_get("/static/{filename}",             handle_static)
+    app.router.add_get("/",                                    handle_home)
+    app.router.add_get("/login",                               handle_login)
+    app.router.add_get("/auth/callback",                       handle_callback)
+    app.router.add_get("/logout",                              handle_logout)
+    app.router.add_get("/dashboard/tickets",                   handle_ticket_list)
+    app.router.add_get("/dashboard/tickets/{ticket_id}",       handle_ticket_detail)
+    app.router.add_get("/dashboard/applications",              handle_application_list)
+    app.router.add_get("/dashboard/applications/{app_id}",     handle_application_detail)
+    app.router.add_get("/api/members",                         handle_api_members)
+    app.router.add_get("/static/{filename}",                   handle_static)
     return app
 
 

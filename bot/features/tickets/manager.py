@@ -324,22 +324,24 @@ class TicketManager:
         supabase.table("tickets").update({"status": "closed", "closed_at": now}) \
             .eq("ticket_id", ticket_id).eq("server_id", server_id).execute()
 
-        # ── DM an Ticket-Ersteller: Log als HTML-Datei ────────────────────────
+        # ── DM an Ticket-Ersteller: Log-Datei + Dashboard-Link ───────────────
         creator_id = ticket.get("creator_id")
         if creator_id:
             try:
                 creator = guild.get_member(int(creator_id))
                 if creator:
+                    import io
                     html_bytes = _build_log_html(ticket, messages, closer)
-                    file = discord.File(
-                        fp=__import__("io").BytesIO(html_bytes),
+                    log_file = discord.File(
+                        fp=io.BytesIO(html_bytes),
                         filename=f"ticket-{ticket_id}-log.html",
                     )
                     creator_embed = discord.Embed(
                         title=f"🎫 Dein Ticket #{ticket_id} wurde geschlossen",
                         description=(
                             "Im Anhang findest du das vollständige Gesprächs-Log als HTML-Datei.\n"
-                            "Öffne die Datei in deinem Browser um das Gespräch zu lesen."
+                            "Öffne die Datei in deinem Browser um das Gespräch zu lesen.\n\n"
+                            f"[📊 Im Dashboard ansehen]({web_url})"
                         ),
                         color=discord.Color.blurple(),
                         timestamp=datetime.now(timezone.utc),
@@ -348,25 +350,9 @@ class TicketManager:
                     creator_embed.add_field(name="🔒 Geschlossen von", value=closer.display_name, inline=True)
                     creator_embed.add_field(name="💬 Nachrichten", value=str(len(messages)), inline=True)
                     creator_embed.set_footer(text=f"Server: {guild.name}")
-                    await creator.send(embed=creator_embed, file=file)
+                    await creator.send(embed=creator_embed, file=log_file)
             except Exception as e:
                 logger.warning(f"[close_ticket] DM an Ersteller fehlgeschlagen: {e}")
-
-        # ── DM an Schließer: Dashboard-Link (Staff) ───────────────────────────
-        try:
-            staff_embed = discord.Embed(
-                title=f"🔒 Ticket #{ticket_id} geschlossen",
-                description="Das Ticket wurde erfolgreich geschlossen.",
-                color=discord.Color.green(),
-                timestamp=datetime.now(timezone.utc),
-            )
-            staff_embed.add_field(name="📂 Modul", value=ticket.get("module", "?"), inline=True)
-            staff_embed.add_field(name="🌐 Web-Link", value=f"[Dashboard öffnen]({web_url})", inline=False)
-            # Only send to closer if they're not the creator (avoid double DM)
-            if str(closer.id) != str(creator_id):
-                await closer.send(embed=staff_embed)
-        except Exception as e:
-            logger.warning(f"[close_ticket] DM an Schließer fehlgeschlagen: {e}")
 
         # ── Log-Kanal ─────────────────────────────────────────────────────────
         server_cfg = await TicketManager.get_server_config(server_id)

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bewerbung #{{ app.app_id }} – Dashboard</title>
+<link rel="stylesheet" href="/static/ticket.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">
+    <a href="/" style="color:var(--primary);text-decoration:none;margin-right:16px">🏠</a>
+    <a href="/dashboard/applications?server_id={{ server_id }}"
+       style="color:var(--muted);text-decoration:none;margin-right:16px;font-size:.9rem">← Bewerbungen</a>
+    Bewerbung #{{ app.app_id }}
+  </div>
+  <div class="nav-user">👤 {{ user.display_name or user.username }}</div>
+</nav>
+
+<div class="container">
+
+  <!-- Header Card -->
+  <div class="card">
+    <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          {% if app.creator_avatar %}
+            <img src="{{ app.creator_avatar }}" alt=""
+                 style="width:48px;height:48px;border-radius:50%;border:2px solid #4ade80">
+          {% endif %}
+          <div>
+            <h1 style="margin:0;font-size:1.5rem">⛏️ {{ app.minecraft_name }}</h1>
+            <div style="color:var(--muted);font-size:.9rem;margin-top:2px">
+              {{ app.creator_display or app.creator_name or app.creator_id }}
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:10px">
+          {% if app.status == 'open' %}
+            <span class="badge badge-open" style="font-size:.9rem;padding:5px 14px">⏳ Offen</span>
+          {% elif app.status == 'accepted' %}
+            <span class="badge" style="background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);font-size:.9rem;padding:5px 14px">✅ Angenommen</span>
+          {% else %}
+            <span class="badge" style="background:rgba(248,113,113,.15);color:#f87171;border:1px solid rgba(248,113,113,.3);font-size:.9rem;padding:5px 14px">❌ Abgelehnt</span>
+          {% endif %}
+
+          {% if app.claimed_by %}
+            <span class="badge badge-module">📥 {{ app.claimed_by }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;flex:2;min-width:280px">
+        <div class="info-box">
+          <div class="info-label">⛏️ Minecraft Name</div>
+          <div class="info-value">{{ app.minecraft_name }}</div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">📅 Eingereicht</div>
+          <div class="info-value">{{ app.created_at[:16] if app.created_at else '–' }}</div>
+        </div>
+        {% if app.closed_at %}
+        <div class="info-box">
+          <div class="info-label">🔒 Entschieden am</div>
+          <div class="info-value">{{ app.closed_at[:16] }}</div>
+        </div>
+        {% endif %}
+        <div class="info-box">
+          <div class="info-label">💬 Nachrichten</div>
+          <div class="info-value">{{ messages|length }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if app.rejection_reason %}
+  <!-- Rejection reason -->
+  <div class="card" style="border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.05)">
+    <h2 style="color:#f87171">❌ Ablehnungsgrund</h2>
+    <p style="color:#fca5a5;white-space:pre-wrap;margin:0">{{ app.rejection_reason }}</p>
+  </div>
+  {% endif %}
+
+  <!-- Messages -->
+  <div class="card">
+    <h2>💬 Gespräch ({{ messages|length }} Nachrichten)</h2>
+    {% if messages %}
+    <div class="messages-list">
+      {% for msg in messages %}
+      <div class="message-item">
+        <div class="message-avatar">{{ (msg.user or '?')[:2].upper() }}</div>
+        <div class="message-body">
+          <div class="message-meta">
+            <span class="message-author">{{ msg.user or 'Unbekannt' }}</span>
+            <span class="message-time">{{ (msg.timestamp or '')[:19].replace('T',' ') }}</span>
+          </div>
+          <div class="message-content">{{ msg.content }}</div>
+          {% for url in (msg.attachments or []) %}
+          <div style="margin-top:6px">
+            <a href="{{ url }}" class="attachment-link" target="_blank" rel="noopener">
+              📎 {{ url.split('/')[-1].split('?')[0] }}
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">Keine Nachrichten aufgezeichnet.</p>
+    {% endif %}
+  </div>
+
+</div>
+</body>
+</html>
