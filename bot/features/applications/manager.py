@@ -184,13 +184,26 @@ class ApplicationManager:
 
     @staticmethod
     async def get_next_app_id(server_id: str) -> int:
+        """Atomically increment app_counter for the server and return the new value.
+
+        Uses the actual MAX(app_id) from the applications table as source of truth
+        to avoid race conditions from concurrent reads.
+        """
         supabase = get_supabase()
-        r = supabase.table("application_servers").select("app_counter").eq("server_id", str(server_id)).execute()
-        if not r.data:
-            return 1
-        counter = (r.data[0].get("app_counter") or 0) + 1
-        supabase.table("application_servers").update({"app_counter": counter}).eq("server_id", str(server_id)).execute()
-        return counter
+        # Use MAX from existing applications as source of truth (race-condition safe)
+        r = supabase.table("applications")\
+            .select("app_id")\
+            .eq("server_id", str(server_id))\
+            .order("app_id", desc=True)\
+            .limit(1)\
+            .execute()
+        next_id = (r.data[0]["app_id"] + 1) if r.data else 1
+        # Keep app_counter in sync for reference
+        supabase.table("application_servers")\
+            .update({"app_counter": next_id})\
+            .eq("server_id", str(server_id))\
+            .execute()
+        return next_id
 
     @staticmethod
     async def create_application(

@@ -18,10 +18,12 @@ class ApplicationsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        await self._restore_panel_views()
+        await self._restore_panel_view()
         await self._restore_channel_views()
 
-    async def _restore_panel_views(self):
+    async def _restore_panel_view(self):
+        # Register exactly ONE persistent panel view – discord.py routes by custom_id,
+        # so a single registration is enough for all servers.
         self.bot.add_view(ApplicationPanelView(bot=self.bot))
         logger.info("✅ ApplicationPanelView wiederhergestellt")
 
@@ -49,13 +51,32 @@ class ApplicationsCog(commands.Cog):
             logger.error(f"[_restore_channel_views] {e}")
 
     @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        """Assign newbie role automatically when a user joins the server."""
+        from bot.core.supabase_client import get_supabase
+        try:
+            supabase  = get_supabase()
+            server_id = str(member.guild.id)
+            cfg_r = supabase.table("application_servers").select("newbie_role_id")\
+                .eq("server_id", server_id).execute()
+            if not cfg_r.data:
+                return
+            newbie_role_id = cfg_r.data[0].get("newbie_role_id")
+            if not newbie_role_id:
+                return
+            role = member.guild.get_role(int(newbie_role_id))
+            if role:
+                await member.add_roles(role, reason="Automatisch beim Beitreten vergeben")
+                logger.info(f"[on_member_join] Neulings-Rolle vergeben an {member}")
+        except Exception as e:
+            logger.error(f"[on_member_join] {e}")
+
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """Log messages in application channels."""
         if message.author.bot or not message.guild:
             return
         try:
-            from bot.core.supabase_client import get_supabase
-            # Check if this channel is an application channel
             parts = message.channel.name.split("-")
             if len(parts) < 3 or not parts[0].isdigit() or parts[-1] != "bewerbung":
                 return

@@ -86,7 +86,7 @@ class ApplicationSetupView(discord.ui.View):
         async def _nr(i): self.newbie_role_id = i.data["values"][0]; self._rebuild(); await i.response.edit_message(embed=self._build_embed(), view=self)
         nr.callback = _nr; self.add_item(nr)
 
-        # Member role + staff roles on row 3
+        # Member role on row 3
         mr = discord.ui.RoleSelect(placeholder="👥 Mitglieds-Rolle auswählen",
                                    min_values=1, max_values=1, row=3)
         async def _mr(i): self.member_role_id = i.data["values"][0]; self._rebuild(); await i.response.edit_message(embed=self._build_embed(), view=self)
@@ -94,7 +94,7 @@ class ApplicationSetupView(discord.ui.View):
 
         # Buttons on row 4
         btn_staff = discord.ui.Button(label="👮 Staff-Rollen & Text", style=discord.ButtonStyle.secondary, row=4)
-        btn_staff.callback = self._cb_staff_modal
+        btn_staff.callback = self._cb_staff_picker
         self.add_item(btn_staff)
 
         ready = all([self.panel_channel_id, self.category_id, self.newbie_role_id, self.member_role_id])
@@ -103,8 +103,11 @@ class ApplicationSetupView(discord.ui.View):
         btn_save.callback = self._cb_save
         self.add_item(btn_save)
 
-    async def _cb_staff_modal(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(StaffAndMessageModal(setup_view=self))
+    async def _cb_staff_picker(self, interaction: discord.Interaction):
+        view = StaffRolePickerView(setup_view=self)
+        await interaction.response.send_message(
+            embed=view._build_embed(), view=view, ephemeral=True
+        )
 
     async def _cb_save(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -147,17 +150,88 @@ class ApplicationSetupView(discord.ui.View):
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
-class StaffAndMessageModal(discord.ui.Modal, title="Staff & Willkommens-Text"):
-    staff_roles = discord.ui.TextInput(
-        label="Staff-Rollen IDs (kommagetrennt)",
-        placeholder="123456789,987654321",
-        required=False, max_length=500,
-    )
-    log_channel = discord.ui.TextInput(
-        label="Log-Kanal ID (optional)",
-        placeholder="Kanal-ID einfügen",
-        required=False, max_length=30,
-    )
+# ── Staff Role Picker View (used in both Setup and Edit) ──────────────────────
+
+class StaffRolePickerView(discord.ui.View):
+    """Interactive role picker for staff roles – no manual ID entry needed."""
+
+    def __init__(self, setup_view):
+        super().__init__(timeout=180)
+        self._setup = setup_view
+
+        role_sel = discord.ui.RoleSelect(
+            placeholder="👮 Staff-Rollen auswählen…",
+            min_values=1, max_values=10,
+            row=0,
+        )
+        role_sel.callback = self._roles_selected
+        self.add_item(role_sel)
+
+        btn_text = discord.ui.Button(
+            label="💬 Willkommens-Text bearbeiten",
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        btn_text.callback = self._cb_text
+        self.add_item(btn_text)
+
+        btn_done = discord.ui.Button(
+            label="✅ Fertig",
+            style=discord.ButtonStyle.success, row=1,
+        )
+        btn_done.callback = self._cb_done
+        self.add_item(btn_done)
+
+    def _build_embed(self) -> discord.Embed:
+        e = discord.Embed(
+            title="👮 Staff-Rollen & Willkommens-Text",
+            color=discord.Color.blurple(),
+            description="Wähle die Staff-Rollen aus, die Zugriff auf Bewerbungen haben sollen.",
+        )
+        staff = (
+            ", ".join(f"<@&{r}>" for r in self._setup.staff_role_ids)
+            if self._setup.staff_role_ids else "*noch nicht ausgewählt*"
+        )
+        e.add_field(name="👮 Aktuelle Staff-Rollen", value=staff, inline=False)
+        e.add_field(
+            name="💬 Willkommens-Text",
+            value=self._setup.welcome_message[:300],
+            inline=False,
+        )
+        return e
+
+    async def _roles_selected(self, interaction: discord.Interaction):
+        self._setup.staff_role_ids = interaction.data["values"]
+        # Rebuild parent embed too
+        if hasattr(self._setup, "_rebuild"):
+            self._setup._rebuild()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def _cb_text(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(WelcomeMessageModal(self._setup))
+
+    async def _cb_done(self, interaction: discord.Interaction):
+        # Refresh the parent setup/edit view
+        if hasattr(self._setup, "_original_interaction") and self._setup._original_interaction:
+            try:
+                if hasattr(self._setup, "_rebuild"):
+                    self._setup._rebuild()
+                embed = self._setup._build_embed() if hasattr(self._setup, "_build_embed") else self._setup.build_embed()
+                await self._setup._original_interaction.edit_original_response(embed=embed, view=self._setup)
+            except Exception as e:
+                logger.error(f"[StaffRolePickerView._cb_done] {e}")
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ Staff-Rollen gespeichert",
+                description=", ".join(f"<@&{r}>" for r in self._setup.staff_role_ids) or "*keine*",
+                color=discord.Color.green(),
+            ),
+            view=None,
+        )
+
+
+# ── Welcome Message Modal ─────────────────────────────────────────────────────
+
+class WelcomeMessageModal(discord.ui.Modal, title="Willkommens-Text bearbeiten"):
     welcome_msg = discord.ui.TextInput(
         label="Willkommens-Text ({player} = Minecraft-Name)",
         style=discord.TextStyle.paragraph,
@@ -169,17 +243,18 @@ class StaffAndMessageModal(discord.ui.Modal, title="Staff & Willkommens-Text"):
         ),
     )
 
-    def __init__(self, setup_view: ApplicationSetupView):
+    def __init__(self, setup_view):
         super().__init__()
         self._setup = setup_view
         self.welcome_msg.default = setup_view.welcome_message
 
     async def on_submit(self, interaction: discord.Interaction):
-        self._setup.staff_role_ids = [r.strip() for r in self.staff_roles.value.split(",") if r.strip()]
-        self._setup.log_channel_id = self.log_channel.value.strip() or None
         self._setup.welcome_message = self.welcome_msg.value
-        self._setup._rebuild()
-        await interaction.response.edit_message(embed=self._setup._build_embed(), view=self._setup)
+        if hasattr(self._setup, "_rebuild"):
+            self._setup._rebuild()
+        # Go back to picker view so user can continue
+        picker = StaffRolePickerView(setup_view=self._setup)
+        await interaction.response.edit_message(embed=picker._build_embed(), view=picker)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -189,7 +264,6 @@ class StaffAndMessageModal(discord.ui.Modal, title="Staff & Willkommens-Text"):
 class ApplicationEditView(discord.ui.View):
     """
     /bewerbung_bearbeiten  – edit all application system settings.
-    Same structure as TicketEditMainView.
     """
 
     def __init__(self, guild_id: int, bot: discord.Client):
@@ -197,6 +271,12 @@ class ApplicationEditView(discord.ui.View):
         self.guild_id = str(guild_id)
         self.bot      = bot
         self._original_interaction = None
+        # Local state for staff roles / welcome message (loaded from DB)
+        cfg = self._load_cfg() or {}
+        self.staff_role_ids: list[str] = [
+            r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()
+        ]
+        self.welcome_message: str = cfg.get("welcome_message", "")
         self._rebuild()
 
     def _load_cfg(self) -> dict | None:
@@ -221,6 +301,10 @@ class ApplicationEditView(discord.ui.View):
         e.add_field(name="💬 Willkommens-Text", value=(cfg.get("welcome_message") or "")[:200], inline=False)
         return e
 
+    # _build_embed alias so StaffRolePickerView can call it
+    def _build_embed(self) -> discord.Embed:
+        return self.build_embed()
+
     def _rebuild(self):
         self.clear_items()
 
@@ -228,11 +312,15 @@ class ApplicationEditView(discord.ui.View):
         btn_channels.callback = self._cb_channels
         self.add_item(btn_channels)
 
-        btn_msg = discord.ui.Button(label="💬 Text bearbeiten", style=discord.ButtonStyle.secondary, row=0)
+        btn_staff = discord.ui.Button(label="👮 Staff-Rollen", style=discord.ButtonStyle.primary, row=0)
+        btn_staff.callback = self._cb_staff
+        self.add_item(btn_staff)
+
+        btn_msg = discord.ui.Button(label="💬 Willkommens-Text", style=discord.ButtonStyle.secondary, row=0)
         btn_msg.callback = self._cb_message
         self.add_item(btn_msg)
 
-        btn_panel = discord.ui.Button(label="✏️ Panel bearbeiten", style=discord.ButtonStyle.secondary, row=0)
+        btn_panel = discord.ui.Button(label="✏️ Panel bearbeiten", style=discord.ButtonStyle.secondary, row=1)
         btn_panel.callback = self._cb_panel
         self.add_item(btn_panel)
 
@@ -244,9 +332,14 @@ class ApplicationEditView(discord.ui.View):
         view = AppChannelSettingsView(cfg=cfg, parent=self)
         await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
+    async def _cb_staff(self, interaction: discord.Interaction):
+        view = StaffRolePickerView(setup_view=self)
+        await interaction.response.send_message(
+            embed=view._build_embed(), view=view, ephemeral=True
+        )
+
     async def _cb_message(self, interaction: discord.Interaction):
-        cfg = self._load_cfg()
-        await interaction.response.send_modal(AppMessageEditModal(cfg=cfg or {}, parent=self))
+        await interaction.response.send_modal(WelcomeMessageModal(setup_view=self))
 
     async def _cb_panel(self, interaction: discord.Interaction):
         cfg = self._load_cfg()
@@ -258,6 +351,17 @@ class ApplicationEditView(discord.ui.View):
         await interaction.response.send_message(embed=view.build_preview_embed(), view=view, ephemeral=True)
 
     async def refresh(self):
+        # Save current staff_role_ids and welcome_message to DB before refreshing
+        try:
+            cfg = self._load_cfg()
+            if cfg:
+                get_supabase().table("application_servers").update({
+                    "staff_role_ids":  ",".join(self.staff_role_ids),
+                    "welcome_message": self.welcome_message,
+                }).eq("server_id", self.guild_id).execute()
+        except Exception as e:
+            logger.error(f"[AppEditView.refresh save] {e}")
+
         if self._original_interaction:
             try:
                 await self._original_interaction.edit_original_response(embed=self.build_embed(), view=self)
@@ -317,33 +421,6 @@ class AppChannelSettingsView(discord.ui.View):
             await self.parent.refresh()
         except Exception as e:
             await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
-
-
-class AppMessageEditModal(discord.ui.Modal, title="Willkommens-Text bearbeiten"):
-    welcome_msg = discord.ui.TextInput(
-        label="Willkommens-Text ({player} = Minecraft-Name)",
-        style=discord.TextStyle.paragraph,
-        required=True, max_length=1000,
-    )
-    staff_roles = discord.ui.TextInput(
-        label="Staff-Rollen IDs (kommagetrennt)",
-        placeholder="123456789,987654321",
-        required=False, max_length=500,
-    )
-
-    def __init__(self, cfg: dict, parent: ApplicationEditView):
-        super().__init__()
-        self._parent = parent
-        self.welcome_msg.default = cfg.get("welcome_message", "")
-        self.staff_roles.default = cfg.get("staff_role_ids", "")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        get_supabase().table("application_servers").update({
-            "welcome_message": self.welcome_msg.value,
-            "staff_role_ids":  self.staff_roles.value.strip(),
-        }).eq("server_id", self._parent.guild_id).execute()
-        await interaction.response.send_message("✅ Text und Staff-Rollen gespeichert!", ephemeral=True)
-        await self._parent.refresh()
 
 
 class AppPanelEditView(discord.ui.View):
