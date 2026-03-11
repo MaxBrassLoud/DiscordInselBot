@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
@@ -75,6 +75,61 @@ def append_app_message(server_id: str, app_id: int, **kwargs):
 
 def app_web_url(server_id: str, app_id: int) -> str:
     return f"{WEB_BASE_URL}/dashboard/applications/{app_id}?server_id={server_id}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Rejection cooldown check
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def check_rejection_cooldown(
+    server_id: str,
+    user_id: str,
+    cooldown_hours: int,
+) -> tuple[bool, timedelta]:
+    """
+    Check if a user is still within the rejection cooldown period.
+
+    Returns (is_blocked, remaining_timedelta).
+    If not blocked, remaining_timedelta is timedelta(0).
+    """
+    if cooldown_hours <= 0:
+        return False, timedelta(0)
+
+    supabase = get_supabase()
+    # Find the most recent rejected application for this user on this server
+    result = (
+        supabase.table("applications")
+        .select("closed_at")
+        .eq("server_id", server_id)
+        .eq("creator_id", user_id)
+        .eq("status", "rejected")
+        .order("closed_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        return False, timedelta(0)
+
+    closed_at_str = result.data[0].get("closed_at")
+    if not closed_at_str:
+        return False, timedelta(0)
+
+    try:
+        closed_at = datetime.fromisoformat(closed_at_str.replace("Z", "+00:00"))
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False, timedelta(0)
+
+    now = datetime.now(timezone.utc)
+    cooldown_end = closed_at + timedelta(hours=cooldown_hours)
+
+    if now < cooldown_end:
+        remaining = cooldown_end - now
+        return True, remaining
+
+    return False, timedelta(0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -184,13 +239,8 @@ class ApplicationManager:
 
     @staticmethod
     async def get_next_app_id(server_id: str) -> int:
-        """Atomically increment app_counter for the server and return the new value.
-
-        Uses the actual MAX(app_id) from the applications table as source of truth
-        to avoid race conditions from concurrent reads.
-        """
+        """Atomically increment app_counter for the server and return the new value."""
         supabase = get_supabase()
-        # Use MAX from existing applications as source of truth (race-condition safe)
         r = supabase.table("applications")\
             .select("app_id")\
             .eq("server_id", str(server_id))\
@@ -198,7 +248,6 @@ class ApplicationManager:
             .limit(1)\
             .execute()
         next_id = (r.data[0]["app_id"] + 1) if r.data else 1
-        # Keep app_counter in sync for reference
         supabase.table("application_servers")\
             .update({"app_counter": next_id})\
             .eq("server_id", str(server_id))\
@@ -226,7 +275,7 @@ class ApplicationManager:
         except discord.Forbidden:
             logger.warning(f"[create_application] Konnte Nickname nicht setzen für {applicant}")
 
-        # ── Channel name (same schema as tickets) ─────────────────────────────
+        # ── Channel name ──────────────────────────────────────────────────────
         safe_mc   = minecraft_name.lower().replace(" ", "-")[:20]
         channel_name = f"{app_id}-{safe_mc}-bewerbung"
 
@@ -234,7 +283,6 @@ class ApplicationManager:
         category_id = cfg.get("category_id")
         category    = guild.get_channel(int(category_id)) if category_id else None
 
-        # Staff roles from config
         staff_role_ids = [r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()]
 
         overwrites = {
@@ -367,6 +415,7 @@ class ApplicationManager:
         now       = datetime.now(timezone.utc).isoformat()
         web_url   = app_web_url(server_id, app_id)
 
+        # Store closed_at so the cooldown check can use it
         update_application(server_id, app_id, {
             "status": "rejected", "closed_at": now,
             "closed_by": str(rejector.id), "rejection_reason": reason,
@@ -376,6 +425,19 @@ class ApplicationManager:
         }).eq("app_id", app_id).eq("server_id", server_id).execute()
 
         applicant = guild.get_member(int(app["creator_id"]))
+
+        # Build cooldown info for the DM
+        cooldown_hours = int(cfg.get("rejection_cooldown_hours") or 0)
+        cooldown_text = ""
+        if cooldown_hours > 0:
+            from datetime import timezone as _tz
+            cooldown_end = datetime.now(_tz.utc) + timedelta(hours=cooldown_hours)
+            cooldown_text = (
+                f"\n\n⏳ **Wartezeit:** Du kannst dich frühestens am "
+                f"<t:{int(cooldown_end.timestamp())}:F> wieder bewerben "
+                f"(<t:{int(cooldown_end.timestamp())}:R>)."
+            )
+
         if applicant:
             try:
                 messages  = load_app_messages(server_id, app_id)
@@ -386,7 +448,8 @@ class ApplicationManager:
                     title="❌ Deine Bewerbung wurde abgelehnt",
                     description=(
                         f"Leider wurde deine Bewerbung abgelehnt.\n\n"
-                        f"**Begründung:** {reason}\n\n"
+                        f"**Begründung:** {reason}"
+                        f"{cooldown_text}\n\n"
                         f"Im Anhang findest du das Log eurer Unterhaltung.\n"
                         f"[📊 Im Dashboard ansehen]({web_url})"
                     ),

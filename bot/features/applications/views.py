@@ -27,7 +27,8 @@ class ApplicationSetupView(discord.ui.View):
     """
     /bewerbung_setup  – configure the application system.
     Selects: panel channel, application category, newbie role,
-             member role, staff roles, log channel, welcome message text.
+             member role, staff roles, log channel, welcome message text,
+             rejection cooldown hours, instruction message (posted in the application channel).
     """
 
     def __init__(self, guild_id: int, bot: discord.Client):
@@ -35,6 +36,7 @@ class ApplicationSetupView(discord.ui.View):
         self.guild_id              = str(guild_id)
         self.bot                   = bot
         self._original_interaction = None
+        self._buttons_sent = False
 
         # Config state
         self.panel_channel_id: str | None    = None
@@ -43,10 +45,16 @@ class ApplicationSetupView(discord.ui.View):
         self.member_role_id: str | None      = None
         self.log_channel_id: str | None      = None
         self.staff_role_ids: list[str]       = []
+        self.rejection_cooldown_hours: int   = 24
         self.welcome_message: str            = (
             "Willkommen {player}! Schreibe einen kurzen Text in dem du uns mitteilst "
             "wie wir dich nennen dürfen, was du gerne in Minecraft machst, "
             "wie lange du schon Minecraft spielst und warum du unserem Clan beitreten möchtest. 😊"
+        )
+        self.instruction_message: str        = (
+            "📋 **Willkommen in deinem Bewerbungskanal!**\n"
+            "Schreibe hier deine Bewerbung. Unser Staff wird sie so schnell wie möglich bearbeiten. "
+            "Bitte sei geduldig und beantworte alle Fragen ehrlich. Viel Erfolg! 🍀"
         )
         self._rebuild()
 
@@ -58,9 +66,11 @@ class ApplicationSetupView(discord.ui.View):
         e.add_field(name="📋 Log-Kanal",         value=f"<#{self.log_channel_id}>"   if self.log_channel_id    else "*nicht gesetzt*", inline=True)
         e.add_field(name="🌱 Neulings-Rolle",    value=f"<@&{self.newbie_role_id}>"  if self.newbie_role_id    else "*nicht gesetzt*", inline=True)
         e.add_field(name="👥 Mitglieds-Rolle",   value=f"<@&{self.member_role_id}>"  if self.member_role_id    else "*nicht gesetzt*", inline=True)
+        e.add_field(name="⏳ Cooldown nach Ablehnung", value=f"{self.rejection_cooldown_hours} Stunden", inline=True)
         staff = ", ".join(f"<@&{r}>" for r in self.staff_role_ids) if self.staff_role_ids else "*nicht gesetzt*"
         e.add_field(name="👮 Staff-Rollen",      value=staff[:300],                  inline=False)
         e.add_field(name="💬 Willkommens-Text",  value=self.welcome_message[:200],   inline=False)
+        e.add_field(name="📌 Anweisungs-Text (im Bewerbungskanal)", value=self.instruction_message[:200], inline=False)
         return e
 
     def _rebuild(self):
@@ -80,28 +90,46 @@ class ApplicationSetupView(discord.ui.View):
         async def _cat(i): self.category_id = i.data["values"][0]; self._rebuild(); await i.response.edit_message(embed=self._build_embed(), view=self)
         cat.callback = _cat; self.add_item(cat)
 
+        # Log channel
+        lc = discord.ui.ChannelSelect(placeholder="📋 Log-Kanal auswählen (optional)",
+                                      min_values=0, max_values=1,
+                                      channel_types=[discord.ChannelType.text], row=2)
+        async def _lc(i):
+            vals = i.data.get("values", [])
+            self.log_channel_id = vals[0] if vals else None
+            await i.response.edit_message(embed=self._build_embed(), view=self)
+            await self._send_buttons_once(i)
+        lc.callback = _lc; self.add_item(lc)
+
         # Newbie role
         nr = discord.ui.RoleSelect(placeholder="🌱 Neulings-Rolle auswählen",
-                                   min_values=1, max_values=1, row=2)
-        async def _nr(i): self.newbie_role_id = i.data["values"][0]; self._rebuild(); await i.response.edit_message(embed=self._build_embed(), view=self)
+                                   min_values=1, max_values=1, row=3)
+        async def _nr(i):
+            self.newbie_role_id = i.data["values"][0]
+            await i.response.edit_message(embed=self._build_embed(), view=self)
+            await self._send_buttons_once(i)
         nr.callback = _nr; self.add_item(nr)
 
-        # Member role on row 3
+        # Member role on row 4
         mr = discord.ui.RoleSelect(placeholder="👥 Mitglieds-Rolle auswählen",
-                                   min_values=1, max_values=1, row=3)
-        async def _mr(i): self.member_role_id = i.data["values"][0]; self._rebuild(); await i.response.edit_message(embed=self._build_embed(), view=self)
+                                   min_values=1, max_values=1, row=4)
+        async def _mr(i):
+            self.member_role_id = i.data["values"][0]
+            await i.response.edit_message(embed=self._build_embed(), view=self)
+            await self._send_buttons_once(i)
         mr.callback = _mr; self.add_item(mr)
+        # All 5 rows are full. Staff roles + Save live in StaffRolePickerView.
 
-        # Buttons on row 4
-        btn_staff = discord.ui.Button(label="👮 Staff-Rollen & Text", style=discord.ButtonStyle.secondary, row=4)
-        btn_staff.callback = self._cb_staff_picker
-        self.add_item(btn_staff)
-
-        ready = all([self.panel_channel_id, self.category_id, self.newbie_role_id, self.member_role_id])
-        btn_save = discord.ui.Button(label="🚀 Setup abschließen", style=discord.ButtonStyle.success,
-                                     disabled=not ready, row=4)
-        btn_save.callback = self._cb_save
-        self.add_item(btn_save)
+    async def _send_buttons_once(self, interaction: discord.Interaction):
+        """After the first select, send the button row as a follow-up (once)."""
+        if self._buttons_sent:
+            return
+        self._buttons_sent = True
+        await interaction.followup.send(
+            "👇 Wenn du fertig bist:",
+            view=self.make_buttons_view(),
+            ephemeral=True,
+        )
 
     async def _cb_staff_picker(self, interaction: discord.Interaction):
         view = StaffRolePickerView(setup_view=self)
@@ -109,20 +137,47 @@ class ApplicationSetupView(discord.ui.View):
             embed=view._build_embed(), view=view, ephemeral=True
         )
 
+    def make_buttons_view(self) -> discord.ui.View:
+        """Returns a small view with the two action buttons (Staff & Save)."""
+        v = discord.ui.View(timeout=600)
+
+        btn_staff = discord.ui.Button(
+            label="\U0001f46e Staff-Rollen & Texte",
+            style=discord.ButtonStyle.secondary,
+        )
+        async def _open_staff(i: discord.Interaction):
+            picker = StaffRolePickerView(setup_view=self)
+            await i.response.send_message(embed=picker._build_embed(), view=picker, ephemeral=True)
+        btn_staff.callback = _open_staff
+        v.add_item(btn_staff)
+
+        ready = all([self.panel_channel_id, self.category_id, self.newbie_role_id, self.member_role_id])
+        btn_save = discord.ui.Button(
+            label="\U0001f680 Setup abschlie\u00dfen",
+            style=discord.ButtonStyle.success,
+            disabled=not ready,
+        )
+        btn_save.callback = self._cb_save
+        v.add_item(btn_save)
+
+        return v
+
     async def _cb_save(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
             supabase = get_supabase()
             cfg = {
-                "server_id":       self.guild_id,
-                "panel_channel_id": self.panel_channel_id,
-                "category_id":     self.category_id,
-                "newbie_role_id":  self.newbie_role_id,
-                "member_role_id":  self.member_role_id,
-                "log_channel_id":  self.log_channel_id,
-                "staff_role_ids":  ",".join(self.staff_role_ids),
-                "welcome_message": self.welcome_message,
-                "app_counter":     0,
+                "server_id":                self.guild_id,
+                "panel_channel_id":         self.panel_channel_id,
+                "category_id":              self.category_id,
+                "newbie_role_id":           self.newbie_role_id,
+                "member_role_id":           self.member_role_id,
+                "log_channel_id":           self.log_channel_id,
+                "staff_role_ids":           ",".join(self.staff_role_ids),
+                "welcome_message":          self.welcome_message,
+                "instruction_message":      self.instruction_message,
+                "rejection_cooldown_hours": self.rejection_cooldown_hours,
+                "app_counter":              0,
             }
             existing = supabase.table("application_servers").select("server_id").eq("server_id", self.guild_id).execute()
             if existing.data:
@@ -136,6 +191,7 @@ class ApplicationSetupView(discord.ui.View):
                 embed = _build_panel_embed(self.welcome_message)
                 panel_view = ApplicationPanelView(bot=self.bot)
                 panel_msg = await panel_channel.send(embed=embed, view=panel_view)
+
                 supabase.table("application_servers").update(
                     {"panel_message_id": str(panel_msg.id)}
                 ).eq("server_id", self.guild_id).execute()
@@ -168,24 +224,35 @@ class StaffRolePickerView(discord.ui.View):
         self.add_item(role_sel)
 
         btn_text = discord.ui.Button(
-            label="💬 Willkommens-Text bearbeiten",
+            label="💬 Texte & Cooldown bearbeiten",
             style=discord.ButtonStyle.secondary, row=1,
         )
         btn_text.callback = self._cb_text
         self.add_item(btn_text)
 
-        btn_done = discord.ui.Button(
-            label="✅ Fertig",
-            style=discord.ButtonStyle.success, row=1,
-        )
-        btn_done.callback = self._cb_done
-        self.add_item(btn_done)
+        # "Fertig" = just close the picker (used from EditView)
+        # "Setup abschließen" = save everything (used from SetupView)
+        is_setup = hasattr(setup_view, "_cb_save")
+        if is_setup:
+            btn_save = discord.ui.Button(
+                label="🚀 Setup abschließen",
+                style=discord.ButtonStyle.success, row=1,
+            )
+            btn_save.callback = self._cb_setup_save
+            self.add_item(btn_save)
+        else:
+            btn_done = discord.ui.Button(
+                label="✅ Fertig",
+                style=discord.ButtonStyle.success, row=1,
+            )
+            btn_done.callback = self._cb_done
+            self.add_item(btn_done)
 
     def _build_embed(self) -> discord.Embed:
         e = discord.Embed(
-            title="👮 Staff-Rollen & Willkommens-Text",
+            title="👮 Staff-Rollen & Texte",
             color=discord.Color.blurple(),
-            description="Wähle die Staff-Rollen aus, die Zugriff auf Bewerbungen haben sollen.",
+            description="Wähle die Staff-Rollen aus und konfiguriere die Texte und den Cooldown.",
         )
         staff = (
             ", ".join(f"<@&{r}>" for r in self._setup.staff_role_ids)
@@ -197,20 +264,29 @@ class StaffRolePickerView(discord.ui.View):
             value=self._setup.welcome_message[:300],
             inline=False,
         )
+        e.add_field(
+            name="📌 Anweisungs-Text (im Bewerbungskanal)",
+            value=self._setup.instruction_message[:300],
+            inline=False,
+        )
+        cooldown = getattr(self._setup, "rejection_cooldown_hours", 24)
+        e.add_field(
+            name="⏳ Cooldown nach Ablehnung",
+            value=f"{cooldown} Stunden",
+            inline=False,
+        )
         return e
 
     async def _roles_selected(self, interaction: discord.Interaction):
         self._setup.staff_role_ids = interaction.data["values"]
-        # Rebuild parent embed too
         if hasattr(self._setup, "_rebuild"):
             self._setup._rebuild()
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
     async def _cb_text(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(WelcomeMessageModal(self._setup))
+        await interaction.response.send_modal(TextsAndCooldownModal(self._setup))
 
     async def _cb_done(self, interaction: discord.Interaction):
-        # Refresh the parent setup/edit view
         if hasattr(self._setup, "_original_interaction") and self._setup._original_interaction:
             try:
                 if hasattr(self._setup, "_rebuild"):
@@ -221,40 +297,78 @@ class StaffRolePickerView(discord.ui.View):
                 logger.error(f"[StaffRolePickerView._cb_done] {e}")
         await interaction.response.edit_message(
             embed=discord.Embed(
-                title="✅ Staff-Rollen gespeichert",
-                description=", ".join(f"<@&{r}>" for r in self._setup.staff_role_ids) or "*keine*",
+                title="✅ Einstellungen gespeichert",
+                description=(
+                    ", ".join(f"<@&{r}>" for r in self._setup.staff_role_ids) or "*keine*"
+                ),
                 color=discord.Color.green(),
             ),
             view=None,
         )
 
+    async def _cb_setup_save(self, interaction: discord.Interaction):
+        """Called from SetupView context – validates required fields then saves."""
+        s = self._setup
+        missing = []
+        if not s.panel_channel_id: missing.append("📢 Panel-Kanal")
+        if not s.category_id:      missing.append("📁 Kategorie")
+        if not s.newbie_role_id:   missing.append("🌱 Neulings-Rolle")
+        if not s.member_role_id:   missing.append("👥 Mitglieds-Rolle")
+        if missing:
+            await interaction.response.send_message(
+                f"❌ Bitte zuerst ausfüllen: {', '.join(missing)}", ephemeral=True
+            )
+            return
+        # Delegate to the setup view's save handler
+        await s._cb_save(interaction)
 
-# ── Welcome Message Modal ─────────────────────────────────────────────────────
 
-class WelcomeMessageModal(discord.ui.Modal, title="Willkommens-Text bearbeiten"):
+# ── Texts & Cooldown Modal ────────────────────────────────────────────────────
+
+class TextsAndCooldownModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten"):
     welcome_msg = discord.ui.TextInput(
         label="Willkommens-Text ({player} = Minecraft-Name)",
         style=discord.TextStyle.paragraph,
         required=True, max_length=1000,
-        default=(
-            "Willkommen {player}! Schreibe einen kurzen Text in dem du uns mitteilst "
-            "wie wir dich nennen dürfen, was du gerne in Minecraft machst, "
-            "wie lange du schon Minecraft spielst und warum du unserem Clan beitreten möchtest. 😊"
-        ),
+    )
+    instruction_msg = discord.ui.TextInput(
+        label="Anweisungs-Text (im Bewerbungskanal)",
+        style=discord.TextStyle.paragraph,
+        required=False, max_length=1000,
+        placeholder="z.B. 📋 Willkommen! Schreibe hier deine Bewerbung...",
+    )
+    cooldown_hours = discord.ui.TextInput(
+        label="Cooldown nach Ablehnung (in Stunden)",
+        placeholder="z.B. 24  (0 = kein Cooldown)",
+        required=True, max_length=6,
     )
 
     def __init__(self, setup_view):
         super().__init__()
         self._setup = setup_view
-        self.welcome_msg.default = setup_view.welcome_message
+        self.welcome_msg.default = getattr(setup_view, "welcome_message", "")
+        self.instruction_msg.default = getattr(setup_view, "instruction_message", "")
+        cooldown = getattr(setup_view, "rejection_cooldown_hours", 24)
+        self.cooldown_hours.default = str(cooldown)
 
     async def on_submit(self, interaction: discord.Interaction):
         self._setup.welcome_message = self.welcome_msg.value
+        self._setup.instruction_message = self.instruction_msg.value or ""
+        try:
+            hours = max(0, int(self.cooldown_hours.value))
+        except ValueError:
+            hours = 24
+        self._setup.rejection_cooldown_hours = hours
+
         if hasattr(self._setup, "_rebuild"):
             self._setup._rebuild()
-        # Go back to picker view so user can continue
+
         picker = StaffRolePickerView(setup_view=self._setup)
         await interaction.response.edit_message(embed=picker._build_embed(), view=picker)
+
+
+# Legacy alias kept for backwards compat (EditView calls WelcomeMessageModal)
+WelcomeMessageModal = TextsAndCooldownModal
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -271,12 +385,13 @@ class ApplicationEditView(discord.ui.View):
         self.guild_id = str(guild_id)
         self.bot      = bot
         self._original_interaction = None
-        # Local state for staff roles / welcome message (loaded from DB)
         cfg = self._load_cfg() or {}
         self.staff_role_ids: list[str] = [
             r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()
         ]
         self.welcome_message: str = cfg.get("welcome_message", "")
+        self.instruction_message: str = cfg.get("instruction_message", "")
+        self.rejection_cooldown_hours: int = int(cfg.get("rejection_cooldown_hours") or 24)
         self._rebuild()
 
     def _load_cfg(self) -> dict | None:
@@ -295,13 +410,15 @@ class ApplicationEditView(discord.ui.View):
         e.add_field(name="📋 Log-Kanal",         value=f"<#{cfg.get('log_channel_id')}>"   if cfg.get("log_channel_id")   else "*–*", inline=True)
         e.add_field(name="🌱 Neulings-Rolle",    value=f"<@&{cfg.get('newbie_role_id')}>"  if cfg.get("newbie_role_id")   else "*–*", inline=True)
         e.add_field(name="👥 Mitglieds-Rolle",   value=f"<@&{cfg.get('member_role_id')}>"  if cfg.get("member_role_id")   else "*–*", inline=True)
+        e.add_field(name="⏳ Cooldown",          value=f"{cfg.get('rejection_cooldown_hours', 24)} Std.", inline=True)
         staff_ids = [r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()]
         staff = ", ".join(f"<@&{r}>" for r in staff_ids) or "*–*"
         e.add_field(name="👮 Staff-Rollen", value=staff[:300], inline=False)
         e.add_field(name="💬 Willkommens-Text", value=(cfg.get("welcome_message") or "")[:200], inline=False)
+        instr = cfg.get("instruction_message") or ""
+        e.add_field(name="📌 Anweisungs-Text (im Bewerbungskanal)", value=instr[:200] if instr else "*–*", inline=False)
         return e
 
-    # _build_embed alias so StaffRolePickerView can call it
     def _build_embed(self) -> discord.Embed:
         return self.build_embed()
 
@@ -312,15 +429,11 @@ class ApplicationEditView(discord.ui.View):
         btn_channels.callback = self._cb_channels
         self.add_item(btn_channels)
 
-        btn_staff = discord.ui.Button(label="👮 Staff-Rollen", style=discord.ButtonStyle.primary, row=0)
+        btn_staff = discord.ui.Button(label="👮 Staff & Texte", style=discord.ButtonStyle.primary, row=0)
         btn_staff.callback = self._cb_staff
         self.add_item(btn_staff)
 
-        btn_msg = discord.ui.Button(label="💬 Willkommens-Text", style=discord.ButtonStyle.secondary, row=0)
-        btn_msg.callback = self._cb_message
-        self.add_item(btn_msg)
-
-        btn_panel = discord.ui.Button(label="✏️ Panel bearbeiten", style=discord.ButtonStyle.secondary, row=1)
+        btn_panel = discord.ui.Button(label="✏️ Panel bearbeiten", style=discord.ButtonStyle.secondary, row=0)
         btn_panel.callback = self._cb_panel
         self.add_item(btn_panel)
 
@@ -338,9 +451,6 @@ class ApplicationEditView(discord.ui.View):
             embed=view._build_embed(), view=view, ephemeral=True
         )
 
-    async def _cb_message(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(WelcomeMessageModal(setup_view=self))
-
     async def _cb_panel(self, interaction: discord.Interaction):
         cfg = self._load_cfg()
         if not cfg or not cfg.get("panel_message_id"):
@@ -351,13 +461,14 @@ class ApplicationEditView(discord.ui.View):
         await interaction.response.send_message(embed=view.build_preview_embed(), view=view, ephemeral=True)
 
     async def refresh(self):
-        # Save current staff_role_ids and welcome_message to DB before refreshing
         try:
             cfg = self._load_cfg()
             if cfg:
                 get_supabase().table("application_servers").update({
-                    "staff_role_ids":  ",".join(self.staff_role_ids),
-                    "welcome_message": self.welcome_message,
+                    "staff_role_ids":           ",".join(self.staff_role_ids),
+                    "welcome_message":          self.welcome_message,
+                    "instruction_message":      self.instruction_message,
+                    "rejection_cooldown_hours": self.rejection_cooldown_hours,
                 }).eq("server_id", self.guild_id).execute()
         except Exception as e:
             logger.error(f"[AppEditView.refresh save] {e}")
@@ -431,12 +542,15 @@ class AppPanelEditView(discord.ui.View):
         self.parent = parent
         self._title = "⛏️ Bewerbung einreichen"
         self._desc  = cfg.get("welcome_message", "")
+        self._instruction = cfg.get("instruction_message", "")
         self._build()
 
     def build_preview_embed(self) -> discord.Embed:
         e = discord.Embed(title="✏️ Panel bearbeiten",
                           description=f"**{self._title}**\n{self._desc[:300]}",
                           color=discord.Color.blurple())
+        if self._instruction:
+            e.add_field(name="📌 Anweisungs-Text (im Bewerbungskanal)", value=self._instruction[:300], inline=False)
         e.set_footer(text="Klicke 'Änderungen übernehmen' um das Panel zu aktualisieren.")
         return e
 
@@ -456,6 +570,13 @@ class AppPanelEditView(discord.ui.View):
             embed = _build_panel_embed(self._desc, title=self._title)
             panel_view = ApplicationPanelView(bot=self.bot)
             await msg.edit(embed=embed, view=panel_view)
+
+            # Update instruction message in DB
+            if self._instruction is not None:
+                get_supabase().table("application_servers").update({
+                    "instruction_message": self._instruction,
+                }).eq("server_id", self.parent.guild_id).execute()
+
             for item in self.children: item.disabled = True
             await interaction.followup.send("✅ Panel aktualisiert!", ephemeral=True)
         except Exception as e:
@@ -464,18 +585,23 @@ class AppPanelEditView(discord.ui.View):
 
 class AppPanelTextModal(discord.ui.Modal, title="Panel-Text bearbeiten"):
     panel_title = discord.ui.TextInput(label="Titel", required=True, max_length=100)
-    panel_desc  = discord.ui.TextInput(label="Beschreibung", style=discord.TextStyle.paragraph,
+    panel_desc  = discord.ui.TextInput(label="Bewerbungstext (Willkommens-Text)", style=discord.TextStyle.paragraph,
                                        required=True, max_length=800)
+    panel_instr = discord.ui.TextInput(label="Anweisungs-Text (im Bewerbungskanal)", style=discord.TextStyle.paragraph,
+                                       required=False, max_length=800,
+                                       placeholder="z.B. 📋 Willkommen! Schreibe hier deine Bewerbung...")
 
     def __init__(self, view: AppPanelEditView):
         super().__init__()
         self._view = view
         self.panel_title.default = view._title
         self.panel_desc.default  = view._desc
+        self.panel_instr.default = view._instruction or ""
 
     async def on_submit(self, interaction: discord.Interaction):
         self._view._title = self.panel_title.value
         self._view._desc  = self.panel_desc.value
+        self._view._instruction = self.panel_instr.value or ""
         await interaction.response.edit_message(embed=self._view.build_preview_embed(), view=self._view)
 
 
@@ -525,6 +651,25 @@ class ApplicationPanelView(discord.ui.View):
                 )
                 return
 
+        # Check rejection cooldown
+        cooldown_hours = int(cfg.get("rejection_cooldown_hours") or 0)
+        if cooldown_hours > 0:
+            from .manager import check_rejection_cooldown
+            blocked, remaining = await check_rejection_cooldown(
+                server_id=server_id,
+                user_id=str(interaction.user.id),
+                cooldown_hours=cooldown_hours,
+            )
+            if blocked:
+                hours_left = int(remaining.total_seconds() // 3600)
+                minutes_left = int((remaining.total_seconds() % 3600) // 60)
+                await interaction.response.send_message(
+                    f"❌ Du wurdest kürzlich abgelehnt. Du kannst dich erst in "
+                    f"**{hours_left}h {minutes_left}m** wieder bewerben.",
+                    ephemeral=True,
+                )
+                return
+
         await interaction.response.send_modal(MinecraftNameModal(cfg=cfg, bot=self.bot))
 
 
@@ -568,6 +713,11 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
                 applicant_id=str(applicant.id), cfg=self.cfg, bot=self.bot,
             )
             await channel.send(embed=embed, view=view)
+
+            # Post instruction message in the application channel
+            instruction = (self.cfg.get("instruction_message") or "").strip()
+            if instruction:
+                await channel.send(instruction)
 
             # Post to log channel if configured
             if self.cfg.get("log_channel_id"):
