@@ -17,6 +17,7 @@ def _cfg(key: str, default: str = "") -> str:
 def client_id()     -> str:   return _cfg("DISCORD_CLIENT_ID")
 def client_secret() -> str:   return _cfg("DISCORD_CLIENT_SECRET")
 def guild_id()      -> str:   return _cfg("DISCORD_GUILD_ID")
+def mbl_id()        -> str:   return _cfg("MBL", "")
 
 def allowed_roles() -> set[str]:
     return {r.strip() for r in _cfg("DISCORD_ALLOWED_ROLE_IDS").split(",") if r.strip()}
@@ -55,9 +56,25 @@ async def discord_get(path: str, access_token: str) -> dict | None:
         return await resp.json() if resp.ok else None
 
 
+# ── Role ID parsing helper ────────────────────────────────────────────────────
+
+def _parse_role_ids(raw) -> list[str]:
+    """Parse role IDs from a comma-separated string or a list."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(r) for r in raw if r]
+    return [r.strip() for r in str(raw).split(",") if r.strip()]
+
+
+def _user_roles(user: dict) -> set[str]:
+    return set(user.get("roles", []))
+
+
 # ── Authorization checks ──────────────────────────────────────────────────────
 
 def is_authorized(member: dict | None) -> bool:
+    """Check if a member is allowed to log in at all (has DISCORD_ALLOWED_ROLE_IDS)."""
     if not member or ("roles" not in member and "user" not in member):
         return False
     ar = allowed_roles()
@@ -67,6 +84,7 @@ def is_authorized(member: dict | None) -> bool:
 
 
 def user_has_server_access(user: dict, server_id: str) -> bool:
+    """Basic server access: user must belong to that guild."""
     if not server_id:
         return False
     if user.get("guild_id") and user["guild_id"] != server_id:
@@ -77,16 +95,104 @@ def user_has_server_access(user: dict, server_id: str) -> bool:
     return bool(set(user.get("roles", [])) & ar)
 
 
-def user_can_see_ticket(user: dict, ticket: dict, server_id: str, staff_role_ids: list[str]) -> bool:
+# ── Granular permission helpers ───────────────────────────────────────────────
+
+def is_mbl(user: dict) -> bool:
+    """MBL env-var user gets full access to everything."""
+    mid = mbl_id()
+    return bool(mid and user.get("id") == mid)
+
+
+def user_is_web_admin(user: dict, web_admin_role_ids: list[str]) -> bool:
+    """User has a WebAdmin role – sees everything on that server."""
+    if is_mbl(user):
+        return True
+    if not web_admin_role_ids:
+        return False
+    return bool(_user_roles(user) & set(web_admin_role_ids))
+
+
+def user_is_ticket_staff_for_module(user: dict, module_staff_role_ids: list[str]) -> bool:
+    """User has staff role for a specific ticket module."""
+    if not module_staff_role_ids:
+        return False
+    return bool(_user_roles(user) & set(module_staff_role_ids))
+
+
+def user_is_application_staff(user: dict, app_staff_role_ids: list[str]) -> bool:
+    """User has staff role for the application system."""
+    if not app_staff_role_ids:
+        return False
+    return bool(_user_roles(user) & set(app_staff_role_ids))
+
+
+# ── Ticket visibility ─────────────────────────────────────────────────────────
+
+def user_can_see_ticket(
+    user: dict,
+    ticket: dict,
+    server_id: str,
+    staff_role_ids: list[str],
+    web_admin_role_ids: list[str] | None = None,
+) -> bool:
+    """
+    A user can see a ticket if:
+      1. They are MBL
+      2. They have a WebAdmin role for this server
+      3. They are staff for this specific ticket module
+      4. They created the ticket
+      5. They were explicitly added to the ticket channel (ticket['added_users'])
+    """
     uid = user.get("id", "")
+
+    if is_mbl(user):
+        return True
+
+    if web_admin_role_ids and user_is_web_admin(user, web_admin_role_ids):
+        return True
+
+    if staff_role_ids and user_is_ticket_staff_for_module(user, staff_role_ids):
+        return True
+
     if uid and str(ticket.get("creator_id", "")) == uid:
         return True
-    user_roles = set(user.get("roles", []))
-    if staff_role_ids and user_roles & set(staff_role_ids):
+
+    # Explicitly added users (stored in ticket local data as 'added_users')
+    added = ticket.get("added_users") or []
+    if uid and uid in [str(u) for u in added]:
         return True
-    ar = allowed_roles()
-    if ar and user_roles & ar:
+
+    return False
+
+
+def user_can_see_application(
+    user: dict,
+    application: dict,
+    server_id: str,
+    app_staff_role_ids: list[str],
+    web_admin_role_ids: list[str] | None = None,
+) -> bool:
+    """
+    A user can see an application if:
+      1. They are MBL
+      2. They have a WebAdmin role for this server
+      3. They have an application staff role
+      4. They created the application
+    """
+    uid = user.get("id", "")
+
+    if is_mbl(user):
         return True
+
+    if web_admin_role_ids and user_is_web_admin(user, web_admin_role_ids):
+        return True
+
+    if app_staff_role_ids and user_is_application_staff(user, app_staff_role_ids):
+        return True
+
+    if uid and str(application.get("creator_id", "")) == uid:
+        return True
+
     return False
 
 

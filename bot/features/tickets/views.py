@@ -341,6 +341,14 @@ class TicketCloseRequestView(discord.ui.View):
 # ADD USER
 # ══════════════════════════════════════════════════════════════════════════════
 
+"""
+Patch for bot/features/tickets/views.py  –  AddUserView
+Updates the tickets table with added_users so the dashboard permission
+system can grant those users view access to their ticket.
+
+Replace the existing AddUserView class with this one.
+"""
+
 class AddUserView(discord.ui.View):
     def __init__(self, ticket_id: int, server_id: str, channel: discord.TextChannel):
         super().__init__(timeout=60)
@@ -353,13 +361,37 @@ class AddUserView(discord.ui.View):
         self.add_item(sel)
 
     async def user_selected(self, interaction: discord.Interaction):
-        for user_id in interaction.data["values"]:
+        added_ids = interaction.data["values"]
+
+        # Grant Discord channel permissions
+        for user_id in added_ids:
             member = interaction.guild.get_member(int(user_id))
             if member:
                 await self.channel.set_permissions(
                     member, view_channel=True, send_messages=True, read_message_history=True,
                 )
-        added = ", ".join(f"<@{uid}>" for uid in interaction.data["values"])
+
+        # Persist added_users to local storage and Supabase
+        try:
+            from bot.features.tickets.storage import load_ticket, update_ticket
+            from bot.core.supabase_client import get_supabase
+
+            ticket = load_ticket(self.server_id, self.ticket_id) or {}
+            existing = ticket.get("added_users") or []
+            merged = list(set(existing + added_ids))
+            update_ticket(self.server_id, self.ticket_id, {"added_users": merged})
+
+            # Also update Supabase so the dashboard can read it
+            supabase = get_supabase()
+            supabase.table("tickets").update({"added_users": merged})\
+                .eq("ticket_id", self.ticket_id)\
+                .eq("server_id", self.server_id)\
+                .execute()
+        except Exception as e:
+            import logging
+            logging.getLogger("tickets.views").error(f"[AddUserView] persist added_users: {e}")
+
+        added = ", ".join(f"<@{uid}>" for uid in added_ids)
         await interaction.response.send_message(f"✅ Hinzugefügt: {added}", ephemeral=True)
         await self.channel.send(f"👤 {added} wurde zum Ticket hinzugefügt.")
         self.stop()

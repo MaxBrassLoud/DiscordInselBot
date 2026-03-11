@@ -1,5 +1,15 @@
 """
 web_app/routes/dashboard.py  –  Unified Dashboard (Tickets + Bewerbungen)
+
+Permission matrix
+─────────────────
+MBL (env var)         → sees everything everywhere
+WebAdmin role         → sees all tickets + applications on that server
+Module staff role     → sees only tickets belonging to their module(s)
+Application staff     → sees all applications on that server
+Ticket creator        → sees their own ticket regardless of module
+Added to ticket       → sees that specific ticket (ticket['added_users'])
+Application creator   → sees their own application
 """
 from __future__ import annotations
 import logging
@@ -8,9 +18,16 @@ from aiohttp import web
 from ..session    import get_session
 from ..renderer   import render
 from ..discord_api import (
-    user_has_server_access, user_can_see_ticket,
+    user_has_server_access,
+    user_can_see_ticket,
+    user_can_see_application,
+    user_is_web_admin,
+    user_is_ticket_staff_for_module,
+    user_is_application_staff,
+    is_mbl,
     cached_guild_info, guild_icon_url,
     get_member, member_display_name, member_avatar_url,
+    _parse_role_ids,
 )
 
 log = logging.getLogger("web.dashboard")
@@ -38,6 +55,38 @@ async def _resolve_member(guild_id: str, user_id: str, cache: dict) -> dict | No
     if user_id not in cache:
         cache[user_id] = await get_member(guild_id, user_id)
     return cache[user_id]
+
+
+async def _load_server_web_admin_ids(server_id: str, supabase) -> list[str]:
+    """Load web_admin_role_ids from ticket_servers table."""
+    r = supabase.table("ticket_servers").select("web_admin_role_ids")\
+        .eq("server_id", server_id).execute()
+    if r.data:
+        return _parse_role_ids(r.data[0].get("web_admin_role_ids", ""))
+    return []
+
+
+async def _load_app_server_web_admin_ids(server_id: str, supabase) -> list[str]:
+    """Load web_admin_role_ids from application_servers table."""
+    r = supabase.table("application_servers").select("web_admin_role_ids")\
+        .eq("server_id", server_id).execute()
+    if r.data:
+        return _parse_role_ids(r.data[0].get("web_admin_role_ids", ""))
+    return []
+
+
+async def _get_module_staff_map(server_id: str, supabase) -> dict[str, list[str]]:
+    """
+    Returns {module_name: [role_id, ...]} for all modules on this server.
+    Used to filter tickets by module visibility.
+    """
+    mods = supabase.table("ticket_modules").select("id,name").eq("server_id", server_id).execute().data or []
+    result: dict[str, list[str]] = {}
+    for mod in mods:
+        roles = supabase.table("ticket_module_roles").select("role_id")\
+            .eq("module_id", mod["id"]).execute().data or []
+        result[mod["name"]] = [r["role_id"] for r in roles]
+    return result
 
 
 # ── Main dashboard (redirect) ─────────────────────────────────────────────────
@@ -72,13 +121,14 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
         if selected is None:
             raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
 
-        # Load all staff role IDs for this server
-        all_staff_roles: list[str] = []
-        mods = supabase.table("ticket_modules").select("id").eq("server_id", server_id).execute().data or []
-        for mod_row in mods:
-            roles = supabase.table("ticket_module_roles").select("role_id").eq("module_id", mod_row["id"]).execute().data or []
-            all_staff_roles.extend(r["role_id"] for r in roles)
+        # Load web admin roles and per-module staff roles
+        web_admin_ids   = _parse_role_ids(selected.get("web_admin_role_ids", ""))
+        module_staff_map = await _get_module_staff_map(server_id, supabase)
 
+        # Determine which modules this user can see
+        is_admin = is_mbl(user) or user_is_web_admin(user, web_admin_ids)
+
+        # Build query
         q = supabase.table("tickets").select("*").eq("server_id", server_id)
         if request.rel_url.query.get("status"):
             q = q.eq("status", request.rel_url.query["status"])
@@ -92,8 +142,16 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
 
         member_cache: dict[str, dict] = {}
         for t in raw_tickets:
-            if not user_can_see_ticket(user, t, server_id, all_staff_roles):
+            mod_name      = t.get("module", "")
+            mod_staff_ids = module_staff_map.get(mod_name, [])
+
+            if not user_can_see_ticket(
+                user, t, server_id,
+                staff_role_ids=mod_staff_ids,
+                web_admin_role_ids=web_admin_ids,
+            ):
                 continue
+
             m = await _resolve_member(server_id, t.get("creator_id", ""), member_cache)
             t["creator_display"] = member_display_name(m) if m else (t.get("creator_id") or "Unbekannt")
             t["creator_avatar"]  = member_avatar_url(m) if m else None
@@ -137,6 +195,11 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
 
     supabase = get_supabase()
+
+    # Load web admin role IDs
+    web_admin_ids = await _load_server_web_admin_ids(server_id, supabase)
+
+    # Load module-specific staff roles
     mod_name = ticket.get("module", "")
     staff_role_ids: list[str] = []
     if mod_name:
@@ -147,7 +210,7 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
                 .eq("module_id", mod_row["id"]).execute().data or []
             staff_role_ids.extend(r["role_id"] for r in roles)
 
-    if not user_can_see_ticket(user, ticket, server_id, staff_role_ids):
+    if not user_can_see_ticket(user, ticket, server_id, staff_role_ids, web_admin_ids):
         raise web.HTTPForbidden(reason="Du hast keinen Zugriff auf dieses Ticket.")
 
     creator_id = ticket.get("creator_id", "")
@@ -194,6 +257,10 @@ async def handle_application_list(request: web.Request) -> web.Response:
         if selected is None:
             raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
 
+        # Load permission role IDs
+        web_admin_ids = _parse_role_ids(selected.get("web_admin_role_ids", ""))
+        app_staff_ids = _parse_role_ids(selected.get("staff_role_ids", ""))
+
         q = supabase.table("applications").select("*").eq("server_id", server_id)
         if request.rel_url.query.get("status"):
             q = q.eq("status", request.rel_url.query["status"])
@@ -205,6 +272,13 @@ async def handle_application_list(request: web.Request) -> web.Response:
 
         member_cache: dict[str, dict] = {}
         for a in raw_apps:
+            if not user_can_see_application(
+                user, a, server_id,
+                app_staff_role_ids=app_staff_ids,
+                web_admin_role_ids=web_admin_ids,
+            ):
+                continue
+
             m = await _resolve_member(server_id, a.get("creator_id", ""), member_cache)
             a["creator_display"] = member_display_name(m) if m else a.get("creator_id", "")
             a["creator_avatar"]  = member_avatar_url(m) if m else None
@@ -248,12 +322,15 @@ async def handle_application_detail(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
 
     supabase = get_supabase()
-    cfg_r    = supabase.table("application_servers").select("staff_role_ids").eq("server_id", server_id).execute()
-    staff_role_ids: list[str] = []
-    if cfg_r.data:
-        staff_role_ids = [r.strip() for r in (cfg_r.data[0].get("staff_role_ids") or "").split(",") if r.strip()]
+    web_admin_ids = await _load_app_server_web_admin_ids(server_id, supabase)
 
-    if not user_can_see_ticket(user, {"creator_id": app.get("creator_id")}, server_id, staff_role_ids):
+    cfg_r = supabase.table("application_servers").select("staff_role_ids")\
+        .eq("server_id", server_id).execute()
+    app_staff_ids: list[str] = []
+    if cfg_r.data:
+        app_staff_ids = _parse_role_ids(cfg_r.data[0].get("staff_role_ids", ""))
+
+    if not user_can_see_application(user, app, server_id, app_staff_ids, web_admin_ids):
         raise web.HTTPForbidden(reason="Du hast keinen Zugriff auf diese Bewerbung.")
 
     creator_id = app.get("creator_id", "")
