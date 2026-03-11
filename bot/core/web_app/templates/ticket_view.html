@@ -1,175 +1,442 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ticket #{{ ticket.ticket_id }} – Insel Bot</title>
-<link rel="stylesheet" href="/static/dashboard.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ticket #{{ ticket.id }} – Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0e0f13;
+      --surface:   #16181f;
+      --surface2:  #1d2029;
+      --border:    #2a2d38;
+      --border2:   #353845;
+      --text:      #e8eaf0;
+      --muted:     #787d91;
+      --accent:    #5865f2;
+      --accent-h:  #4752c4;
+      --green:     #3ba55d;
+      --yellow:    #faa81a;
+      --red:       #ed4245;
+      --radius:    10px;
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Topbar ── */
+    .topbar {
+      padding: 0 28px;
+      height: 54px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .back-link {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 500;
+      transition: color .15s;
+    }
+
+    .back-link:hover { color: var(--text); }
+
+    .topbar-sep { color: var(--border2); }
+
+    .topbar-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+    /* ── Layout ── */
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .card-body { padding: 20px; }
+
+    /* ── Ticket header ── */
+    .ticket-title {
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.3;
+      margin-bottom: 10px;
+    }
+
+    .ticket-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 9px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
+    }
+
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .badge-open    { background: rgba(59,165,93,.12);  color: #3ba55d; }
+    .badge-open .badge-dot    { background: #3ba55d; }
+    .badge-closed  { background: rgba(114,118,125,.12); color: #8b8f9a; }
+    .badge-closed .badge-dot  { background: #8b8f9a; }
+    .badge-pending { background: rgba(250,168,26,.12); color: #faa81a; }
+    .badge-pending .badge-dot { background: #faa81a; }
+
+    .module-chip {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 4px; font-size: 12px; font-weight: 500;
+      background: var(--surface2); border: 1px solid var(--border2);
+      color: var(--muted); font-family: 'DM Mono', monospace;
+    }
+
+    /* ── Info grid ── */
+    .info-grid { display: flex; flex-direction: column; gap: 0; }
+
+    .info-row {
+      display: flex; align-items: flex-start;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+
+    .info-row:last-child { border-bottom: none; }
+
+    .info-label {
+      width: 120px; flex-shrink: 0;
+      font-size: 12px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em;
+      color: var(--muted); padding-top: 1px;
+    }
+
+    .info-value { font-size: 13.5px; flex: 1; }
+
+    .user-inline {
+      display: inline-flex; align-items: center; gap: 7px;
+    }
+
+    .avatar-sm {
+      width: 24px; height: 24px; border-radius: 50%;
+      object-fit: cover; flex-shrink: 0;
+    }
+
+    .avatar-placeholder {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: var(--muted); flex-shrink: 0;
+    }
+
+    /* ── Messages ── */
+    .messages { display: flex; flex-direction: column; gap: 2px; }
+
+    .msg {
+      display: flex;
+      gap: 12px;
+      padding: 10px 20px;
+      transition: background .1s;
+    }
+
+    .msg:hover { background: var(--surface2); }
+
+    .msg-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      object-fit: cover; flex-shrink: 0; margin-top: 2px;
+    }
+
+    .msg-avatar-ph {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; color: var(--muted); flex-shrink: 0; margin-top: 2px;
+    }
+
+    .msg-body { flex: 1; min-width: 0; }
+
+    .msg-header {
+      display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;
+    }
+
+    .msg-author {
+      font-size: 14px; font-weight: 600;
+    }
+
+    .msg-author.is-bot { color: var(--accent); }
+
+    .msg-time {
+      font-size: 11px; color: var(--muted);
+      font-family: 'DM Mono', monospace;
+    }
+
+    .msg-text {
+      font-size: 14px; line-height: 1.55; color: #c7cade;
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    .bot-tag {
+      display: inline-block;
+      background: var(--accent);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: .04em;
+      vertical-align: middle;
+      margin-left: 2px;
+    }
+
+    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
+
+    .empty-state {
+      text-align: center; padding: 48px 20px; color: var(--muted);
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+  </style>
 </head>
 <body>
+
+<!-- Topbar -->
+<div class="topbar">
+  <a href="/dashboard/tickets?server_id={{ server_id }}" class="back-link">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+    Tickets
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">Ticket #{{ ticket.id }}</span>
+
+  <div class="topbar-right">
+    {% if ticket.get('status') == 'open' %}
+      <span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
+    {% elif ticket.get('status') == 'closed' %}
+      <span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>
+    {% else %}
+      <span class="badge badge-pending"><span class="badge-dot"></span>{{ ticket.get('status','?') }}</span>
+    {% endif %}
+    {% if ticket.get('module') %}
+      <span class="module-chip">{{ ticket.module }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Layout -->
 <div class="layout">
 
-  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
-  <aside class="sidebar">
-    <div class="sidebar-brand">
-      <div class="sidebar-brand-icon">🎫</div>
-      <div class="sidebar-brand-name">Insel Bot</div>
-      <div class="sidebar-brand-status">
-        <span class="dot"></span> System aktiv
-      </div>
-    </div>
-
-    <nav class="sidebar-nav">
-      <div class="nav-section-label">Navigation</div>
-      {% set sid_param = ("?server_id=" ~ server_id) if server_id else "" %}
-      <a href="/dashboard/tickets{{ sid_param }}" class="nav-item active">
-        <span class="nav-icon">🎫</span> Tickets
-      </a>
-      <a href="/dashboard/applications{{ sid_param }}" class="nav-item">
-        <span class="nav-icon">⛏️</span> Bewerbungen
-      </a>
-    </nav>
-
-    <div class="sidebar-footer">
-      <div class="user-chip">
-        <img src="{{ user.avatar }}" alt="{{ user.display_name }}">
-        <span class="user-chip-name">{{ user.display_name or user.username }}</span>
-        <a href="/logout" class="logout-link" title="Abmelden">⏻</a>
-      </div>
-    </div>
-  </aside>
-
-  <!-- ── Main ─────────────────────────────────────────────────────────────── -->
-  <main class="main">
-    <div class="topbar">
-      <div class="topbar-title">
-        <a href="/dashboard/tickets{{ ('?server_id=' ~ server_id) if server_id else '' }}"
-           style="color:var(--text-2);font-size:.9rem;font-weight:500">← Tickets</a>
-        <span style="margin:0 8px;color:var(--text-3)">/</span>
-        Ticket <span style="color:var(--primary);font-family:'JetBrains Mono',monospace">#{{ ticket.ticket_id }}</span>
-      </div>
-      <div class="topbar-right">
-        <span class="badge {% if ticket.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
-          {{ '🟢 Offen' if ticket.status == 'open' else '🔴 Geschlossen' }}
-        </span>
-      </div>
-    </div>
-
-    <div class="content">
-
-      <!-- Info Grid -->
-      <div class="info-grid">
-        <div class="info-box">
-          <div class="info-label">Ticket-ID</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;color:var(--primary)">#{{ ticket.ticket_id }}</div>
+  <!-- Left: Messages -->
+  <div>
+    <!-- Ticket header -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-body">
+        <div class="ticket-title">
+          {{ ticket.get('title') or ticket.get('topic') or ('Ticket #' ~ ticket.id) }}
         </div>
-        <div class="info-box">
-          <div class="info-label">Modul</div>
-          <div class="info-value">
-            <span class="badge badge-module">{{ ticket.module or '–' }}</span>
-          </div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Status</div>
-          <div class="info-value">
-            <span class="badge {% if ticket.status == 'open' %}badge-open{% else %}badge-closed{% endif %}">
-              {{ '🟢 Offen' if ticket.status == 'open' else '🔴 Geschlossen' }}
-            </span>
-          </div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Erstellt</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
-            {{ ticket.created_at[:16] if ticket.created_at else '–' }}
-          </div>
-        </div>
-        {% if ticket.closed_at %}
-        <div class="info-box">
-          <div class="info-label">Geschlossen</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
-            {{ ticket.closed_at[:16] }}
-          </div>
-        </div>
-        {% endif %}
-        {% if ticket.claimed_by %}
-        <div class="info-box">
-          <div class="info-label">Übernommen von</div>
-          <div class="info-value">{{ ticket.claimed_by }}</div>
-        </div>
-        {% endif %}
-      </div>
-
-      <!-- Ersteller -->
-      <div class="card">
-        <div class="card-title">👤 Ersteller</div>
-        <div class="creator-cell" style="font-size:1rem">
-          {% if ticket.creator_avatar %}
-            <img src="{{ ticket.creator_avatar }}" alt="" class="creator-avatar" style="width:36px;height:36px">
+        <div class="ticket-meta">
+          {% if ticket.get('status') == 'open' %}
+            <span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
+          {% elif ticket.get('status') == 'closed' %}
+            <span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>
+          {% else %}
+            <span class="badge badge-pending"><span class="badge-dot"></span>{{ ticket.get('status','?') }}</span>
           {% endif %}
-          <div>
-            <div style="font-weight:700;font-size:.95rem">{{ ticket.creator_display or ticket.creator_id }}</div>
-            <div style="font-size:.78rem;color:var(--text-3);font-family:'JetBrains Mono',monospace">
-              {{ ticket.creator_id }}
-            </div>
-          </div>
+          {% if ticket.get('module') %}
+            <span class="module-chip">{{ ticket.module }}</span>
+          {% endif %}
+          <span class="mono" style="margin-left:auto;">
+            {% if ticket.get('created_at') %}
+              Erstellt {{ ticket.created_at[:10] }}
+            {% endif %}
+          </span>
         </div>
       </div>
+    </div>
 
-      <!-- Beschreibung -->
-      {% if ticket.description %}
-      <div class="card">
-        <div class="card-title">📋 Beschreibung</div>
-        <div class="desc-box">{{ ticket.description }}</div>
+    <!-- Messages -->
+    <div class="card">
+      <div class="card-header">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        <span class="card-title">Verlauf</span>
+        <span class="mono" style="margin-left:auto;">{{ messages|length }} Nachrichten</span>
       </div>
-      {% endif %}
 
-      <!-- Nachrichten -->
       {% if messages %}
-      <div class="card">
-        <div class="card-title">
-          💬 Verlauf
-          <span style="font-size:.82rem;color:var(--text-3);font-weight:400;margin-left:4px">({{ messages|length }})</span>
-        </div>
-        <div class="messages-list">
+        <div class="messages">
           {% for msg in messages %}
-          <div class="message-item">
-            <div class="message-avatar">
-              {% if msg.author_avatar %}
-                <img src="{{ msg.author_avatar }}" alt="" style="width:36px;height:36px;border-radius:50%">
-              {% else %}
-                {{ (msg.author_display or '?')[:1].upper() }}
-              {% endif %}
-            </div>
-            <div class="message-body">
-              <div class="message-meta">
-                <span class="message-author">{{ msg.author_display or msg.author_id }}</span>
-                <span class="message-time">{{ msg.created_at[:16] if msg.created_at else '' }}</span>
+          <div class="msg">
+            {% set author = msg.get('author') or {} %}
+            {% set av = author.get('avatar') %}
+            {% set uid = author.get('id','') %}
+            {% if av %}
+              <img class="msg-avatar" src="https://cdn.discordapp.com/avatars/{{ uid }}/{{ av }}.png?size=64" alt="">
+            {% else %}
+              <div class="msg-avatar-ph">{{ (author.get('username','?'))[:1].upper() }}</div>
+            {% endif %}
+
+            <div class="msg-body">
+              <div class="msg-header">
+                <span class="msg-author {{ 'is-bot' if author.get('bot') else '' }}">
+                  {{ author.get('global_name') or author.get('username') or 'Unbekannt' }}
+                </span>
+                {% if author.get('bot') %}
+                  <span class="bot-tag">APP</span>
+                {% endif %}
+                {% if msg.get('timestamp') %}
+                  <span class="msg-time">{{ msg.timestamp[:16].replace('T',' ') }}</span>
+                {% endif %}
               </div>
-              <div class="message-content">{{ msg.content }}</div>
-              {% if msg.attachments %}
-              <div style="margin-top:6px">
-                {% for att in msg.attachments %}
-                <a href="{{ att.url }}" target="_blank" class="attachment-link">📎 {{ att.filename or 'Anhang' }}</a>
-                {% endfor %}
-              </div>
-              {% endif %}
+              <div class="msg-text">{{ msg.get('content') or '' }}</div>
             </div>
           </div>
           {% endfor %}
         </div>
-      </div>
       {% else %}
-      <div class="card">
-        <div class="empty-state">
-          <div class="empty-icon">💬</div>
-          <strong>Keine Nachrichten</strong>
-          <p>Dieses Ticket enthält noch keine Nachrichten.</p>
+        <div class="empty-state">Kein Verlauf gespeichert.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right: Sidebar info -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="card-title">Details</span>
+      </div>
+      <div class="card-body" style="padding:0 20px;">
+        <div class="info-grid">
+
+          <div class="info-row">
+            <div class="info-label">Ticket-ID</div>
+            <div class="info-value mono">#{{ ticket.id }}</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-label">Status</div>
+            <div class="info-value">
+              {% if ticket.get('status') == 'open' %}
+                <span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
+              {% elif ticket.get('status') == 'closed' %}
+                <span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>
+              {% else %}
+                <span class="badge badge-pending"><span class="badge-dot"></span>{{ ticket.get('status','?') }}</span>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if ticket.get('module') %}
+          <div class="info-row">
+            <div class="info-label">Modul</div>
+            <div class="info-value"><span class="module-chip">{{ ticket.module }}</span></div>
+          </div>
+          {% endif %}
+
+          <div class="info-row">
+            <div class="info-label">Erstellt von</div>
+            <div class="info-value">
+              <div class="user-inline">
+                {% if ticket.get('creator_avatar') %}
+                  <img class="avatar-sm" src="{{ ticket.creator_avatar }}" alt="">
+                {% else %}
+                  <div class="avatar-placeholder">?</div>
+                {% endif %}
+                <span>{{ ticket.get('creator_display', 'Unbekannt') }}</span>
+              </div>
+            </div>
+          </div>
+
+          {% if ticket.get('claimed_by_display') %}
+          <div class="info-row">
+            <div class="info-label">Bearbeiter</div>
+            <div class="info-value">{{ ticket.claimed_by_display }}</div>
+          </div>
+          {% endif %}
+
+          {% if ticket.get('created_at') %}
+          <div class="info-row">
+            <div class="info-label">Erstellt am</div>
+            <div class="info-value mono">{{ ticket.created_at[:16].replace('T', ' ') }}</div>
+          </div>
+          {% endif %}
+
+          {% if ticket.get('closed_at') %}
+          <div class="info-row">
+            <div class="info-label">Geschlossen</div>
+            <div class="info-value mono">{{ ticket.closed_at[:16].replace('T', ' ') }}</div>
+          </div>
+          {% endif %}
+
         </div>
       </div>
-      {% endif %}
-
     </div>
-  </main>
+  </div>
+
 </div>
 </body>
 </html>

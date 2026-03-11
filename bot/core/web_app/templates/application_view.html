@@ -1,196 +1,429 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bewerbung #{{ app.app_id }} – Insel Bot</title>
-<link rel="stylesheet" href="/static/dashboard.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bewerbung #{{ app.id }} – Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0e0f13;
+      --surface:   #16181f;
+      --surface2:  #1d2029;
+      --border:    #2a2d38;
+      --border2:   #353845;
+      --text:      #e8eaf0;
+      --muted:     #787d91;
+      --accent:    #5865f2;
+      --accent-h:  #4752c4;
+      --green:     #3ba55d;
+      --yellow:    #faa81a;
+      --red:       #ed4245;
+      --radius:    10px;
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      padding: 0 28px;
+      height: 54px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; z-index: 10;
+    }
+
+    .back-link {
+      display: flex; align-items: center; gap: 6px;
+      color: var(--muted); text-decoration: none;
+      font-size: 13.5px; font-weight: 500;
+      transition: color .15s;
+    }
+
+    .back-link:hover { color: var(--text); }
+    .topbar-sep { color: var(--border2); }
+    .topbar-title { font-size: 15px; font-weight: 600; }
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+
+    .card-title {
+      font-size: 12px; font-weight: 600;
+      letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 9px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
+    }
+
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .badge-pending  { background: rgba(250,168,26,.12); color: #faa81a; }
+    .badge-pending .badge-dot  { background: #faa81a; }
+    .badge-accepted { background: rgba(59,165,93,.12);  color: #3ba55d; }
+    .badge-accepted .badge-dot { background: #3ba55d; }
+    .badge-rejected { background: rgba(237,66,69,.12);  color: #ed4245; }
+    .badge-rejected .badge-dot { background: #ed4245; }
+
+    .module-chip {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 12px; font-weight: 500;
+      background: var(--surface2); border: 1px solid var(--border2);
+      color: var(--muted); font-family: 'DM Mono', monospace;
+    }
+
+    /* ── Applicant hero ── */
+    .applicant-hero {
+      padding: 24px 20px;
+      display: flex; align-items: center; gap: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .applicant-avatar {
+      width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
+    }
+
+    .applicant-avatar-ph {
+      width: 56px; height: 56px; border-radius: 50%;
+      background: var(--surface2); border: 2px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; color: var(--muted); font-weight: 600;
+    }
+
+    .applicant-name { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+    .applicant-meta { font-size: 13px; color: var(--muted); }
+
+    /* ── Q&A answers ── */
+    .qa-list { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+
+    .qa-item {}
+
+    .qa-question {
+      font-size: 12.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em;
+      color: var(--muted); margin-bottom: 6px;
+    }
+
+    .qa-answer {
+      font-size: 14px; line-height: 1.6; color: #c7cade;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* ── Info grid ── */
+    .info-grid { display: flex; flex-direction: column; }
+
+    .info-row {
+      display: flex; align-items: flex-start;
+      padding: 11px 20px;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+
+    .info-row:last-child { border-bottom: none; }
+
+    .info-label {
+      width: 110px; flex-shrink: 0;
+      font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em;
+      color: var(--muted); padding-top: 1px;
+    }
+
+    .info-value { font-size: 13.5px; flex: 1; }
+
+    .user-inline { display: inline-flex; align-items: center; gap: 7px; }
+
+    .avatar-sm {
+      width: 22px; height: 22px; border-radius: 50%; object-fit: cover;
+    }
+
+    .avatar-placeholder {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; color: var(--muted);
+    }
+
+    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
+
+    /* ── Messages ── */
+    .messages { display: flex; flex-direction: column; gap: 2px; }
+
+    .msg { display: flex; gap: 12px; padding: 10px 20px; transition: background .1s; }
+    .msg:hover { background: var(--surface2); }
+
+    .msg-avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 2px; }
+
+    .msg-avatar-ph {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; color: var(--muted); flex-shrink: 0; margin-top: 2px;
+    }
+
+    .msg-body { flex: 1; min-width: 0; }
+
+    .msg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+
+    .msg-author { font-size: 13.5px; font-weight: 600; }
+    .msg-author.is-bot { color: var(--accent); }
+
+    .msg-time { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+    .msg-text { font-size: 14px; line-height: 1.55; color: #c7cade; white-space: pre-wrap; word-break: break-word; }
+
+    .bot-tag {
+      background: var(--accent); color: white; font-size: 10px; font-weight: 700;
+      padding: 1px 5px; border-radius: 3px; letter-spacing: .04em; vertical-align: middle; margin-left: 2px;
+    }
+
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 14px; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+  </style>
 </head>
 <body>
+
+<!-- Topbar -->
+<div class="topbar">
+  <a href="/dashboard/applications?server_id={{ server_id }}" class="back-link">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+    Bewerbungen
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">Bewerbung #{{ app.id }}</span>
+
+  <div class="topbar-right">
+    {% if app.get('status') == 'pending' %}
+      <span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>
+    {% elif app.get('status') == 'accepted' %}
+      <span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>
+    {% elif app.get('status') == 'rejected' %}
+      <span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>
+    {% endif %}
+    {% if app.get('type') or app.get('position') %}
+      <span class="module-chip">{{ app.get('type') or app.get('position') }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Layout -->
 <div class="layout">
 
-  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
-  <aside class="sidebar">
-    <div class="sidebar-brand">
-      <div class="sidebar-brand-icon">🎫</div>
-      <div class="sidebar-brand-name">Insel Bot</div>
-      <div class="sidebar-brand-status">
-        <span class="dot"></span> System aktiv
-      </div>
-    </div>
+  <!-- Left: Application content -->
+  <div>
 
-    <nav class="sidebar-nav">
-      <div class="nav-section-label">Navigation</div>
-      {% set sid_param = ("?server_id=" ~ server_id) if server_id else "" %}
-      <a href="/dashboard/tickets{{ sid_param }}" class="nav-item">
-        <span class="nav-icon">🎫</span> Tickets
-      </a>
-      <a href="/dashboard/applications{{ sid_param }}" class="nav-item active">
-        <span class="nav-icon">⛏️</span> Bewerbungen
-      </a>
-    </nav>
-
-    <div class="sidebar-footer">
-      <div class="user-chip">
-        <img src="{{ user.avatar }}" alt="{{ user.display_name }}">
-        <span class="user-chip-name">{{ user.display_name or user.username }}</span>
-        <a href="/logout" class="logout-link" title="Abmelden">⏻</a>
-      </div>
-    </div>
-  </aside>
-
-  <!-- ── Main ─────────────────────────────────────────────────────────────── -->
-  <main class="main">
-    <div class="topbar">
-      <div class="topbar-title">
-        <a href="/dashboard/applications{{ ('?server_id=' ~ server_id) if server_id else '' }}"
-           style="color:var(--text-2);font-size:.9rem;font-weight:500">← Bewerbungen</a>
-        <span style="margin:0 8px;color:var(--text-3)">/</span>
-        Bewerbung <span style="color:var(--primary);font-family:'JetBrains Mono',monospace">#{{ app.app_id }}</span>
-      </div>
-      <div class="topbar-right">
-        {% if app.status == 'open' %}
-          <span class="badge badge-open">⏳ Offen</span>
-        {% elif app.status == 'accepted' %}
-          <span class="badge badge-accepted">✅ Angenommen</span>
+    <!-- Applicant info -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="applicant-hero">
+        {% if app.get('creator_avatar') %}
+          <img class="applicant-avatar" src="{{ app.creator_avatar }}" alt="">
         {% else %}
-          <span class="badge badge-rejected">❌ Abgelehnt</span>
+          <div class="applicant-avatar-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
         {% endif %}
-      </div>
-    </div>
-
-    <div class="content">
-
-      <!-- Info Grid -->
-      <div class="info-grid">
-        <div class="info-box">
-          <div class="info-label">Bewerbungs-ID</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;color:var(--primary)">#{{ app.app_id }}</div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Minecraft Name</div>
-          <div class="info-value" style="color:var(--primary)">⛏️ {{ app.minecraft_name or '–' }}</div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Status</div>
-          <div class="info-value">
-            {% if app.status == 'open' %}
-              <span class="badge badge-open">⏳ Offen</span>
-            {% elif app.status == 'accepted' %}
-              <span class="badge badge-accepted">✅ Angenommen</span>
-            {% else %}
-              <span class="badge badge-rejected">❌ Abgelehnt</span>
+        <div>
+          <div class="applicant-name">{{ app.get('creator_display', 'Unbekannt') }}</div>
+          <div class="applicant-meta">
+            Bewerbung #{{ app.id }}
+            {% if app.get('type') or app.get('position') %}
+              · {{ app.get('type') or app.get('position') }}
+            {% endif %}
+            {% if app.get('created_at') %}
+              · {{ app.created_at[:10] }}
             {% endif %}
           </div>
         </div>
-        <div class="info-box">
-          <div class="info-label">Eingereicht</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
-            {{ app.created_at[:16] if app.created_at else '–' }}
-          </div>
-        </div>
-        {% if app.reviewed_at %}
-        <div class="info-box">
-          <div class="info-label">Entschieden</div>
-          <div class="info-value" style="font-family:'JetBrains Mono',monospace;font-size:.88rem">
-            {{ app.reviewed_at[:16] }}
-          </div>
-        </div>
-        {% endif %}
-        {% if app.claimed_by %}
-        <div class="info-box">
-          <div class="info-label">Bearbeitet von</div>
-          <div class="info-value">{{ app.claimed_by }}</div>
-        </div>
-        {% endif %}
       </div>
 
-      <!-- Bewerber -->
-      <div class="card">
-        <div class="card-title">👤 Bewerber</div>
-        <div class="creator-cell" style="font-size:1rem">
-          {% if app.creator_avatar %}
-            <img src="{{ app.creator_avatar }}" alt="" class="creator-avatar" style="width:36px;height:36px">
-          {% endif %}
-          <div>
-            <div style="font-weight:700;font-size:.95rem">{{ app.creator_display or app.creator_id }}</div>
-            <div style="font-size:.78rem;color:var(--text-3);font-family:'JetBrains Mono',monospace">
-              {{ app.creator_id }}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Bewerbungstext -->
-      {% if app.content or app.application_text %}
-      <div class="card">
-        <div class="card-title">📋 Bewerbungstext</div>
-        <div class="desc-box">{{ app.content or app.application_text }}</div>
-      </div>
-      {% endif %}
-
-      <!-- Antworten / Fragen -->
-      {% if app.answers %}
-      <div class="card">
-        <div class="card-title">❓ Antworten</div>
-        {% for item in app.answers %}
-        <div style="margin-bottom:16px">
-          <div style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--text-3);margin-bottom:6px">
-            {{ item.question }}
-          </div>
-          <div class="desc-box" style="border-left-color:var(--primary)">{{ item.answer }}</div>
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-
-      <!-- Ablehnungsgrund -->
-      {% if app.status == 'rejected' and app.rejection_reason %}
-      <div class="card" style="border-color:var(--red-b)">
-        <div class="card-title" style="color:var(--red)">❌ Ablehnungsgrund</div>
-        <div class="desc-box" style="border-left-color:var(--red)">{{ app.rejection_reason }}</div>
-      </div>
-      {% endif %}
-
-      <!-- Bewerbungsverlauf / Nachrichten -->
-      {% if messages %}
-      <div class="card">
-        <div class="card-title">
-          💬 Verlauf
-          <span style="font-size:.82rem;color:var(--text-3);font-weight:400;margin-left:4px">({{ messages|length }})</span>
-        </div>
-        <div class="messages-list">
-          {% for msg in messages %}
-          <div class="message-item">
-            <div class="message-avatar">
-              {% if msg.author_avatar %}
-                <img src="{{ msg.author_avatar }}" alt="" style="width:36px;height:36px;border-radius:50%">
-              {% else %}
-                {{ (msg.author_display or '?')[:1].upper() }}
-              {% endif %}
-            </div>
-            <div class="message-body">
-              <div class="message-meta">
-                <span class="message-author">{{ msg.author_display or msg.author_id }}</span>
-                <span class="message-time">{{ msg.created_at[:16] if msg.created_at else '' }}</span>
-              </div>
-              <div class="message-content">{{ msg.content }}</div>
-              {% if msg.attachments %}
-              <div style="margin-top:6px">
-                {% for att in msg.attachments %}
-                <a href="{{ att.url }}" target="_blank" class="attachment-link">📎 {{ att.filename or 'Anhang' }}</a>
-                {% endfor %}
-              </div>
-              {% endif %}
-            </div>
+      <!-- Q&A answers -->
+      {% if app.get('answers') %}
+        <div class="qa-list">
+          {% for qa in app.answers %}
+          <div class="qa-item">
+            <div class="qa-question">{{ qa.get('question') or ('Frage ' ~ loop.index) }}</div>
+            <div class="qa-answer">{{ qa.get('answer') or '—' }}</div>
           </div>
           {% endfor %}
         </div>
-      </div>
+      {% elif app.get('content') %}
+        <div class="qa-list">
+          <div class="qa-item">
+            <div class="qa-question">Bewerbungstext</div>
+            <div class="qa-answer">{{ app.content }}</div>
+          </div>
+        </div>
       {% endif %}
-
     </div>
-  </main>
+
+    <!-- Messages / staff notes -->
+    {% if messages %}
+    <div class="card">
+      <div class="card-header">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        <span class="card-title">Kommentare</span>
+        <span class="mono" style="margin-left:auto;">{{ messages|length }}</span>
+      </div>
+      <div class="messages">
+        {% for msg in messages %}
+        <div class="msg">
+          {% set author = msg.get('author') or {} %}
+          {% set av = author.get('avatar') %}
+          {% set uid = author.get('id','') %}
+          {% if av %}
+            <img class="msg-avatar" src="https://cdn.discordapp.com/avatars/{{ uid }}/{{ av }}.png?size=64" alt="">
+          {% else %}
+            <div class="msg-avatar-ph">{{ (author.get('username','?'))[:1].upper() }}</div>
+          {% endif %}
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-author {{ 'is-bot' if author.get('bot') else '' }}">
+                {{ author.get('global_name') or author.get('username') or 'Unbekannt' }}
+              </span>
+              {% if author.get('bot') %}<span class="bot-tag">APP</span>{% endif %}
+              {% if msg.get('timestamp') %}
+                <span class="msg-time">{{ msg.timestamp[:16].replace('T',' ') }}</span>
+              {% endif %}
+            </div>
+            <div class="msg-text">{{ msg.get('content','') }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Right sidebar -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="card-title">Details</span>
+      </div>
+
+      <div class="info-grid">
+
+        <div class="info-row">
+          <div class="info-label">ID</div>
+          <div class="info-value mono">#{{ app.id }}</div>
+        </div>
+
+        <div class="info-row">
+          <div class="info-label">Status</div>
+          <div class="info-value">
+            {% if app.get('status') == 'pending' %}
+              <span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>
+            {% elif app.get('status') == 'accepted' %}
+              <span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>
+            {% elif app.get('status') == 'rejected' %}
+              <span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>
+            {% else %}
+              <span class="badge badge-pending"><span class="badge-dot"></span>{{ app.get('status','?') }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if app.get('type') or app.get('position') %}
+        <div class="info-row">
+          <div class="info-label">Position</div>
+          <div class="info-value"><span class="module-chip">{{ app.get('type') or app.get('position') }}</span></div>
+        </div>
+        {% endif %}
+
+        <div class="info-row">
+          <div class="info-label">Bewerber</div>
+          <div class="info-value">
+            <div class="user-inline">
+              {% if app.get('creator_avatar') %}
+                <img class="avatar-sm" src="{{ app.creator_avatar }}" alt="">
+              {% else %}
+                <div class="avatar-placeholder">?</div>
+              {% endif %}
+              {{ app.get('creator_display', 'Unbekannt') }}
+            </div>
+          </div>
+        </div>
+
+        {% if app.get('reviewed_by') %}
+        <div class="info-row">
+          <div class="info-label">Reviewer</div>
+          <div class="info-value">{{ app.reviewed_by }}</div>
+        </div>
+        {% endif %}
+
+        {% if app.get('created_at') %}
+        <div class="info-row">
+          <div class="info-label">Eingereicht</div>
+          <div class="info-value mono">{{ app.created_at[:10] }}</div>
+        </div>
+        {% endif %}
+
+        {% if app.get('reviewed_at') %}
+        <div class="info-row">
+          <div class="info-label">Entschieden</div>
+          <div class="info-value mono">{{ app.reviewed_at[:10] }}</div>
+        </div>
+        {% endif %}
+
+        {% if app.get('reason') %}
+        <div class="info-row" style="flex-direction:column; gap:6px;">
+          <div class="info-label">Begründung</div>
+          <div class="info-value" style="font-size:13px; color:var(--muted); line-height:1.5;">{{ app.reason }}</div>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+
 </div>
 </body>
 </html>
