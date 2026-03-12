@@ -37,7 +37,7 @@ logger = get_logger("minecraft_names")
 # User-ID(s) mit Sonder-Zugriff (kommagetrennt im Env)
 _MBL_IDS: set[str] = {
     uid.strip()
-    for uid in os.getenv("MBL_USER_IDS", os.getenv("MBL_USER_ID", "")).split(",")
+    for uid in os.getenv("MBL", os.getenv("MBL", "")).split(",")
     if uid.strip()
 }
 
