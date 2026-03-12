@@ -9,6 +9,7 @@ from aiohttp import web
 
 from .middleware            import error_middleware
 from .ssl_utils             import get_ssl_context
+from .discord_api           import close_session
 from .routes.auth           import handle_login, handle_callback, handle_logout
 from .routes.api            import handle_api_members
 from .routes.dashboard      import (
@@ -21,8 +22,16 @@ from .routes.dashboard      import (
 log = logging.getLogger("web")
 
 
+async def _on_shutdown(app: web.Application) -> None:
+    """Sauber die gemeinsame aiohttp-Session schließen."""
+    await close_session()
+
+
 def build_app() -> web.Application:
     app = web.Application(middlewares=[error_middleware])
+
+    # Shutdown-Handler registrieren
+    app.on_shutdown.append(_on_shutdown)
 
     # Auth
     app.router.add_get("/login",          handle_login)

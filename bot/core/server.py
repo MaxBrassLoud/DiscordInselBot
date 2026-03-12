@@ -19,15 +19,13 @@ init_supabase(
     key=os.getenv("SUPABASE_KEY"),
 )
 
-
-
 # ── Bot Setup ─────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
-# ── Feature Cogs ─────────────────────────────────────────────────────────────
+# ── Feature Cogs ──────────────────────────────────────────────────────────────
 FEATURE_COGS = [
     "bot.features.spieleabend.cog",
     "bot.features.media.cog",
@@ -66,14 +64,29 @@ async def Ping(ctx):
 
 async def main():
     await keep_alive()
+
+    # Cogs einmalig laden – vor der Retry-Schleife
     async with bot:
         for cog in FEATURE_COGS:
+            await bot.load_extension(cog)
+            logger.info(f"✅ Geladen: {cog}")
+
+        # Retry-Schleife nur für den Login
+        for attempt in range(5):
             try:
-                await bot.load_extension(cog)
-                logger.info(f"✅ Geladen: {cog}")
-            except Exception as e:
-                logger.error(f"❌ Fehler beim Laden von {cog}: {e}")
-        await bot.start(os.getenv("DISCORD_TOKEN"))
+                await bot.start(os.getenv("DISCORD_TOKEN"))
+                break
+            except discord.errors.DiscordServerError as e:
+                if attempt < 4:
+                    wait = 10 * (attempt + 1)
+                    logger.warning(
+                        f"Discord nicht erreichbar (Versuch {attempt + 1}/5), "
+                        f"warte {wait}s... {e}"
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error("Discord nach 5 Versuchen nicht erreichbar. Abbruch.")
+                    raise
 
 
 if __name__ == "__main__":
