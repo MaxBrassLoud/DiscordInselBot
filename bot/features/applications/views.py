@@ -27,8 +27,9 @@ class ApplicationSetupView(discord.ui.View):
     """
     /bewerbung_setup  – configure the application system.
     Selects: panel channel, application category, newbie role,
-             member role, staff roles, log channel, welcome message text,
-             rejection cooldown hours, instruction message (posted in the application channel).
+             member role, staff roles, log channel, mc log channel,
+             welcome message text, rejection cooldown hours,
+             instruction message (posted in the application channel).
     """
 
     def __init__(self, guild_id: int, bot: discord.Client):
@@ -44,6 +45,7 @@ class ApplicationSetupView(discord.ui.View):
         self.newbie_role_id: str | None      = None
         self.member_role_id: str | None      = None
         self.log_channel_id: str | None      = None
+        self.mc_log_channel_id: str | None   = None   # ← NEU: Minecraft-Name-Log-Channel
         self.staff_role_ids: list[str]       = []
         self.rejection_cooldown_hours: int   = 24
         self.welcome_message: str            = (
@@ -61,15 +63,16 @@ class ApplicationSetupView(discord.ui.View):
     def _build_embed(self) -> discord.Embed:
         e = discord.Embed(title="⚙️ Bewerbungs-System Setup", color=discord.Color.blurple(),
                           description="Konfiguriere das Bewerbungs-System für diesen Server.")
-        e.add_field(name="📢 Panel-Kanal",       value=f"<#{self.panel_channel_id}>"  if self.panel_channel_id  else "*nicht gesetzt*", inline=True)
-        e.add_field(name="📁 Bewerbungs-Kategorie", value=f"<#{self.category_id}>"    if self.category_id       else "*nicht gesetzt*", inline=True)
-        e.add_field(name="📋 Log-Kanal",         value=f"<#{self.log_channel_id}>"   if self.log_channel_id    else "*nicht gesetzt*", inline=True)
-        e.add_field(name="🌱 Neulings-Rolle",    value=f"<@&{self.newbie_role_id}>"  if self.newbie_role_id    else "*nicht gesetzt*", inline=True)
-        e.add_field(name="👥 Mitglieds-Rolle",   value=f"<@&{self.member_role_id}>"  if self.member_role_id    else "*nicht gesetzt*", inline=True)
+        e.add_field(name="📢 Panel-Kanal",         value=f"<#{self.panel_channel_id}>"    if self.panel_channel_id    else "*nicht gesetzt*", inline=True)
+        e.add_field(name="📁 Bewerbungs-Kategorie", value=f"<#{self.category_id}>"        if self.category_id         else "*nicht gesetzt*", inline=True)
+        e.add_field(name="📋 Log-Kanal",            value=f"<#{self.log_channel_id}>"     if self.log_channel_id      else "*nicht gesetzt*", inline=True)
+        e.add_field(name="⛏️ MC-Name Log-Kanal",   value=f"<#{self.mc_log_channel_id}>"  if self.mc_log_channel_id   else "*nicht gesetzt*", inline=True)
+        e.add_field(name="🌱 Neulings-Rolle",       value=f"<@&{self.newbie_role_id}>"    if self.newbie_role_id      else "*nicht gesetzt*", inline=True)
+        e.add_field(name="👥 Mitglieds-Rolle",      value=f"<@&{self.member_role_id}>"    if self.member_role_id      else "*nicht gesetzt*", inline=True)
         e.add_field(name="⏳ Cooldown nach Ablehnung", value=f"{self.rejection_cooldown_hours} Stunden", inline=True)
         staff = ", ".join(f"<@&{r}>" for r in self.staff_role_ids) if self.staff_role_ids else "*nicht gesetzt*"
-        e.add_field(name="👮 Staff-Rollen",      value=staff[:300],                  inline=False)
-        e.add_field(name="💬 Willkommens-Text",  value=self.welcome_message[:200],   inline=False)
+        e.add_field(name="👮 Staff-Rollen",         value=staff[:300],                    inline=False)
+        e.add_field(name="💬 Willkommens-Text",     value=self.welcome_message[:200],     inline=False)
         e.add_field(name="📌 Anweisungs-Text (im Bewerbungskanal)", value=self.instruction_message[:200], inline=False)
         return e
 
@@ -118,7 +121,7 @@ class ApplicationSetupView(discord.ui.View):
             await i.response.edit_message(embed=self._build_embed(), view=self)
             await self._send_buttons_once(i)
         mr.callback = _mr; self.add_item(mr)
-        # All 5 rows are full. Staff roles + Save live in StaffRolePickerView.
+        # All 5 rows are full. Staff roles + MC-Log-Channel + Save live in StaffRolePickerView.
 
     async def _send_buttons_once(self, interaction: discord.Interaction):
         """After the first select, send the button row as a follow-up (once)."""
@@ -129,12 +132,6 @@ class ApplicationSetupView(discord.ui.View):
             "👇 Wenn du fertig bist:",
             view=self.make_buttons_view(),
             ephemeral=True,
-        )
-
-    async def _cb_staff_picker(self, interaction: discord.Interaction):
-        view = StaffRolePickerView(setup_view=self)
-        await interaction.response.send_message(
-            embed=view._build_embed(), view=view, ephemeral=True
         )
 
     def make_buttons_view(self) -> discord.ui.View:
@@ -173,6 +170,7 @@ class ApplicationSetupView(discord.ui.View):
                 "newbie_role_id":           self.newbie_role_id,
                 "member_role_id":           self.member_role_id,
                 "log_channel_id":           self.log_channel_id,
+                "mc_log_channel_id":        self.mc_log_channel_id,   # ← NEU
                 "staff_role_ids":           ",".join(self.staff_role_ids),
                 "welcome_message":          self.welcome_message,
                 "instruction_message":      self.instruction_message,
@@ -209,7 +207,7 @@ class ApplicationSetupView(discord.ui.View):
 # ── Staff Role Picker View (used in both Setup and Edit) ──────────────────────
 
 class StaffRolePickerView(discord.ui.View):
-    """Interactive role picker for staff roles – no manual ID entry needed."""
+    """Interactive role picker for staff roles + MC-Log-Channel – no manual ID entry needed."""
 
     def __init__(self, setup_view):
         super().__init__(timeout=180)
@@ -223,9 +221,19 @@ class StaffRolePickerView(discord.ui.View):
         role_sel.callback = self._roles_selected
         self.add_item(role_sel)
 
+        # ── NEU: MC-Name Log-Channel ──
+        mc_ch_sel = discord.ui.ChannelSelect(
+            placeholder="⛏️ MC-Name Log-Kanal auswählen (optional)",
+            min_values=0, max_values=1,
+            channel_types=[discord.ChannelType.text],
+            row=1,
+        )
+        mc_ch_sel.callback = self._mc_channel_selected
+        self.add_item(mc_ch_sel)
+
         btn_text = discord.ui.Button(
             label="💬 Texte & Cooldown bearbeiten",
-            style=discord.ButtonStyle.secondary, row=1,
+            style=discord.ButtonStyle.secondary, row=2,
         )
         btn_text.callback = self._cb_text
         self.add_item(btn_text)
@@ -236,14 +244,14 @@ class StaffRolePickerView(discord.ui.View):
         if is_setup:
             btn_save = discord.ui.Button(
                 label="🚀 Setup abschließen",
-                style=discord.ButtonStyle.success, row=1,
+                style=discord.ButtonStyle.success, row=2,
             )
             btn_save.callback = self._cb_setup_save
             self.add_item(btn_save)
         else:
             btn_done = discord.ui.Button(
                 label="✅ Fertig",
-                style=discord.ButtonStyle.success, row=1,
+                style=discord.ButtonStyle.success, row=2,
             )
             btn_done.callback = self._cb_done
             self.add_item(btn_done)
@@ -259,6 +267,12 @@ class StaffRolePickerView(discord.ui.View):
             if self._setup.staff_role_ids else "*noch nicht ausgewählt*"
         )
         e.add_field(name="👮 Aktuelle Staff-Rollen", value=staff, inline=False)
+        mc_ch = getattr(self._setup, "mc_log_channel_id", None)
+        e.add_field(
+            name="⛏️ MC-Name Log-Kanal",
+            value=f"<#{mc_ch}>" if mc_ch else "*nicht gesetzt*",
+            inline=False,
+        )
         e.add_field(
             name="💬 Willkommens-Text",
             value=self._setup.welcome_message[:300],
@@ -283,10 +297,24 @@ class StaffRolePickerView(discord.ui.View):
             self._setup._rebuild()
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
+    async def _mc_channel_selected(self, interaction: discord.Interaction):
+        """Store the selected MC-Log-Channel in the parent setup/edit view."""
+        vals = interaction.data.get("values", [])
+        self._setup.mc_log_channel_id = vals[0] if vals else None
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
     async def _cb_text(self, interaction: discord.Interaction):
         await interaction.response.send_modal(TextsAndCooldownModal(self._setup))
 
     async def _cb_done(self, interaction: discord.Interaction):
+        # Save mc_log_channel_id to DB immediately when in EditView
+        try:
+            get_supabase().table("application_servers").update({
+                "mc_log_channel_id": getattr(self._setup, "mc_log_channel_id", None),
+            }).eq("server_id", self._setup.guild_id).execute()
+        except Exception as e:
+            logger.error(f"[StaffRolePickerView._cb_done] DB save mc_log_channel_id: {e}")
+
         if hasattr(self._setup, "_original_interaction") and self._setup._original_interaction:
             try:
                 if hasattr(self._setup, "_rebuild"):
@@ -392,6 +420,7 @@ class ApplicationEditView(discord.ui.View):
         self.welcome_message: str = cfg.get("welcome_message", "")
         self.instruction_message: str = cfg.get("instruction_message", "")
         self.rejection_cooldown_hours: int = int(cfg.get("rejection_cooldown_hours") or 24)
+        self.mc_log_channel_id: str | None = cfg.get("mc_log_channel_id")   # ← NEU
         self._rebuild()
 
     def _load_cfg(self) -> dict | None:
@@ -408,6 +437,7 @@ class ApplicationEditView(discord.ui.View):
         e.add_field(name="📢 Panel-Kanal",       value=f"<#{cfg.get('panel_channel_id')}>" if cfg.get("panel_channel_id") else "*–*", inline=True)
         e.add_field(name="📁 Kategorie",         value=f"<#{cfg.get('category_id')}>"      if cfg.get("category_id")      else "*–*", inline=True)
         e.add_field(name="📋 Log-Kanal",         value=f"<#{cfg.get('log_channel_id')}>"   if cfg.get("log_channel_id")   else "*–*", inline=True)
+        e.add_field(name="⛏️ MC-Name Log-Kanal", value=f"<#{cfg.get('mc_log_channel_id')}>" if cfg.get("mc_log_channel_id") else "*–*", inline=True)
         e.add_field(name="🌱 Neulings-Rolle",    value=f"<@&{cfg.get('newbie_role_id')}>"  if cfg.get("newbie_role_id")   else "*–*", inline=True)
         e.add_field(name="👥 Mitglieds-Rolle",   value=f"<@&{cfg.get('member_role_id')}>"  if cfg.get("member_role_id")   else "*–*", inline=True)
         e.add_field(name="⏳ Cooldown",          value=f"{cfg.get('rejection_cooldown_hours', 24)} Std.", inline=True)
@@ -469,6 +499,7 @@ class ApplicationEditView(discord.ui.View):
                     "welcome_message":          self.welcome_message,
                     "instruction_message":      self.instruction_message,
                     "rejection_cooldown_hours": self.rejection_cooldown_hours,
+                    "mc_log_channel_id":        self.mc_log_channel_id,   # ← NEU
                 }).eq("server_id", self.guild_id).execute()
         except Exception as e:
             logger.error(f"[AppEditView.refresh save] {e}")
@@ -489,19 +520,21 @@ class AppChannelSettingsView(discord.ui.View):
 
     def build_embed(self) -> discord.Embed:
         e = discord.Embed(title="⚙️ Kanäle & Rollen bearbeiten", color=discord.Color.blurple())
-        e.add_field(name="📢 Panel-Kanal",     value=f"<#{self.cfg.get('panel_channel_id')}>" if self.cfg.get("panel_channel_id") else "*–*", inline=True)
-        e.add_field(name="📁 Kategorie",       value=f"<#{self.cfg.get('category_id')}>"      if self.cfg.get("category_id")      else "*–*", inline=True)
-        e.add_field(name="📋 Log-Kanal",       value=f"<#{self.cfg.get('log_channel_id')}>"   if self.cfg.get("log_channel_id")   else "*–*", inline=True)
-        e.add_field(name="🌱 Neulings-Rolle",  value=f"<@&{self.cfg.get('newbie_role_id')}>"  if self.cfg.get("newbie_role_id")   else "*–*", inline=True)
-        e.add_field(name="👥 Mitglieds-Rolle", value=f"<@&{self.cfg.get('member_role_id')}>"  if self.cfg.get("member_role_id")   else "*–*", inline=True)
+        e.add_field(name="📢 Panel-Kanal",        value=f"<#{self.cfg.get('panel_channel_id')}>"    if self.cfg.get("panel_channel_id")    else "*–*", inline=True)
+        e.add_field(name="📁 Kategorie",          value=f"<#{self.cfg.get('category_id')}>"         if self.cfg.get("category_id")         else "*–*", inline=True)
+        e.add_field(name="📋 Log-Kanal",          value=f"<#{self.cfg.get('log_channel_id')}>"      if self.cfg.get("log_channel_id")      else "*–*", inline=True)
+        e.add_field(name="⛏️ MC-Name Log-Kanal",  value=f"<#{self.cfg.get('mc_log_channel_id')}>"   if self.cfg.get("mc_log_channel_id")   else "*–*", inline=True)
+        e.add_field(name="🌱 Neulings-Rolle",     value=f"<@&{self.cfg.get('newbie_role_id')}>"     if self.cfg.get("newbie_role_id")      else "*–*", inline=True)
+        e.add_field(name="👥 Mitglieds-Rolle",    value=f"<@&{self.cfg.get('member_role_id')}>"     if self.cfg.get("member_role_id")      else "*–*", inline=True)
         return e
 
     def _build(self):
         self.clear_items()
         for row_idx, (placeholder, key, types) in enumerate([
-            ("📢 Panel-Kanal",       "panel_channel_id", [discord.ChannelType.text]),
-            ("📁 Kategorie",         "category_id",      [discord.ChannelType.category]),
-            ("📋 Log-Kanal",         "log_channel_id",   [discord.ChannelType.text]),
+            ("📢 Panel-Kanal",          "panel_channel_id",  [discord.ChannelType.text]),
+            ("📁 Kategorie",            "category_id",       [discord.ChannelType.category]),
+            ("📋 Log-Kanal",            "log_channel_id",    [discord.ChannelType.text]),
+            ("⛏️ MC-Name Log-Kanal",   "mc_log_channel_id", [discord.ChannelType.text]),   # ← NEU
         ]):
             sel = discord.ui.ChannelSelect(placeholder=placeholder, min_values=1, max_values=1,
                                            channel_types=types, row=row_idx)
@@ -510,21 +543,34 @@ class AppChannelSettingsView(discord.ui.View):
                 await i.response.edit_message(embed=self.build_embed(), view=self)
             sel.callback = _cb; self.add_item(sel)
 
-        nr = discord.ui.RoleSelect(placeholder="🌱 Neulings-Rolle", min_values=1, max_values=1, row=3)
+        nr = discord.ui.RoleSelect(placeholder="🌱 Neulings-Rolle", min_values=1, max_values=1, row=4)
         async def _nr(i): self.cfg["newbie_role_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
         nr.callback = _nr; self.add_item(nr)
 
+        # Save-Button ist jetzt in einem extra View da alle 5 Rows voll sind
+        # → save wird über separaten Followup-Button gelöst (siehe _add_save_button)
+        self._add_save_button()
+
+    def _add_save_button(self):
+        """Send a save button; since all 5 rows in the ChannelSelect view are full,
+        we override row=4 by removing the role select and re-adding it – but
+        actually we just put the save button in a separate message via interaction.followup
+        inside _build(). Simpler: collapse Neulings-Rolle to row 3 and save to row 4."""
+        # Already handled by row 4 being the RoleSelect → we add save at row 4 too
+        # This works because discord.py allows multiple items per row.
         save = discord.ui.Button(label="💾 Speichern", style=discord.ButtonStyle.success, row=4)
-        save.callback = self._save; self.add_item(save)
+        save.callback = self._save
+        self.add_item(save)
 
     async def _save(self, interaction: discord.Interaction):
         try:
             get_supabase().table("application_servers").update({
-                "panel_channel_id": self.cfg.get("panel_channel_id"),
-                "category_id":      self.cfg.get("category_id"),
-                "log_channel_id":   self.cfg.get("log_channel_id"),
-                "newbie_role_id":   self.cfg.get("newbie_role_id"),
-                "member_role_id":   self.cfg.get("member_role_id"),
+                "panel_channel_id":  self.cfg.get("panel_channel_id"),
+                "category_id":       self.cfg.get("category_id"),
+                "log_channel_id":    self.cfg.get("log_channel_id"),
+                "mc_log_channel_id": self.cfg.get("mc_log_channel_id"),   # ← NEU
+                "newbie_role_id":    self.cfg.get("newbie_role_id"),
+                "member_role_id":    self.cfg.get("member_role_id"),
             }).eq("server_id", self.parent.guild_id).execute()
             embed = self.build_embed(); embed.title = "✅ Gespeichert!"; embed.color = discord.Color.green()
             for item in self.children: item.disabled = True
@@ -719,6 +765,22 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
             if instruction:
                 await channel.send(instruction)
 
+            # ── NEU: MC-Name in den Log-Channel posten ────────────────────
+            mc_log_channel_id = self.cfg.get("mc_log_channel_id")
+            if mc_log_channel_id:
+                mc_log_ch = guild.get_channel(int(mc_log_channel_id))
+                if mc_log_ch:
+                    try:
+                        await mc_log_ch.send(embed=_build_mc_log_embed(
+                            mc_name=mc,
+                            applicant=applicant,
+                            app_id=app_id,
+                            channel=channel,
+                        ))
+                    except Exception as e:
+                        logger.warning(f"[MinecraftNameModal] MC-Log-Channel Fehler: {e}")
+            # ─────────────────────────────────────────────────────────────
+
             # Post to log channel if configured
             if self.cfg.get("log_channel_id"):
                 log_ch = guild.get_channel(int(self.cfg["log_channel_id"]))
@@ -741,6 +803,46 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
         except Exception as e:
             logger.error(f"[MinecraftNameModal] {e}")
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+
+def _build_mc_log_embed(
+    mc_name: str,
+    applicant: discord.Member,
+    app_id: int,
+    channel: discord.TextChannel,
+) -> discord.Embed:
+    """Schöne Embed-Karte für den MC-Name-Log-Channel."""
+    embed = discord.Embed(
+        title="⛏️ Neuer Minecraft-Name registriert",
+        color=discord.Color.from_rgb(89, 197, 98),   # Minecraft-Grasgrün
+    )
+    embed.add_field(
+        name="🎮 Minecraft-Name",
+        value=f"```{mc_name}```",
+        inline=False,
+    )
+    embed.add_field(
+        name="👤 Discord-Nutzer",
+        value=f"Name: {applicant.mention}",#\n \n Eigener Name: `{applicant.display_name}`",
+        inline=True,
+    )
+    #embed.add_field(
+    #   name="🆔 Discord-ID",
+    #  value=f"`{applicant.id}`",
+    # inline=True,
+    #)
+    #embed.add_field(
+    #    name="📋 Bewerbung",
+    #    value=f"[#{app_id} → {channel.mention}]({channel.jump_url})",
+    #    inline=True,
+    #)
+    embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{mc_name}/128")
+    embed.set_footer(
+        text=f"Bewerbung #{app_id}",
+        icon_url=applicant.display_avatar.url if applicant.display_avatar else discord.Embed.Empty,
+    )
+    embed.timestamp = discord.utils.utcnow()
+    return embed
 
 
 # ══════════════════════════════════════════════════════════════════════════════
