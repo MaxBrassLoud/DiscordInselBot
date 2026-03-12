@@ -1,76 +1,148 @@
 """
 applications/manager.py
 ========================
-Handles creation, storage and closing of member applications.
-Applications are stored in Supabase (applications table) and
-locally in data/applications/{server_id}/{app_id}.json
+Bewerbungs-Lifecycle – Erstellen, Annehmen, Ablehnen.
+Alle Daten werden in Supabase gespeichert; kein lokales Dateisystem mehr.
+
+Supabase-Tabellen:
+  applications         – Bewerbungs-Metadaten (bereits vorhanden)
+  application_messages – Nachrichten / Kommentare
+
+SQL für application_messages (einmalig ausführen):
+    CREATE TABLE IF NOT EXISTS application_messages (
+        id          BIGSERIAL PRIMARY KEY,
+        app_id      INTEGER NOT NULL,
+        server_id   TEXT    NOT NULL,
+        user_name   TEXT,
+        user_id     TEXT,
+        content     TEXT,
+        attachments JSONB   DEFAULT '[]',
+        timestamp   TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_messages_app
+        ON application_messages (server_id, app_id);
 """
 
 from __future__ import annotations
 
 import io
-import json
 import os
 from datetime import datetime, timedelta, timezone
 from html import escape
-from pathlib import Path
 
 import discord
+
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
 
 logger = get_logger("applications.manager")
 
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000")
-_DATA_DIR = Path("data/applications")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Storage helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _app_path(server_id: str, app_id: int) -> Path:
-    p = _DATA_DIR / str(server_id)
-    p.mkdir(parents=True, exist_ok=True)
-    return p / f"{app_id}.json"
-
-
 def save_application(server_id: str, app_id: int, data: dict):
-    _app_path(server_id, app_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Upsert application metadata into Supabase."""
+    supabase = get_supabase()
+    row = {
+        "app_id":            data.get("app_id", app_id),
+        "server_id":         data.get("server_id", server_id),
+        "creator_id":        data.get("creator_id"),
+        "minecraft_name":    data.get("minecraft_name"),
+        "status":            data.get("status", "open"),
+        "claimed_by":        data.get("claimed_by"),
+        "created_at":        data.get("created_at"),
+        "closed_at":         data.get("closed_at"),
+        "channel_id":        data.get("channel_id"),
+        "rejection_reason":  data.get("rejection_reason"),
+        # extra fields
+        "creator_name":      data.get("creator_name"),
+        "closed_by":         data.get("closed_by"),
+    }
+    row = {k: v for k, v in row.items() if v is not None or k in ("claimed_by", "closed_at", "rejection_reason", "closed_by")}
+
+    existing = (
+        supabase.table("applications")
+        .select("app_id")
+        .eq("app_id", app_id)
+        .eq("server_id", server_id)
+        .execute()
+    )
+    if existing.data:
+        supabase.table("applications").update(row).eq("app_id", app_id).eq("server_id", server_id).execute()
+    else:
+        supabase.table("applications").insert(row).execute()
 
 
 def load_application(server_id: str, app_id: int) -> dict | None:
-    p = _app_path(server_id, app_id)
-    if not p.exists():
+    """Load application metadata from Supabase."""
+    supabase = get_supabase()
+    result = (
+        supabase.table("applications")
+        .select("*")
+        .eq("app_id", app_id)
+        .eq("server_id", server_id)
+        .execute()
+    )
+    if not result.data:
         return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    row = result.data[0]
+    row.setdefault("creator_name", "Unbekannt")
+    return row
 
 
 def update_application(server_id: str, app_id: int, fields: dict):
-    data = load_application(server_id, app_id) or {}
-    data.update(fields)
-    save_application(server_id, app_id, data)
+    """Partial update of application columns."""
+    supabase = get_supabase()
+    supabase.table("applications").update(fields).eq("app_id", app_id).eq("server_id", server_id).execute()
 
 
 def load_app_messages(server_id: str, app_id: int) -> list[dict]:
-    p = _DATA_DIR / str(server_id) / f"{app_id}_messages.json"
-    if not p.exists():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+    """Load all messages for an application, ordered by timestamp."""
+    supabase = get_supabase()
+    result = (
+        supabase.table("application_messages")
+        .select("*")
+        .eq("app_id", app_id)
+        .eq("server_id", server_id)
+        .order("timestamp", desc=False)
+        .execute()
+    )
+    rows = result.data or []
+    out = []
+    for r in rows:
+        out.append({
+            "timestamp":   r.get("timestamp", ""),
+            "user":        r.get("user_name", "?"),
+            "user_id":     r.get("user_id", ""),
+            "content":     r.get("content", ""),
+            "attachments": r.get("attachments") or [],
+            # legacy keys
+            "author": {
+                "username":    r.get("user_name", "?"),
+                "id":          r.get("user_id", ""),
+                "global_name": r.get("user_name", "?"),
+                "bot":         False,
+            },
+        })
+    return out
 
 
 def append_app_message(server_id: str, app_id: int, **kwargs):
-    msgs = load_app_messages(server_id, app_id)
-    kwargs.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
-    msgs.append(kwargs)
-    p = _DATA_DIR / str(server_id) / f"{app_id}_messages.json"
-    p.write_text(json.dumps(msgs, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Append a single message to application_messages."""
+    supabase = get_supabase()
+    supabase.table("application_messages").insert({
+        "app_id":      app_id,
+        "server_id":   server_id,
+        "user_name":   kwargs.get("user", "?"),
+        "user_id":     kwargs.get("user_id", ""),
+        "content":     kwargs.get("content", ""),
+        "attachments": kwargs.get("attachments") or [],
+        "timestamp":   kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+    }).execute()
 
 
 def app_web_url(server_id: str, app_id: int) -> str:
@@ -78,7 +150,7 @@ def app_web_url(server_id: str, app_id: int) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Rejection cooldown check
+# Rejection cooldown
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def check_rejection_cooldown(
@@ -86,17 +158,10 @@ async def check_rejection_cooldown(
     user_id: str,
     cooldown_hours: int,
 ) -> tuple[bool, timedelta]:
-    """
-    Check if a user is still within the rejection cooldown period.
-
-    Returns (is_blocked, remaining_timedelta).
-    If not blocked, remaining_timedelta is timedelta(0).
-    """
     if cooldown_hours <= 0:
         return False, timedelta(0)
 
     supabase = get_supabase()
-    # Find the most recent rejected application for this user on this server
     result = (
         supabase.table("applications")
         .select("closed_at")
@@ -107,7 +172,6 @@ async def check_rejection_cooldown(
         .limit(1)
         .execute()
     )
-
     if not result.data:
         return False, timedelta(0)
 
@@ -122,18 +186,15 @@ async def check_rejection_cooldown(
     except Exception:
         return False, timedelta(0)
 
-    now = datetime.now(timezone.utc)
+    now          = datetime.now(timezone.utc)
     cooldown_end = closed_at + timedelta(hours=cooldown_hours)
-
     if now < cooldown_end:
-        remaining = cooldown_end - now
-        return True, remaining
-
+        return True, cooldown_end - now
     return False, timedelta(0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HTML Log Builder
+# HTML log builder (in-memory)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_app_log_html(app: dict, messages: list[dict], actor_name: str) -> bytes:
@@ -239,56 +300,46 @@ class ApplicationManager:
 
     @staticmethod
     async def get_next_app_id(server_id: str) -> int:
-        """Atomically increment app_counter for the server and return the new value."""
         supabase = get_supabase()
-        r = supabase.table("applications")\
-            .select("app_id")\
-            .eq("server_id", str(server_id))\
-            .order("app_id", desc=True)\
-            .limit(1)\
+        r = (
+            supabase.table("applications")
+            .select("app_id")
+            .eq("server_id", str(server_id))
+            .order("app_id", desc=True)
+            .limit(1)
             .execute()
+        )
         next_id = (r.data[0]["app_id"] + 1) if r.data else 1
-        supabase.table("application_servers")\
-            .update({"app_counter": next_id})\
-            .eq("server_id", str(server_id))\
-            .execute()
+        supabase.table("application_servers").update({"app_counter": next_id}).eq("server_id", str(server_id)).execute()
         return next_id
 
     @staticmethod
     async def create_application(
-        guild: discord.Guild,
-        applicant: discord.Member,
+        guild:          discord.Guild,
+        applicant:      discord.Member,
         minecraft_name: str,
-        cfg: dict,
+        cfg:            dict,
     ) -> tuple[discord.TextChannel, int]:
-        """
-        Creates an application channel, renames applicant to their MC name,
-        saves to DB and local storage.
-        """
         supabase  = get_supabase()
         server_id = str(guild.id)
         app_id    = await ApplicationManager.get_next_app_id(server_id)
 
-        # ── Rename applicant to Minecraft name ────────────────────────────────
         try:
             await applicant.edit(nick=minecraft_name, reason="Bewerbung eingereicht")
         except discord.Forbidden:
             logger.warning(f"[create_application] Konnte Nickname nicht setzen für {applicant}")
 
-        # ── Channel name ──────────────────────────────────────────────────────
-        safe_mc   = minecraft_name.lower().replace(" ", "-")[:20]
+        safe_mc      = minecraft_name.lower().replace(" ", "-")[:20]
         channel_name = f"{app_id}-{safe_mc}-bewerbung"
 
-        # ── Category + Permissions ────────────────────────────────────────────
         category_id = cfg.get("category_id")
         category    = guild.get_channel(int(category_id)) if category_id else None
 
         staff_role_ids = [r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()]
-
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            applicant: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_roles=True),
+            applicant:          discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_roles=True),
         }
         for rid in staff_role_ids:
             role = guild.get_role(int(rid))
@@ -296,13 +347,10 @@ class ApplicationManager:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
         channel = await guild.create_text_channel(
-            name=channel_name,
-            category=category,
-            overwrites=overwrites,
+            name=channel_name, category=category, overwrites=overwrites,
             reason=f"Bewerbung #{app_id} von {applicant.display_name}",
         )
 
-        # ── Save locally ──────────────────────────────────────────────────────
         now = datetime.now(timezone.utc).isoformat()
         app_data = {
             "app_id":          app_id,
@@ -318,40 +366,25 @@ class ApplicationManager:
         }
         save_application(server_id, app_id, app_data)
 
-        # ── Save to Supabase ──────────────────────────────────────────────────
-        supabase.table("applications").insert({
-            "app_id":         app_id,
-            "server_id":      server_id,
-            "creator_id":     str(applicant.id),
-            "minecraft_name": minecraft_name,
-            "status":         "open",
-            "claimed_by":     None,
-            "created_at":     now,
-            "closed_at":      None,
-            "channel_id":     str(channel.id),
-        }).execute()
-
         return channel, app_id
 
     @staticmethod
     async def accept_application(
-        guild: discord.Guild,
-        channel: discord.TextChannel,
-        app: dict,
+        guild:    discord.Guild,
+        channel:  discord.TextChannel,
+        app:      dict,
         acceptor: discord.Member,
-        cfg: dict,
+        cfg:      dict,
     ):
-        """Grant member role, DM applicant, delete channel."""
         supabase  = get_supabase()
         server_id = app["server_id"]
         app_id    = app["app_id"]
         now       = datetime.now(timezone.utc).isoformat()
         web_url   = app_web_url(server_id, app_id)
 
-        # Grant member role, remove newbie role
         member_role_id = cfg.get("member_role_id")
         newbie_role_id = cfg.get("newbie_role_id")
-        applicant = guild.get_member(int(app["creator_id"]))
+        applicant      = guild.get_member(int(app["creator_id"]))
 
         if applicant:
             if member_role_id:
@@ -370,13 +403,10 @@ class ApplicationManager:
                         logger.error(f"[accept] Neulings-Rolle entfernen: {e}")
 
         update_application(server_id, app_id, {"status": "accepted", "closed_at": now, "closed_by": str(acceptor.id)})
-        supabase.table("applications").update({"status": "accepted", "closed_at": now})\
-            .eq("app_id", app_id).eq("server_id", server_id).execute()
 
-        # DM to applicant
         if applicant:
             try:
-                messages  = load_app_messages(server_id, app_id)
+                messages   = load_app_messages(server_id, app_id)
                 html_bytes = build_app_log_html(app, messages, acceptor.display_name)
                 log_file   = discord.File(fp=io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
@@ -401,37 +431,31 @@ class ApplicationManager:
 
     @staticmethod
     async def reject_application(
-        guild: discord.Guild,
-        channel: discord.TextChannel,
-        app: dict,
+        guild:    discord.Guild,
+        channel:  discord.TextChannel,
+        app:      dict,
         rejector: discord.Member,
-        reason: str,
-        cfg: dict,
+        reason:   str,
+        cfg:      dict,
     ):
-        """DM applicant with rejection reason + log, delete channel."""
         supabase  = get_supabase()
         server_id = app["server_id"]
         app_id    = app["app_id"]
         now       = datetime.now(timezone.utc).isoformat()
         web_url   = app_web_url(server_id, app_id)
 
-        # Store closed_at so the cooldown check can use it
         update_application(server_id, app_id, {
-            "status": "rejected", "closed_at": now,
-            "closed_by": str(rejector.id), "rejection_reason": reason,
+            "status":           "rejected",
+            "closed_at":        now,
+            "closed_by":        str(rejector.id),
+            "rejection_reason": reason,
         })
-        supabase.table("applications").update({
-            "status": "rejected", "closed_at": now, "rejection_reason": reason,
-        }).eq("app_id", app_id).eq("server_id", server_id).execute()
 
-        applicant = guild.get_member(int(app["creator_id"]))
-
-        # Build cooldown info for the DM
+        applicant      = guild.get_member(int(app["creator_id"]))
         cooldown_hours = int(cfg.get("rejection_cooldown_hours") or 0)
-        cooldown_text = ""
+        cooldown_text  = ""
         if cooldown_hours > 0:
-            from datetime import timezone as _tz
-            cooldown_end = datetime.now(_tz.utc) + timedelta(hours=cooldown_hours)
+            cooldown_end = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
             cooldown_text = (
                 f"\n\n⏳ **Wartezeit:** Du kannst dich frühestens am "
                 f"<t:{int(cooldown_end.timestamp())}:F> wieder bewerben "
@@ -440,10 +464,10 @@ class ApplicationManager:
 
         if applicant:
             try:
-                messages  = load_app_messages(server_id, app_id)
-                app["rejection_reason"] = reason   # include in HTML
-                html_bytes = build_app_log_html(app, messages, rejector.display_name)
-                log_file   = discord.File(fp=io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
+                messages           = load_app_messages(server_id, app_id)
+                app["rejection_reason"] = reason
+                html_bytes         = build_app_log_html(app, messages, rejector.display_name)
+                log_file           = discord.File(fp=io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="❌ Deine Bewerbung wurde abgelehnt",
                     description=(

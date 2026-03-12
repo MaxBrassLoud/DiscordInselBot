@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bewerbung #{{ app.id }} – Dashboard</title>
+  <title>Bewerbung #{{ app.app_id or app.id }} – Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
@@ -18,7 +18,6 @@
       --text:      #e8eaf0;
       --muted:     #787d91;
       --accent:    #5865f2;
-      --accent-h:  #4752c4;
       --green:     #3ba55d;
       --yellow:    #faa81a;
       --red:       #ed4245;
@@ -26,71 +25,43 @@
     }
 
     html, body { height: 100%; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-
+    /* Topbar */
     .topbar {
-      padding: 0 28px;
-      height: 54px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
+      padding: 0 28px; height: 54px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
       display: flex; align-items: center; gap: 12px;
       position: sticky; top: 0; z-index: 10;
     }
-
     .back-link {
       display: flex; align-items: center; gap: 6px;
-      color: var(--muted); text-decoration: none;
-      font-size: 13.5px; font-weight: 500;
+      color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500;
       transition: color .15s;
     }
-
     .back-link:hover { color: var(--text); }
-    .topbar-sep { color: var(--border2); }
+    .topbar-sep  { color: var(--border2); }
     .topbar-title { font-size: 15px; font-weight: 600; }
     .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
+    /* Layout */
     .layout {
-      display: grid;
-      grid-template-columns: 1fr 300px;
-      gap: 24px;
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 28px;
+      display: grid; grid-template-columns: 1fr 300px;
+      gap: 24px; max-width: 1200px; margin: 0 auto; padding: 28px;
     }
-
     @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
 
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
+    .card:last-child { margin-bottom: 0; }
     .card-header {
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--border);
+      padding: 14px 20px; border-bottom: 1px solid var(--border);
       display: flex; align-items: center; gap: 10px;
     }
+    .card-title { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
 
-    .card-title {
-      font-size: 12px; font-weight: 600;
-      letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
-    }
-
-    /* ── Badges ── */
-    .badge {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 3px 9px; border-radius: 20px;
-      font-size: 12px; font-weight: 600;
-    }
-
+    /* Badges */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
     .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
     .badge-pending  { background: rgba(250,168,26,.12); color: #faa81a; }
     .badge-pending .badge-dot  { background: #faa81a; }
@@ -98,123 +69,106 @@
     .badge-accepted .badge-dot { background: #3ba55d; }
     .badge-rejected { background: rgba(237,66,69,.12);  color: #ed4245; }
     .badge-rejected .badge-dot { background: #ed4245; }
-
     .module-chip {
       display: inline-block; padding: 2px 8px; border-radius: 4px;
-      font-size: 12px; font-weight: 500;
-      background: var(--surface2); border: 1px solid var(--border2);
-      color: var(--muted); font-family: 'DM Mono', monospace;
+      font-size: 12px; font-weight: 500; background: var(--surface2);
+      border: 1px solid var(--border2); color: var(--muted); font-family: 'DM Mono', monospace;
     }
 
-    /* ── Applicant hero ── */
+    /* Applicant hero */
     .applicant-hero {
-      padding: 24px 20px;
-      display: flex; align-items: center; gap: 16px;
+      padding: 24px 20px; display: flex; align-items: center; gap: 16px;
       border-bottom: 1px solid var(--border);
     }
-
-    .applicant-avatar {
-      width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
-    }
-
+    .applicant-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
     .applicant-avatar-ph {
       width: 56px; height: 56px; border-radius: 50%;
-      background: var(--surface2); border: 2px solid var(--border2);
+      background: linear-gradient(135deg, var(--accent), #818cf8);
       display: flex; align-items: center; justify-content: center;
-      font-size: 20px; color: var(--muted); font-weight: 600;
+      font-size: 20px; font-weight: 700; color: white; flex-shrink: 0;
     }
-
     .applicant-name { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
     .applicant-meta { font-size: 13px; color: var(--muted); }
 
-    /* ── Q&A answers ── */
-    .qa-list { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-
-    .qa-item {}
-
-    .qa-question {
-      font-size: 12.5px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: .05em;
-      color: var(--muted); margin-bottom: 6px;
+    /* Rejection banner */
+    .rejection-box {
+      background: rgba(237,66,69,.07); border: 1px solid rgba(237,66,69,.25);
+      border-left: 3px solid #ed4245; border-radius: 8px;
+      padding: 12px 16px; margin: 16px 20px 0;
     }
+    .rejection-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #ed4245; margin-bottom: 5px; }
+    .rejection-text  { font-size: 13.5px; color: #fca5a5; white-space: pre-wrap; word-break: break-word; }
 
+    /* Q&A */
+    .qa-list { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+    .qa-question { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
     .qa-answer {
       font-size: 14px; line-height: 1.6; color: #c7cade;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px;
       white-space: pre-wrap; word-break: break-word;
     }
 
-    /* ── Info grid ── */
-    .info-grid { display: flex; flex-direction: column; }
-
-    .info-row {
-      display: flex; align-items: flex-start;
-      padding: 11px 20px;
-      border-bottom: 1px solid var(--border);
-      gap: 12px;
-    }
-
-    .info-row:last-child { border-bottom: none; }
-
-    .info-label {
-      width: 110px; flex-shrink: 0;
-      font-size: 11.5px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: .05em;
-      color: var(--muted); padding-top: 1px;
-    }
-
-    .info-value { font-size: 13.5px; flex: 1; }
-
-    .user-inline { display: inline-flex; align-items: center; gap: 7px; }
-
-    .avatar-sm {
-      width: 22px; height: 22px; border-radius: 50%; object-fit: cover;
-    }
-
-    .avatar-placeholder {
-      width: 22px; height: 22px; border-radius: 50%;
-      background: var(--surface2); border: 1px solid var(--border2);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 9px; color: var(--muted);
-    }
-
-    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
-
-    /* ── Messages ── */
+    /* Messages */
     .messages { display: flex; flex-direction: column; gap: 2px; }
-
     .msg { display: flex; gap: 12px; padding: 10px 20px; transition: background .1s; }
     .msg:hover { background: var(--surface2); }
 
-    .msg-avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 2px; }
-
-    .msg-avatar-ph {
+    .msg-avatar-img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 2px; }
+    .msg-avatar-ph  {
       width: 34px; height: 34px; border-radius: 50%;
-      background: var(--surface2); border: 1px solid var(--border2);
+      background: linear-gradient(135deg, var(--accent), #818cf8);
       display: flex; align-items: center; justify-content: center;
-      font-size: 12px; color: var(--muted); flex-shrink: 0; margin-top: 2px;
+      font-size: 12px; font-weight: 700; color: white;
+      flex-shrink: 0; margin-top: 2px;
     }
 
-    .msg-body { flex: 1; min-width: 0; }
-
+    .msg-body   { flex: 1; min-width: 0; }
     .msg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
-
     .msg-author { font-size: 13.5px; font-weight: 600; }
     .msg-author.is-bot { color: var(--accent); }
+    .msg-time   { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
+    .msg-text   { font-size: 14px; line-height: 1.55; color: #c7cade; white-space: pre-wrap; word-break: break-word; }
 
-    .msg-time { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
-
-    .msg-text { font-size: 14px; line-height: 1.55; color: #c7cade; white-space: pre-wrap; word-break: break-word; }
+    .att-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .att-link {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 6px; padding: 4px 10px; font-size: 12px; color: var(--accent);
+      text-decoration: none; transition: border-color .15s;
+    }
+    .att-link:hover { border-color: var(--accent); }
 
     .bot-tag {
       background: var(--accent); color: white; font-size: 10px; font-weight: 700;
-      padding: 1px 5px; border-radius: 3px; letter-spacing: .04em; vertical-align: middle; margin-left: 2px;
+      padding: 1px 5px; border-radius: 3px; letter-spacing: .04em;
+      vertical-align: middle; margin-left: 2px;
     }
 
+    /* Info grid (sidebar) */
+    .info-grid { display: flex; flex-direction: column; }
+    .info-row {
+      display: flex; align-items: flex-start; padding: 11px 20px;
+      border-bottom: 1px solid var(--border); gap: 12px;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label {
+      width: 110px; flex-shrink: 0; font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 1px;
+    }
+    .info-value { font-size: 13.5px; flex: 1; }
+    .user-inline { display: inline-flex; align-items: center; gap: 7px; }
+    .avatar-sm { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+    .avatar-ph {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; color: var(--muted); flex-shrink: 0;
+    }
+
+    /* Misc */
     .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 14px; }
+    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
 
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -232,15 +186,18 @@
     Bewerbungen
   </a>
   <span class="topbar-sep">/</span>
-  <span class="topbar-title">Bewerbung #{{ app.id }}</span>
+  <span class="topbar-title">Bewerbung #{{ app.app_id or app.id }}</span>
 
   <div class="topbar-right">
-    {% if app.get('status') == 'pending' %}
-      <span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>
-    {% elif app.get('status') == 'accepted' %}
+    {% set status = app.get('status','?') %}
+    {% if status in ('pending','open') %}
+      <span class="badge badge-pending"><span class="badge-dot"></span>{{ 'Offen' if status == 'open' else 'Ausstehend' }}</span>
+    {% elif status == 'accepted' %}
       <span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>
-    {% elif app.get('status') == 'rejected' %}
+    {% elif status == 'rejected' %}
       <span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>
+    {% else %}
+      <span class="badge badge-pending"><span class="badge-dot"></span>{{ status }}</span>
     {% endif %}
     {% if app.get('type') or app.get('position') %}
       <span class="module-chip">{{ app.get('type') or app.get('position') }}</span>
@@ -251,11 +208,11 @@
 <!-- Layout -->
 <div class="layout">
 
-  <!-- Left: Application content -->
+  <!-- Left column -->
   <div>
 
-    <!-- Applicant info -->
-    <div class="card" style="margin-bottom:20px;">
+    <!-- Applicant hero -->
+    <div class="card">
       <div class="applicant-hero">
         {% if app.get('creator_avatar') %}
           <img class="applicant-avatar" src="{{ app.creator_avatar }}" alt="">
@@ -263,24 +220,27 @@
           <div class="applicant-avatar-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
         {% endif %}
         <div>
-          <div class="applicant-name">{{ app.get('creator_display', 'Unbekannt') }}</div>
+          <div class="applicant-name">{{ app.get('creator_display', app.get('creator_name','Unbekannt')) }}</div>
           <div class="applicant-meta">
-            Bewerbung #{{ app.id }}
-            {% if app.get('type') or app.get('position') %}
-              · {{ app.get('type') or app.get('position') }}
-            {% endif %}
-            {% if app.get('created_at') %}
-              · {{ app.created_at[:10] }}
-            {% endif %}
+            Bewerbung #{{ app.app_id or app.id }}
+            {% if app.get('minecraft_name') %} &nbsp;·&nbsp; ⛏️ {{ app.minecraft_name }}{% endif %}
+            {% if app.get('type') or app.get('position') %} &nbsp;·&nbsp; {{ app.get('type') or app.get('position') }}{% endif %}
+            {% if app.get('created_at') %} &nbsp;·&nbsp; {{ app.created_at[:10] }}{% endif %}
           </div>
         </div>
       </div>
 
-      <!-- Q&A answers -->
+      {% if app.get('rejection_reason') %}
+        <div class="rejection-box">
+          <div class="rejection-label">❌ Ablehnungsgrund</div>
+          <div class="rejection-text">{{ app.rejection_reason }}</div>
+        </div>
+      {% endif %}
+
       {% if app.get('answers') %}
         <div class="qa-list">
           {% for qa in app.answers %}
-          <div class="qa-item">
+          <div>
             <div class="qa-question">{{ qa.get('question') or ('Frage ' ~ loop.index) }}</div>
             <div class="qa-answer">{{ qa.get('answer') or '—' }}</div>
           </div>
@@ -288,7 +248,7 @@
         </div>
       {% elif app.get('content') %}
         <div class="qa-list">
-          <div class="qa-item">
+          <div>
             <div class="qa-question">Bewerbungstext</div>
             <div class="qa-answer">{{ app.content }}</div>
           </div>
@@ -296,44 +256,79 @@
       {% endif %}
     </div>
 
-    <!-- Messages / staff notes -->
-    {% if messages %}
+    <!-- Messages -->
     <div class="card">
       <div class="card-header">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
         </svg>
-        <span class="card-title">Kommentare</span>
-        <span class="mono" style="margin-left:auto;">{{ messages|length }}</span>
+        <span class="card-title">Kanal-Verlauf</span>
+        <span class="mono" style="margin-left:auto;">
+          {{ messages|length }} Nachricht{{ 'en' if messages|length != 1 else '' }}
+        </span>
       </div>
-      <div class="messages">
-        {% for msg in messages %}
-        <div class="msg">
-          {% set author = msg.get('author') or {} %}
-          {% set av = author.get('avatar') %}
-          {% set uid = author.get('id','') %}
-          {% if av %}
-            <img class="msg-avatar" src="https://cdn.discordapp.com/avatars/{{ uid }}/{{ av }}.png?size=64" alt="">
-          {% else %}
-            <div class="msg-avatar-ph">{{ (author.get('username','?'))[:1].upper() }}</div>
-          {% endif %}
-          <div class="msg-body">
-            <div class="msg-header">
-              <span class="msg-author {{ 'is-bot' if author.get('bot') else '' }}">
-                {{ author.get('global_name') or author.get('username') or 'Unbekannt' }}
-              </span>
-              {% if author.get('bot') %}<span class="bot-tag">APP</span>{% endif %}
-              {% if msg.get('timestamp') %}
-                <span class="msg-time">{{ msg.timestamp[:16].replace('T',' ') }}</span>
+
+      {% if messages %}
+        <div class="messages">
+          {% for msg in messages %}
+          <div class="msg">
+
+            {# Resolve author info from both old and new message format #}
+            {% set author      = msg.get('author') or {} %}
+            {% set author_name = msg.get('user') or author.get('global_name') or author.get('username') or '?' %}
+            {% set uid         = msg.get('user_id','') or author.get('id','') %}
+            {% set av_hash     = author.get('avatar') %}
+            {% set avatar_url  = author.get('avatar_url') %}
+            {% set is_bot      = author.get('bot', False) %}
+
+            {# Build Discord CDN URL if we have hash + uid #}
+            {% if not avatar_url and av_hash and uid %}
+              {% set avatar_url = 'https://cdn.discordapp.com/avatars/' ~ uid ~ '/' ~ av_hash ~ '.png?size=64' %}
+            {% endif %}
+
+            {% if avatar_url %}
+              <img class="msg-avatar-img" src="{{ avatar_url }}" alt="{{ author_name }}">
+            {% else %}
+              <div class="msg-avatar-ph">{{ author_name[:2].upper() }}</div>
+            {% endif %}
+
+            <div class="msg-body">
+              <div class="msg-header">
+                <span class="msg-author {{ 'is-bot' if is_bot else '' }}">{{ author_name }}</span>
+                {% if is_bot %}<span class="bot-tag">BOT</span>{% endif %}
+                {% set ts = msg.get('timestamp','') %}
+                {% if ts %}
+                  <span class="msg-time">{{ ts[:16].replace('T',' ') }}</span>
+                {% endif %}
+              </div>
+
+              {% set text = msg.get('content') or msg.get('message','') %}
+              {% if text %}
+                <div class="msg-text">{{ text }}</div>
               {% endif %}
+
+              {% set atts = msg.get('attachments') or [] %}
+              {% if atts %}
+                <div class="att-list">
+                  {% for url in atts %}
+                    <a class="att-link" href="{{ url }}" target="_blank" rel="noopener">
+                      📎 {{ url.split('/')[-1].split('?')[0] or 'Anhang' }}
+                    </a>
+                  {% endfor %}
+                </div>
+              {% endif %}
+
             </div>
-            <div class="msg-text">{{ msg.get('content','') }}</div>
           </div>
+          {% endfor %}
         </div>
-        {% endfor %}
-      </div>
+      {% else %}
+        <div class="empty-state">
+          <div style="font-size:2rem;margin-bottom:10px;opacity:.3">💬</div>
+          Noch keine Nachrichten im Kanal aufgezeichnet.
+        </div>
+      {% endif %}
     </div>
-    {% endif %}
 
   </div>
 
@@ -353,23 +348,30 @@
 
         <div class="info-row">
           <div class="info-label">ID</div>
-          <div class="info-value mono">#{{ app.id }}</div>
+          <div class="info-value mono">#{{ app.app_id or app.id }}</div>
         </div>
 
         <div class="info-row">
           <div class="info-label">Status</div>
           <div class="info-value">
-            {% if app.get('status') == 'pending' %}
-              <span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>
-            {% elif app.get('status') == 'accepted' %}
+            {% if status in ('pending','open') %}
+              <span class="badge badge-pending"><span class="badge-dot"></span>{{ 'Offen' if status == 'open' else 'Ausstehend' }}</span>
+            {% elif status == 'accepted' %}
               <span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>
-            {% elif app.get('status') == 'rejected' %}
+            {% elif status == 'rejected' %}
               <span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>
             {% else %}
-              <span class="badge badge-pending"><span class="badge-dot"></span>{{ app.get('status','?') }}</span>
+              <span class="badge badge-pending"><span class="badge-dot"></span>{{ status }}</span>
             {% endif %}
           </div>
         </div>
+
+        {% if app.get('minecraft_name') %}
+        <div class="info-row">
+          <div class="info-label">Minecraft</div>
+          <div class="info-value" style="font-family:'DM Mono',monospace;font-size:13px;">⛏️ {{ app.minecraft_name }}</div>
+        </div>
+        {% endif %}
 
         {% if app.get('type') or app.get('position') %}
         <div class="info-row">
@@ -385,17 +387,17 @@
               {% if app.get('creator_avatar') %}
                 <img class="avatar-sm" src="{{ app.creator_avatar }}" alt="">
               {% else %}
-                <div class="avatar-placeholder">?</div>
+                <div class="avatar-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
               {% endif %}
-              {{ app.get('creator_display', 'Unbekannt') }}
+              {{ app.get('creator_display', app.get('creator_name','Unbekannt')) }}
             </div>
           </div>
         </div>
 
-        {% if app.get('reviewed_by') %}
+        {% if app.get('claimed_by') %}
         <div class="info-row">
-          <div class="info-label">Reviewer</div>
-          <div class="info-value">{{ app.reviewed_by }}</div>
+          <div class="info-label">Bearbeiter</div>
+          <div class="info-value mono">{{ app.claimed_by }}</div>
         </div>
         {% endif %}
 
@@ -406,19 +408,17 @@
         </div>
         {% endif %}
 
-        {% if app.get('reviewed_at') %}
+        {% if app.get('closed_at') %}
         <div class="info-row">
           <div class="info-label">Entschieden</div>
-          <div class="info-value mono">{{ app.reviewed_at[:10] }}</div>
+          <div class="info-value mono">{{ app.closed_at[:10] }}</div>
         </div>
         {% endif %}
 
-        {% if app.get('reason') %}
-        <div class="info-row" style="flex-direction:column; gap:6px;">
-          <div class="info-label">Begründung</div>
-          <div class="info-value" style="font-size:13px; color:var(--muted); line-height:1.5;">{{ app.reason }}</div>
+        <div class="info-row">
+          <div class="info-label">Nachrichten</div>
+          <div class="info-value mono">{{ messages|length }}</div>
         </div>
-        {% endif %}
 
       </div>
     </div>

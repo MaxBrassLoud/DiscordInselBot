@@ -58,7 +58,6 @@ async def _resolve_member(guild_id: str, user_id: str, cache: dict) -> dict | No
 
 
 async def _load_server_web_admin_ids(server_id: str, supabase) -> list[str]:
-    """Load web_admin_role_ids from ticket_servers table."""
     r = supabase.table("ticket_servers").select("web_admin_role_ids")\
         .eq("server_id", server_id).execute()
     if r.data:
@@ -67,7 +66,6 @@ async def _load_server_web_admin_ids(server_id: str, supabase) -> list[str]:
 
 
 async def _load_app_server_web_admin_ids(server_id: str, supabase) -> list[str]:
-    """Load web_admin_role_ids from application_servers table."""
     r = supabase.table("application_servers").select("web_admin_role_ids")\
         .eq("server_id", server_id).execute()
     if r.data:
@@ -76,10 +74,6 @@ async def _load_app_server_web_admin_ids(server_id: str, supabase) -> list[str]:
 
 
 async def _get_module_staff_map(server_id: str, supabase) -> dict[str, list[str]]:
-    """
-    Returns {module_name: [role_id, ...]} for all modules on this server.
-    Used to filter tickets by module visibility.
-    """
     mods = supabase.table("ticket_modules").select("id,name").eq("server_id", server_id).execute().data or []
     result: dict[str, list[str]] = {}
     for mod in mods:
@@ -89,7 +83,81 @@ async def _get_module_staff_map(server_id: str, supabase) -> dict[str, list[str]
     return result
 
 
-# ── Main dashboard (redirect) ─────────────────────────────────────────────────
+def _normalise_ticket_messages(raw: list[dict]) -> list[dict]:
+    """
+    Normalise Supabase rows (flat columns) into the shape ticket_view.html expects:
+      msg.author.{id, username, global_name, avatar, bot}
+      msg.content
+      msg.timestamp
+      msg.attachments
+    """
+    out = []
+    for msg in raw:
+        if "author" in msg:          # already shaped (legacy fallback)
+            out.append(msg)
+            continue
+        out.append({
+            "timestamp":   msg.get("timestamp", ""),
+            "content":     msg.get("content") or msg.get("message", ""),
+            "attachments": msg.get("attachments") or [],
+            "author": {
+                "id":          msg.get("user_id", ""),
+                "username":    msg.get("user", "?"),
+                "global_name": msg.get("user", "?"),
+                "avatar":      None,   # enriched later from Discord API
+                "bot":         False,
+                "_uid":        msg.get("user_id", ""),
+            },
+        })
+    return out
+
+
+def _normalise_app_messages(raw: list[dict]) -> list[dict]:
+    """Same normalisation for application messages."""
+    out = []
+    for msg in raw:
+        if "author" in msg:
+            out.append(msg)
+            continue
+        out.append({
+            "timestamp":   msg.get("timestamp", ""),
+            "content":     msg.get("content") or msg.get("message", ""),
+            "attachments": msg.get("attachments") or [],
+            "author": {
+                "id":          msg.get("user_id", ""),
+                "username":    msg.get("user", "?"),
+                "global_name": msg.get("user", "?"),
+                "avatar":      None,
+                "bot":         False,
+                "_uid":        msg.get("user_id", ""),
+            },
+        })
+    return out
+
+
+async def _enrich_message_authors(messages: list[dict], server_id: str) -> list[dict]:
+    """
+    Try to resolve Discord avatars for every unique user_id in the message list.
+    Falls back gracefully – if the API call fails the avatar stays None and the
+    template shows initials instead.
+    """
+    cache: dict[str, dict] = {}
+    for msg in messages:
+        uid = msg["author"].get("id") or msg["author"].get("_uid", "")
+        if not uid:
+            continue
+        m = await _resolve_member(server_id, uid, cache)
+        if not m:
+            continue
+        user_obj = m.get("user", {})
+        msg["author"]["global_name"] = member_display_name(m)
+        msg["author"]["username"]    = user_obj.get("username") or msg["author"]["username"]
+        msg["author"]["avatar"]      = user_obj.get("avatar")
+        msg["author"]["_uid"]        = user_obj.get("id", uid)
+    return messages
+
+
+# ── Main dashboard ────────────────────────────────────────────────────────────
 
 async def handle_dashboard(request: web.Request) -> web.Response:
     sess = get_session(request)
@@ -98,7 +166,7 @@ async def handle_dashboard(request: web.Request) -> web.Response:
     raise web.HTTPFound("/dashboard/tickets")
 
 
-# ── Tickets ───────────────────────────────────────────────────────────────────
+# ── Ticket list ───────────────────────────────────────────────────────────────
 
 async def handle_ticket_list(request: web.Request) -> web.Response:
     sess = get_session(request)
@@ -121,14 +189,9 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
         if selected is None:
             raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
 
-        # Load web admin roles and per-module staff roles
-        web_admin_ids   = _parse_role_ids(selected.get("web_admin_role_ids", ""))
+        web_admin_ids    = _parse_role_ids(selected.get("web_admin_role_ids", ""))
         module_staff_map = await _get_module_staff_map(server_id, supabase)
 
-        # Determine which modules this user can see
-        is_admin = is_mbl(user) or user_is_web_admin(user, web_admin_ids)
-
-        # Build query
         q = supabase.table("tickets").select("*").eq("server_id", server_id)
         if request.rel_url.query.get("status"):
             q = q.eq("status", request.rel_url.query["status"])
@@ -153,7 +216,7 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
                 continue
 
             m = await _resolve_member(server_id, t.get("creator_id", ""), member_cache)
-            t["creator_display"] = member_display_name(m) if m else (t.get("creator_id") or "Unbekannt")
+            t["creator_display"] = member_display_name(m) if m else (t.get("creator_name") or t.get("creator_id") or "Unbekannt")
             t["creator_avatar"]  = member_avatar_url(m) if m else None
             tickets.append(t)
 
@@ -176,13 +239,16 @@ async def handle_ticket_list(request: web.Request) -> web.Response:
     )
 
 
+# ── Ticket detail ─────────────────────────────────────────────────────────────
+
 async def handle_ticket_detail(request: web.Request) -> web.Response:
     sess = get_session(request)
     if "user" not in sess:
         raise web.HTTPFound(f"/login?next={request.rel_url}")
 
-    from bot.features.tickets.storage import load_ticket, load_messages
     from bot.core.supabase_client import get_supabase
+    from bot.features.tickets.storage import load_ticket, load_messages
+
     user      = sess["user"]
     ticket_id = int(request.match_info["ticket_id"])
     server_id = request.rel_url.query.get("server_id", "")
@@ -194,13 +260,10 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
     if not ticket:
         raise web.HTTPNotFound()
 
-    supabase = get_supabase()
-
-    # Load web admin role IDs
+    supabase      = get_supabase()
     web_admin_ids = await _load_server_web_admin_ids(server_id, supabase)
 
-    # Load module-specific staff roles
-    mod_name = ticket.get("module", "")
+    mod_name       = ticket.get("module", "")
     staff_role_ids: list[str] = []
     if mod_name:
         mod_rows = supabase.table("ticket_modules").select("id")\
@@ -213,15 +276,17 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
     if not user_can_see_ticket(user, ticket, server_id, staff_role_ids, web_admin_ids):
         raise web.HTTPForbidden(reason="Du hast keinen Zugriff auf dieses Ticket.")
 
+    # Creator
     creator_id = ticket.get("creator_id", "")
     if creator_id:
         m = await get_member(server_id, creator_id)
-        ticket["creator_display"] = member_display_name(m) if m else ticket.get("creator_name", creator_id)
+        ticket["creator_display"] = member_display_name(m) if m else (ticket.get("creator_name") or creator_id)
         ticket["creator_avatar"]  = member_avatar_url(m) if m else None
     else:
         ticket["creator_display"] = ticket.get("creator_name", "Unbekannt")
         ticket["creator_avatar"]  = None
 
+    # Claimed by
     claimed_id = ticket.get("claimed_by")
     if claimed_id:
         cm = await get_member(server_id, claimed_id)
@@ -229,12 +294,16 @@ async def handle_ticket_detail(request: web.Request) -> web.Response:
     else:
         ticket["claimed_by_display"] = None
 
-    messages = load_messages(server_id, ticket_id)
+    # Messages – normalise flat DB rows → author-object shape, then enrich avatars
+    raw_messages = load_messages(server_id, ticket_id)
+    messages     = _normalise_ticket_messages(raw_messages)
+    messages     = await _enrich_message_authors(messages, server_id)
+
     return render("ticket_view.html",
         user=user, ticket=ticket, messages=messages, server_id=server_id)
 
 
-# ── Applications ──────────────────────────────────────────────────────────────
+# ── Application list ──────────────────────────────────────────────────────────
 
 async def handle_application_list(request: web.Request) -> web.Response:
     sess = get_session(request)
@@ -257,7 +326,6 @@ async def handle_application_list(request: web.Request) -> web.Response:
         if selected is None:
             raise web.HTTPForbidden(reason="Kein Zugriff auf diesen Server.")
 
-        # Load permission role IDs
         web_admin_ids = _parse_role_ids(selected.get("web_admin_role_ids", ""))
         app_staff_ids = _parse_role_ids(selected.get("staff_role_ids", ""))
 
@@ -280,7 +348,7 @@ async def handle_application_list(request: web.Request) -> web.Response:
                 continue
 
             m = await _resolve_member(server_id, a.get("creator_id", ""), member_cache)
-            a["creator_display"] = member_display_name(m) if m else a.get("creator_id", "")
+            a["creator_display"] = member_display_name(m) if m else (a.get("creator_name") or a.get("creator_id", ""))
             a["creator_avatar"]  = member_avatar_url(m) if m else None
             applications.append(a)
 
@@ -303,13 +371,16 @@ async def handle_application_list(request: web.Request) -> web.Response:
     )
 
 
+# ── Application detail ────────────────────────────────────────────────────────
+
 async def handle_application_detail(request: web.Request) -> web.Response:
     sess = get_session(request)
     if "user" not in sess:
         raise web.HTTPFound(f"/login?next={request.rel_url}")
 
-    from bot.features.applications.manager import load_application, load_app_messages
     from bot.core.supabase_client import get_supabase
+    from bot.features.applications.manager import load_application, load_app_messages
+
     user      = sess["user"]
     app_id    = int(request.match_info["app_id"])
     server_id = request.rel_url.query.get("server_id", "")
@@ -321,7 +392,7 @@ async def handle_application_detail(request: web.Request) -> web.Response:
     if not app:
         raise web.HTTPNotFound()
 
-    supabase = get_supabase()
+    supabase      = get_supabase()
     web_admin_ids = await _load_app_server_web_admin_ids(server_id, supabase)
 
     cfg_r = supabase.table("application_servers").select("staff_role_ids")\
@@ -336,13 +407,16 @@ async def handle_application_detail(request: web.Request) -> web.Response:
     creator_id = app.get("creator_id", "")
     if creator_id:
         m = await get_member(server_id, creator_id)
-        app["creator_display"] = member_display_name(m) if m else app.get("creator_name", creator_id)
+        app["creator_display"] = member_display_name(m) if m else (app.get("creator_name") or creator_id)
         app["creator_avatar"]  = member_avatar_url(m) if m else None
     else:
         app["creator_display"] = app.get("creator_name", "Unbekannt")
         app["creator_avatar"]  = None
 
-    messages = load_app_messages(server_id, app_id)
+    raw_messages = load_app_messages(server_id, app_id)
+    messages     = _normalise_app_messages(raw_messages)
+    messages     = await _enrich_message_authors(messages, server_id)
+
     return render("application_view.html",
         user=user, app=app, messages=messages, server_id=server_id)
 
@@ -351,9 +425,9 @@ async def handle_application_detail(request: web.Request) -> web.Response:
 
 async def handle_static(request: web.Request) -> web.Response:
     from pathlib import Path
-    filename = request.match_info["filename"]
+    filename   = request.match_info["filename"]
     static_dir = Path(__file__).parent.parent / "static"
-    path = static_dir / filename
+    path       = static_dir / filename
     if not path.exists() or not path.is_file():
         raise web.HTTPNotFound()
     content_types = {
