@@ -45,7 +45,7 @@ class ApplicationSetupView(discord.ui.View):
         self.newbie_role_id: str | None      = None
         self.member_role_id: str | None      = None
         self.log_channel_id: str | None      = None
-        self.mc_log_channel_id: str | None   = None   # ← NEU: Minecraft-Name-Log-Channel
+        self.mc_log_channel_id: str | None   = None
         self.staff_role_ids: list[str]       = []
         self.rejection_cooldown_hours: int   = 24
         self.welcome_message: str            = (
@@ -121,7 +121,6 @@ class ApplicationSetupView(discord.ui.View):
             await i.response.edit_message(embed=self._build_embed(), view=self)
             await self._send_buttons_once(i)
         mr.callback = _mr; self.add_item(mr)
-        # All 5 rows are full. Staff roles + MC-Log-Channel + Save live in StaffRolePickerView.
 
     async def _send_buttons_once(self, interaction: discord.Interaction):
         """After the first select, send the button row as a follow-up (once)."""
@@ -170,7 +169,7 @@ class ApplicationSetupView(discord.ui.View):
                 "newbie_role_id":           self.newbie_role_id,
                 "member_role_id":           self.member_role_id,
                 "log_channel_id":           self.log_channel_id,
-                "mc_log_channel_id":        self.mc_log_channel_id,   # ← NEU
+                "mc_log_channel_id":        self.mc_log_channel_id,
                 "staff_role_ids":           ",".join(self.staff_role_ids),
                 "welcome_message":          self.welcome_message,
                 "instruction_message":      self.instruction_message,
@@ -207,7 +206,7 @@ class ApplicationSetupView(discord.ui.View):
 # ── Staff Role Picker View (used in both Setup and Edit) ──────────────────────
 
 class StaffRolePickerView(discord.ui.View):
-    """Interactive role picker for staff roles + MC-Log-Channel – no manual ID entry needed."""
+    """Interactive role picker for staff roles + MC-Log-Channel."""
 
     def __init__(self, setup_view):
         super().__init__(timeout=180)
@@ -221,7 +220,6 @@ class StaffRolePickerView(discord.ui.View):
         role_sel.callback = self._roles_selected
         self.add_item(role_sel)
 
-        # ── NEU: MC-Name Log-Channel ──
         mc_ch_sel = discord.ui.ChannelSelect(
             placeholder="⛏️ MC-Name Log-Kanal auswählen (optional)",
             min_values=0, max_values=1,
@@ -238,8 +236,6 @@ class StaffRolePickerView(discord.ui.View):
         btn_text.callback = self._cb_text
         self.add_item(btn_text)
 
-        # "Fertig" = just close the picker (used from EditView)
-        # "Setup abschließen" = save everything (used from SetupView)
         is_setup = hasattr(setup_view, "_cb_save")
         if is_setup:
             btn_save = discord.ui.Button(
@@ -298,7 +294,6 @@ class StaffRolePickerView(discord.ui.View):
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
     async def _mc_channel_selected(self, interaction: discord.Interaction):
-        """Store the selected MC-Log-Channel in the parent setup/edit view."""
         vals = interaction.data.get("values", [])
         self._setup.mc_log_channel_id = vals[0] if vals else None
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
@@ -307,7 +302,6 @@ class StaffRolePickerView(discord.ui.View):
         await interaction.response.send_modal(TextsAndCooldownModal(self._setup))
 
     async def _cb_done(self, interaction: discord.Interaction):
-        # Save mc_log_channel_id to DB immediately when in EditView
         try:
             get_supabase().table("application_servers").update({
                 "mc_log_channel_id": getattr(self._setup, "mc_log_channel_id", None),
@@ -335,7 +329,6 @@ class StaffRolePickerView(discord.ui.View):
         )
 
     async def _cb_setup_save(self, interaction: discord.Interaction):
-        """Called from SetupView context – validates required fields then saves."""
         s = self._setup
         missing = []
         if not s.panel_channel_id: missing.append("📢 Panel-Kanal")
@@ -347,7 +340,6 @@ class StaffRolePickerView(discord.ui.View):
                 f"❌ Bitte zuerst ausfüllen: {', '.join(missing)}", ephemeral=True
             )
             return
-        # Delegate to the setup view's save handler
         await s._cb_save(interaction)
 
 
@@ -395,7 +387,7 @@ class TextsAndCooldownModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten
         await interaction.response.edit_message(embed=picker._build_embed(), view=picker)
 
 
-# Legacy alias kept for backwards compat (EditView calls WelcomeMessageModal)
+# Legacy alias
 WelcomeMessageModal = TextsAndCooldownModal
 
 
@@ -420,7 +412,7 @@ class ApplicationEditView(discord.ui.View):
         self.welcome_message: str = cfg.get("welcome_message", "")
         self.instruction_message: str = cfg.get("instruction_message", "")
         self.rejection_cooldown_hours: int = int(cfg.get("rejection_cooldown_hours") or 24)
-        self.mc_log_channel_id: str | None = cfg.get("mc_log_channel_id")   # ← NEU
+        self.mc_log_channel_id: str | None = cfg.get("mc_log_channel_id")
         self._rebuild()
 
     def _load_cfg(self) -> dict | None:
@@ -499,7 +491,7 @@ class ApplicationEditView(discord.ui.View):
                     "welcome_message":          self.welcome_message,
                     "instruction_message":      self.instruction_message,
                     "rejection_cooldown_hours": self.rejection_cooldown_hours,
-                    "mc_log_channel_id":        self.mc_log_channel_id,   # ← NEU
+                    "mc_log_channel_id":        self.mc_log_channel_id,
                 }).eq("server_id", self.guild_id).execute()
         except Exception as e:
             logger.error(f"[AppEditView.refresh save] {e}")
@@ -534,7 +526,7 @@ class AppChannelSettingsView(discord.ui.View):
             ("📢 Panel-Kanal",          "panel_channel_id",  [discord.ChannelType.text]),
             ("📁 Kategorie",            "category_id",       [discord.ChannelType.category]),
             ("📋 Log-Kanal",            "log_channel_id",    [discord.ChannelType.text]),
-            ("⛏️ MC-Name Log-Kanal",   "mc_log_channel_id", [discord.ChannelType.text]),   # ← NEU
+            ("⛏️ MC-Name Log-Kanal",   "mc_log_channel_id", [discord.ChannelType.text]),
         ]):
             sel = discord.ui.ChannelSelect(placeholder=placeholder, min_values=1, max_values=1,
                                            channel_types=types, row=row_idx)
@@ -547,17 +539,9 @@ class AppChannelSettingsView(discord.ui.View):
         async def _nr(i): self.cfg["newbie_role_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
         nr.callback = _nr; self.add_item(nr)
 
-        # Save-Button ist jetzt in einem extra View da alle 5 Rows voll sind
-        # → save wird über separaten Followup-Button gelöst (siehe _add_save_button)
         self._add_save_button()
 
     def _add_save_button(self):
-        """Send a save button; since all 5 rows in the ChannelSelect view are full,
-        we override row=4 by removing the role select and re-adding it – but
-        actually we just put the save button in a separate message via interaction.followup
-        inside _build(). Simpler: collapse Neulings-Rolle to row 3 and save to row 4."""
-        # Already handled by row 4 being the RoleSelect → we add save at row 4 too
-        # This works because discord.py allows multiple items per row.
         save = discord.ui.Button(label="💾 Speichern", style=discord.ButtonStyle.success, row=4)
         save.callback = self._save
         self.add_item(save)
@@ -568,7 +552,7 @@ class AppChannelSettingsView(discord.ui.View):
                 "panel_channel_id":  self.cfg.get("panel_channel_id"),
                 "category_id":       self.cfg.get("category_id"),
                 "log_channel_id":    self.cfg.get("log_channel_id"),
-                "mc_log_channel_id": self.cfg.get("mc_log_channel_id"),   # ← NEU
+                "mc_log_channel_id": self.cfg.get("mc_log_channel_id"),
                 "newbie_role_id":    self.cfg.get("newbie_role_id"),
                 "member_role_id":    self.cfg.get("member_role_id"),
             }).eq("server_id", self.parent.guild_id).execute()
@@ -617,7 +601,6 @@ class AppPanelEditView(discord.ui.View):
             panel_view = ApplicationPanelView(bot=self.bot)
             await msg.edit(embed=embed, view=panel_view)
 
-            # Update instruction message in DB
             if self._instruction is not None:
                 get_supabase().table("application_servers").update({
                     "instruction_message": self._instruction,
@@ -745,6 +728,16 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
                 minecraft_name=mc, cfg=self.cfg,
             )
 
+            # ── Minecraft-Name in minecraft_names-Tabelle speichern ───────
+            try:
+                from bot.features.minecraft_names.cog import _save_entry, _load_entry
+                existing_mc = _load_entry(str(guild.id), str(applicant.id))
+                old_msg_id  = existing_mc["message_id"] if existing_mc else None
+                _save_entry(str(guild.id), str(applicant.id), mc, old_msg_id)
+            except Exception as e:
+                logger.warning(f"[MinecraftNameModal] minecraft_names save failed: {e}")
+            # ─────────────────────────────────────────────────────────────
+
             # Build welcome message in the new channel
             welcome_text = (self.cfg.get("welcome_message") or "").replace("{player}", mc)
             embed = discord.Embed(
@@ -765,18 +758,24 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
             if instruction:
                 await channel.send(instruction)
 
-            # ── NEU: MC-Name in den Log-Channel posten ────────────────────
+            # ── MC-Name in den Log-Channel posten ────────────────────────
             mc_log_channel_id = self.cfg.get("mc_log_channel_id")
             if mc_log_channel_id:
                 mc_log_ch = guild.get_channel(int(mc_log_channel_id))
                 if mc_log_ch:
                     try:
-                        await mc_log_ch.send(embed=_build_mc_log_embed(
+                        sent = await mc_log_ch.send(embed=_build_mc_log_embed(
                             mc_name=mc,
                             applicant=applicant,
                             app_id=app_id,
                             channel=channel,
                         ))
+                        # Message-ID in Supabase nachträglich aktualisieren
+                        try:
+                            from bot.features.minecraft_names.cog import _save_entry
+                            _save_entry(str(guild.id), str(applicant.id), mc, str(sent.id))
+                        except Exception as e:
+                            logger.warning(f"[MinecraftNameModal] message_id update failed: {e}")
                     except Exception as e:
                         logger.warning(f"[MinecraftNameModal] MC-Log-Channel Fehler: {e}")
             # ─────────────────────────────────────────────────────────────
@@ -814,7 +813,7 @@ def _build_mc_log_embed(
     """Schöne Embed-Karte für den MC-Name-Log-Channel."""
     embed = discord.Embed(
         title="⛏️ Neuer Minecraft-Name registriert",
-        color=discord.Color.from_rgb(89, 197, 98),   # Minecraft-Grasgrün
+        color=discord.Color.from_rgb(89, 197, 98),
     )
     embed.add_field(
         name="🎮 Minecraft-Name",
@@ -823,19 +822,9 @@ def _build_mc_log_embed(
     )
     embed.add_field(
         name="👤 Discord-Nutzer",
-        value=f"Name: {applicant.mention}",#\n \n Eigener Name: `{applicant.display_name}`",
+        value=f"Name: {applicant.mention}",
         inline=True,
     )
-    #embed.add_field(
-    #   name="🆔 Discord-ID",
-    #  value=f"`{applicant.id}`",
-    # inline=True,
-    #)
-    #embed.add_field(
-    #    name="📋 Bewerbung",
-    #    value=f"[#{app_id} → {channel.mention}]({channel.jump_url})",
-    #    inline=True,
-    #)
     embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{mc_name}/128")
     embed.set_footer(
         text=f"Bewerbung #{app_id}",

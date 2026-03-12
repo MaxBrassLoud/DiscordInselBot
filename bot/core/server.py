@@ -37,6 +37,7 @@ FEATURE_COGS = [
     "bot.features.tickets.cog",
     "bot.features.applications.cog",
     "bot.features.web.cog",
+    "bot.features.minecraft_names.cog",
 ]
 
 
