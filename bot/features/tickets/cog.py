@@ -83,19 +83,33 @@ class TicketsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Log all messages in ticket channels to messages.json."""
+        """Log all messages in ticket channels to ticket_messages table."""
         if message.author.bot:
             return
         if not message.guild:
             return
         try:
-            parts = message.channel.name.split("-")
-            if len(parts) < 3:
-                return
-            if not parts[0].isdigit():
-                return
-            ticket_id = int(parts[0])
-            server_id = str(message.guild.id)
+            server_id  = str(message.guild.id)
+            channel_id = str(message.channel.id)
+
+            # Prüfe explizit ob dieser Kanal ein offenes Ticket ist.
+            # KEIN Kanalname-Parsing – verhindert dass Bewerbungskanäle
+            # (die ebenfalls mit einer Zahl beginnen) hier fälschlicherweise
+            # als Ticket-Kanal erkannt werden.
+            supabase = get_supabase()
+            result = (
+                supabase.table("tickets")
+                .select("ticket_id")
+                .eq("server_id", server_id)
+                .eq("channel_id", channel_id)
+                .eq("status", "open")
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                return  # Kein Ticket-Kanal → nichts tun
+
+            ticket_id   = result.data[0]["ticket_id"]
             attachments = [a.url for a in message.attachments]
             append_message(
                 server_id=server_id,
