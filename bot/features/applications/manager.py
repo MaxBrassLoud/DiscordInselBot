@@ -324,10 +324,22 @@ class ApplicationManager:
         server_id = str(guild.id)
         app_id    = await ApplicationManager.get_next_app_id(server_id)
 
+        # 🔧 FIX 1: Besseres Error-Handling beim Nickname-Setzen
         try:
             await applicant.edit(nick=minecraft_name, reason="Bewerbung eingereicht")
         except discord.Forbidden:
-            logger.warning(f"[create_application] Konnte Nickname nicht setzen für {applicant}")
+            logger.warning(
+                f"[create_application] Konnte Nickname nicht setzen für {applicant.display_name} "
+                f"(ID: {applicant.id}): Bot-Rolle ist zu niedrig oder User-Rolle ist höher"
+            )
+        except discord.HTTPException as e:
+            logger.warning(
+                f"[create_application] HTTP-Fehler beim Nickname-Setzen für {applicant.display_name}: {e.status} {e.code}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[create_application] Unerwarteter Fehler beim Nickname-Setzen: {type(e).__name__}: {e}"
+            )
 
         safe_mc      = minecraft_name.lower().replace(" ", "-")[:20]
         channel_name = f"{app_id}-{safe_mc}-bewerbung"
