@@ -11,7 +11,6 @@ All Discord UI views for the application system:
 
 from __future__ import annotations
 
-import asyncio
 import discord
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
@@ -700,34 +699,7 @@ class ApplicationPanelView(discord.ui.View):
                 )
                 return
 
-        # 🔧 FIX 2: Defer sofort, dann Modal mit Timeout-Schutz
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        await asyncio.sleep(0.5)  # Kurze Pause für Stabilität
-
-        try:
-            # Versuche die Interaction zu verwenden
-            await interaction.followup.send(
-                "ℹ️ Bitte verwende den Modal unten zur Eingabe deines Minecraft-Namens",
-                ephemeral=True
-            )
-        except discord.errors.NotFound:
-            # Interaction ist abgelaufen – ignorieren
-            logger.warning("[ApplicationPanelView] Interaction ist abgelaufen, Modal konnte nicht gesendet werden")
-            return
-
-        # Sende Modal über View
-        modal = MinecraftNameModal(cfg=cfg, bot=self.bot)
-        try:
-            # Neue Methode: Statt über interaction, via direktem Discord-Call
-            await interaction.user.send(
-                embed=discord.Embed(
-                    title="⛏️ Bewerbung einreichen",
-                    description="Klicke auf die Schaltfläche unten um deine Bewerbung einzureichen.",
-                    color=discord.Color.green()
-                )
-            )
-        except Exception as e:
-            logger.warning(f"[ApplicationPanelView] DM-Fehler: {e}")
+        await interaction.response.send_modal(MinecraftNameModal(cfg=cfg, bot=self.bot))
 
 
 # ── Minecraft Name Modal ──────────────────────────────────────────────────────
@@ -745,7 +717,7 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.response.defer(ephemeral=True)
         try:
             guild     = interaction.guild
             applicant = interaction.user
