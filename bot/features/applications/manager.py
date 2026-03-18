@@ -326,8 +326,8 @@ class ApplicationManager:
 
         try:
             await applicant.edit(nick=minecraft_name, reason="Bewerbung eingereicht")
-        except discord.Forbidden:
-            logger.warning(f"[create_application] Konnte Nickname nicht setzen für {applicant}")
+        except Exception as e:
+            logger.warning(f"[create_application] Nickname-Fehler: {type(e).__name__}: {e}")
 
         safe_mc      = minecraft_name.lower().replace(" ", "-")[:20]
         channel_name = f"{app_id}-{safe_mc}-bewerbung"
@@ -335,21 +335,41 @@ class ApplicationManager:
         category_id = cfg.get("category_id")
         category    = guild.get_channel(int(category_id)) if category_id else None
 
+        # ── Kategorie-Permissions debuggen ───────────────────────────────────
+        if category:
+            cat_overwrite = category.overwrites_for(guild.me)
+            logger.debug(f"[create_application] Kategorie '{category.name}' Overwrite für Bot: "
+                         f"view={cat_overwrite.view_channel}, "
+                         f"manage_channels={cat_overwrite.manage_channels}, "
+                         f"send_messages={cat_overwrite.send_messages}")
+            logger.debug(f"[create_application] Bot-Perms IN Kategorie: "
+                         f"manage_channels={category.permissions_for(guild.me).manage_channels}, "
+                         f"view={category.permissions_for(guild.me).view_channel}")
+        else:
+            logger.debug("[create_application] Keine Kategorie konfiguriert – Channel wird ohne Kategorie erstellt")
+        # ─────────────────────────────────────────────────────────────────────
+
         staff_role_ids = [r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()]
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             applicant:          discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_roles=True),
+            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
         }
         for rid in staff_role_ids:
             role = guild.get_role(int(rid))
             if role:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        channel = await guild.create_text_channel(
-            name=channel_name, category=category, overwrites=overwrites,
-            reason=f"Bewerbung #{app_id} von {applicant.display_name}",
-        )
+        logger.debug(f"[create_application] Erstelle Channel '{channel_name}' in Kategorie {category}")
+        logger.debug(f"[create_application] Bot-Permissions: {guild.me.guild_permissions.value}")
+        try:
+            channel = await guild.create_text_channel(
+                name=channel_name, category=category, overwrites=overwrites,
+                reason=f"Bewerbung #{app_id} von {applicant.display_name}",
+            )
+        except Exception as e:
+            logger.error(f"[create_application] Channel-Erstellung fehlgeschlagen: {type(e).__name__}: {e}")
+            raise
 
         now = datetime.now(timezone.utc).isoformat()
         app_data = {

@@ -46,6 +46,20 @@ async def on_ready():
     logger.info("✅ Commands synchronisiert")
     logger.info("✅ Bot ist bereit!")
 
+    # ── Bot-Permissions pro Server loggen ────────────────────────────────────
+    for guild in bot.guilds:
+        me = guild.me
+        perms = me.guild_permissions
+        logger.info(
+            f"[Permissions] Server: '{guild.name}' ({guild.id}) | "
+            f"Permissions-Zahl: {perms.value} | "
+            f"Administrator: {perms.administrator} | "
+            f"Manage Channels: {perms.manage_channels} | "
+            f"Manage Roles: {perms.manage_roles} | "
+            f"Manage Nicknames: {perms.manage_nicknames}"
+        )
+    # ─────────────────────────────────────────────────────────────────────────
+
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
