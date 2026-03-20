@@ -150,8 +150,13 @@ class WelcomerCog(commands.Cog):
             if config.get("welcome_enabled", True) and config.get("welcome_channel_id"):
                 channel = self.bot.get_channel(int(config["welcome_channel_id"]))
                 if channel:
-                    msg = random.choice(WELCOME_MESSAGES).format(mention=member.mention)
-                    await channel.send(msg)
+                    embed = discord.Embed(
+                        title=f"Wilkommen {member.display_name}!",
+                        description=random.choice(WELCOME_MESSAGES).format(mention=member.mention),
+                        color=discord.Color.green()
+                    )
+                    #msg = random.choice(WELCOME_MESSAGES).format(mention=member.mention)
+                    await channel.send(embed=embed)
         except Exception as e:
             logger.error(f"[on_member_join] Fehler: {e}")
 
@@ -164,7 +169,17 @@ class WelcomerCog(commands.Cog):
             if config.get("goodbye_enabled", True) and config.get("goodbye_channel_id"):
                 channel = self.bot.get_channel(int(config["goodbye_channel_id"]))
                 if channel:
-                    await channel.send(f"**{member.display_name}** hat den Server verlassen.")
+                    embed = discord.Embed(
+                        title=f"Goodbye {member.display_name}!",
+                        description=f"{member.display_name} hat den Server verlassen",
+                        color=discord.Color.orange()
+
+                    )
+                    embed.add_field(
+                        name=f"Mitglied seid:",
+                        value=f"{member.joined_at}"
+                    )
+                    await channel.send(embed=embed)
         except Exception as e:
             logger.error(f"[on_member_remove] Fehler: {e}")
 
