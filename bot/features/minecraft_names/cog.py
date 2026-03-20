@@ -15,7 +15,7 @@ Supabase-Tabelle (einmalig ausführen):
         user_id     TEXT    NOT NULL,
         server_id   TEXT    NOT NULL,
         mc_name     TEXT    NOT NULL,
-        message_id  TEXT,           -- ID der Embed-Nachricht im MC-Log-Channel
+        message_id  TEXT,
         updated_at  TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (user_id, server_id)
     );
@@ -34,20 +34,18 @@ from bot.utils.logger import get_logger
 
 logger = get_logger("minecraft_names")
 
-# User-ID(s) mit Sonder-Zugriff (kommagetrennt im Env)
 _MBL_IDS: set[str] = {
     uid.strip()
-    for uid in os.getenv("MBL", os.getenv("MBL", "")).split(",")
+    for uid in os.getenv("MBL", "").split(",")
     if uid.strip()
 }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helper: darf der User /name nutzen?
+# Permission helper
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _can_manage_names(interaction: discord.Interaction) -> bool:
-    """True für Server-Admins und User in _MBL_IDS."""
     if str(interaction.user.id) in _MBL_IDS:
         return True
     if isinstance(interaction.user, discord.Member):
@@ -90,7 +88,7 @@ def _save_entry(server_id: str, user_id: str, mc_name: str, message_id: str | No
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Embed builder (wiederverwendbar)
+# Embed builder
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _build_mc_name_embed(
@@ -104,11 +102,7 @@ def _build_mc_name_embed(
         color=discord.Color.from_rgb(89, 197, 98),
     )
     embed.add_field(name="🎮 Minecraft-Name", value=f"```{mc_name}```", inline=False)
-    embed.add_field(
-        name="👤 Discord-Nutzer",
-        value=member.mention,
-        inline=True,
-    )
+    embed.add_field(name="👤 Discord-Nutzer", value=member.mention, inline=True)
     embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{mc_name}/128")
     embed.set_footer(
         text=f"Discord: {member.display_name}",
@@ -119,37 +113,37 @@ def _build_mc_name_embed(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Kern-Logik: MC-Name setzen / aktualisieren
+# Standalone update – KEINE Interaction nötig
+# Wird vom Bewerbungs-Flow (views.py) UND den Slash-Commands genutzt.
+# Gibt die finale message_id der Log-Channel-Nachricht zurück (oder None).
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def _set_minecraft_name(
-    interaction: discord.Interaction,
-    target: discord.Member,
+async def update_minecraft_name(
+    guild: discord.Guild,
+    member: discord.Member,
     mc_name: str,
     *,
     set_nickname: bool = True,
-) -> None:
+) -> str | None:
     """
-    Shared logic used by both /minecraft_name and /name.
+    Zentrale Kern-Logik: MC-Name setzen/aktualisieren.
 
-    1. Setzt den Discord-Nickname (optional, schlägt still fehl bei fehlenden Rechten).
-    2. Postet/aktualisiert die Embed-Karte im MC-Log-Channel.
-    3. Speichert den Eintrag in Supabase.
+    - Bearbeitet eine vorhandene Log-Channel-Nachricht wenn möglich.
+    - Postet nur eine neue Nachricht wenn keine bearbeitbare existiert.
+    - Speichert den Eintrag in Supabase.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    server_id = str(interaction.guild_id)
-    user_id   = str(target.id)
+    server_id = str(guild.id)
+    user_id   = str(member.id)
     mc_name   = mc_name.strip()
 
-    # ── 1. Nickname setzen ───────────────────────────────────────────────────
+    # 1. Nickname setzen
     if set_nickname:
         try:
-            await target.edit(nick=mc_name, reason=f"Minecraft-Name: {mc_name}")
+            await member.edit(nick=mc_name, reason=f"Minecraft-Name: {mc_name}")
         except discord.Forbidden:
-            logger.warning(f"[minecraft_names] Konnte Nickname für {target} nicht setzen.")
+            logger.warning(f"[minecraft_names] Konnte Nickname für {member} nicht setzen.")
 
-    # ── 2. MC-Log-Channel ermitteln ──────────────────────────────────────────
+    # 2. MC-Log-Channel ermitteln
     supabase = get_supabase()
     cfg_r = supabase.table("application_servers") \
         .select("mc_log_channel_id") \
@@ -159,30 +153,45 @@ async def _set_minecraft_name(
         cfg_r.data[0].get("mc_log_channel_id") if cfg_r.data else None
     )
 
-    # ── 3. Vorhandenen Eintrag laden ─────────────────────────────────────────
-    existing  = _load_entry(server_id, user_id)
-    updated   = existing is not None
-    embed     = _build_mc_name_embed(target, mc_name, updated=updated)
-    new_msg_id: str | None = existing["message_id"] if existing else None
+    # 3. Vorhandenen Eintrag laden
+    existing   = _load_entry(server_id, user_id)
+    updated    = existing is not None
+    embed      = _build_mc_name_embed(member, mc_name, updated=updated)
+
+    # Normalisiere: leerer String → None
+    raw_msg_id = (existing or {}).get("message_id") or None
+    new_msg_id: str | None = raw_msg_id
 
     if mc_log_channel_id:
-        mc_log_ch = interaction.guild.get_channel(int(mc_log_channel_id))
+        mc_log_ch = guild.get_channel(int(mc_log_channel_id))
         if mc_log_ch:
+            edited_successfully = False
+
             # Versuch: bestehende Nachricht bearbeiten
             if new_msg_id:
                 try:
                     old_msg = await mc_log_ch.fetch_message(int(new_msg_id))
                     await old_msg.edit(embed=embed)
-                    logger.info(f"[minecraft_names] Nachricht {new_msg_id} bearbeitet für {target}")
-                except (discord.NotFound, discord.HTTPException):
-                    # Nachricht weg → neu posten
+                    edited_successfully = True
+                    logger.info(f"[minecraft_names] Nachricht {new_msg_id} bearbeitet für {member}")
+                except discord.NotFound:
+                    logger.info(
+                        f"[minecraft_names] Nachricht {new_msg_id} nicht mehr vorhanden, "
+                        f"poste neu für {member}."
+                    )
+                    new_msg_id = None
+                except discord.HTTPException as e:
+                    logger.error(
+                        f"[minecraft_names] Edit fehlgeschlagen für {member} ({e}), poste neu."
+                    )
                     new_msg_id = None
 
-            if not new_msg_id:
+            # Nur neu posten wenn Edit nicht erfolgreich war
+            if not edited_successfully:
                 try:
-                    sent      = await mc_log_ch.send(embed=embed)
+                    sent       = await mc_log_ch.send(embed=embed)
                     new_msg_id = str(sent.id)
-                    logger.info(f"[minecraft_names] Neue Nachricht {new_msg_id} für {target}")
+                    logger.info(f"[minecraft_names] Neue Nachricht {new_msg_id} für {member}")
                 except Exception as e:
                     logger.error(f"[minecraft_names] Senden fehlgeschlagen: {e}")
         else:
@@ -190,11 +199,46 @@ async def _set_minecraft_name(
     else:
         logger.info("[minecraft_names] Kein MC-Log-Channel konfiguriert.")
 
-    # ── 4. Supabase speichern ─────────────────────────────────────────────────
+    # 4. Supabase speichern
     _save_entry(server_id, user_id, mc_name, new_msg_id)
 
-    # ── 5. Antwort ────────────────────────────────────────────────────────────
-    action = "aktualisiert" if updated else "gespeichert"
+    return new_msg_id
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Interaction-Wrapper für Slash-Commands
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def _set_minecraft_name(
+    interaction: discord.Interaction,
+    target: discord.Member,
+    mc_name: str,
+    *,
+    set_nickname: bool = True,
+) -> None:
+    await interaction.response.defer(ephemeral=True)
+
+    # Vor dem Update laden wir den Status für die Bestätigungsmeldung
+    existing_before = _load_entry(str(interaction.guild_id), str(target.id))
+    action = "aktualisiert" if existing_before is not None else "gespeichert"
+
+    await update_minecraft_name(
+        guild=interaction.guild,
+        member=target,
+        mc_name=mc_name,
+        set_nickname=set_nickname,
+    )
+
+    # MC-Log-Channel für Bestätigungstext
+    supabase = get_supabase()
+    cfg_r = supabase.table("application_servers") \
+        .select("mc_log_channel_id") \
+        .eq("server_id", str(interaction.guild_id)) \
+        .execute()
+    mc_log_channel_id: str | None = (
+        cfg_r.data[0].get("mc_log_channel_id") if cfg_r.data else None
+    )
+
     ch_hint = f" in <#{mc_log_channel_id}>" if mc_log_channel_id else ""
     await interaction.followup.send(
         f"✅ Minecraft-Name **{mc_name}** für {target.mention} {action}{ch_hint}.",
@@ -210,8 +254,6 @@ class MinecraftNamesCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ── /minecraft_name ──────────────────────────────────────────────────────
-
     @app_commands.command(
         name="minecraft_name",
         description="Trage deinen Minecraft-Namen ein oder aktualisiere ihn.",
@@ -222,18 +264,11 @@ class MinecraftNamesCog(commands.Cog):
         interaction: discord.Interaction,
         minecraft_name: str,
     ):
-        """
-        Jedes Servermitglied kann diesen Command nutzen.
-        Setzt den Nickname und postet/aktualisiert die Karte im MC-Log-Channel.
-        """
         if not interaction.guild:
             await interaction.response.send_message("❌ Nur auf Servern verwendbar.", ephemeral=True)
             return
-
         member = interaction.guild.get_member(interaction.user.id) or interaction.user
         await _set_minecraft_name(interaction, member, minecraft_name)
-
-    # ── /name ────────────────────────────────────────────────────────────────
 
     @app_commands.command(
         name="name",
@@ -249,19 +284,14 @@ class MinecraftNamesCog(commands.Cog):
         user: discord.Member,
         minecraft_name: str,
     ):
-        """
-        Nur für Server-Admins und Nutzer in der MBL_USER_IDS-Env-Variable.
-        """
         if not interaction.guild:
             await interaction.response.send_message("❌ Nur auf Servern verwendbar.", ephemeral=True)
             return
-
         if not _can_manage_names(interaction):
             await interaction.response.send_message(
                 "❌ Du benötigst Administrator-Rechte für diesen Befehl.", ephemeral=True
             )
             return
-
         await _set_minecraft_name(interaction, user, minecraft_name)
 
 
