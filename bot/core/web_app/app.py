@@ -60,9 +60,9 @@ async def _run_server() -> None:
     app     = build_app()
     runner  = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 5000, ssl_context=ssl_ctx)
+    site = web.TCPSite(runner, "0.0.0.0", 7777)
     await site.start()
-    log.info("✅ Web-Dashboard läuft auf https://localhost:5000")
+    log.info("✅ Web-Dashboard läuft auf https://localhost:7777")
 
 
 async def keep_alive() -> None:
