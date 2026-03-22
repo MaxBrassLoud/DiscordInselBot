@@ -5,180 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bewerbung #{{ app.app_id or app.id }} – Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:        #0e0f13;
-      --surface:   #16181f;
-      --surface2:  #1d2029;
-      --border:    #2a2d38;
-      --border2:   #353845;
-      --text:      #e8eaf0;
-      --muted:     #787d91;
-      --accent:    #5865f2;
-      --green:     #3ba55d;
-      --yellow:    #faa81a;
-      --red:       #ed4245;
-      --radius:    10px;
-    }
-
-    html, body { height: 100%; }
-    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-
-    /* Topbar */
-    .topbar {
-      padding: 0 28px; height: 54px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 12px;
-      position: sticky; top: 0; z-index: 10;
-    }
-    .back-link {
-      display: flex; align-items: center; gap: 6px;
-      color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500;
-      transition: color .15s;
-    }
-    .back-link:hover { color: var(--text); }
-    .topbar-sep  { color: var(--border2); }
-    .topbar-title { font-size: 15px; font-weight: 600; }
-    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-
-    /* Layout */
-    .layout {
-      display: grid; grid-template-columns: 1fr 300px;
-      gap: 24px; max-width: 1200px; margin: 0 auto; padding: 28px;
-    }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-
-    /* Cards */
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
-    .card:last-child { margin-bottom: 0; }
-    .card-header {
-      padding: 14px 20px; border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 10px;
-    }
-    .card-title { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-
-    /* Badges */
-    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-    .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
-    .badge-pending  { background: rgba(250,168,26,.12); color: #faa81a; }
-    .badge-pending .badge-dot  { background: #faa81a; }
-    .badge-accepted { background: rgba(59,165,93,.12);  color: #3ba55d; }
-    .badge-accepted .badge-dot { background: #3ba55d; }
-    .badge-rejected { background: rgba(237,66,69,.12);  color: #ed4245; }
-    .badge-rejected .badge-dot { background: #ed4245; }
-    .module-chip {
-      display: inline-block; padding: 2px 8px; border-radius: 4px;
-      font-size: 12px; font-weight: 500; background: var(--surface2);
-      border: 1px solid var(--border2); color: var(--muted); font-family: 'DM Mono', monospace;
-    }
-
-    /* Applicant hero */
-    .applicant-hero {
-      padding: 24px 20px; display: flex; align-items: center; gap: 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .applicant-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
-    .applicant-avatar-ph {
-      width: 56px; height: 56px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--accent), #818cf8);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 20px; font-weight: 700; color: white; flex-shrink: 0;
-    }
-    .applicant-name { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
-    .applicant-meta { font-size: 13px; color: var(--muted); }
-
-    /* Rejection banner */
-    .rejection-box {
-      background: rgba(237,66,69,.07); border: 1px solid rgba(237,66,69,.25);
-      border-left: 3px solid #ed4245; border-radius: 8px;
-      padding: 12px 16px; margin: 16px 20px 0;
-    }
-    .rejection-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #ed4245; margin-bottom: 5px; }
-    .rejection-text  { font-size: 13.5px; color: #fca5a5; white-space: pre-wrap; word-break: break-word; }
-
-    /* Q&A */
-    .qa-list { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-    .qa-question { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
-    .qa-answer {
-      font-size: 14px; line-height: 1.6; color: #c7cade;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px 14px;
-      white-space: pre-wrap; word-break: break-word;
-    }
-
-    /* Messages */
-    .messages { display: flex; flex-direction: column; gap: 2px; }
-    .msg { display: flex; gap: 12px; padding: 10px 20px; transition: background .1s; }
-    .msg:hover { background: var(--surface2); }
-
-    .msg-avatar-img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 2px; }
-    .msg-avatar-ph  {
-      width: 34px; height: 34px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--accent), #818cf8);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700; color: white;
-      flex-shrink: 0; margin-top: 2px;
-    }
-
-    .msg-body   { flex: 1; min-width: 0; }
-    .msg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
-    .msg-author { font-size: 13.5px; font-weight: 600; }
-    .msg-author.is-bot { color: var(--accent); }
-    .msg-time   { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
-    .msg-text   { font-size: 14px; line-height: 1.55; color: #c7cade; white-space: pre-wrap; word-break: break-word; }
-
-    .att-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
-    .att-link {
-      display: inline-flex; align-items: center; gap: 5px;
-      background: var(--surface2); border: 1px solid var(--border2);
-      border-radius: 6px; padding: 4px 10px; font-size: 12px; color: var(--accent);
-      text-decoration: none; transition: border-color .15s;
-    }
-    .att-link:hover { border-color: var(--accent); }
-
-    .bot-tag {
-      background: var(--accent); color: white; font-size: 10px; font-weight: 700;
-      padding: 1px 5px; border-radius: 3px; letter-spacing: .04em;
-      vertical-align: middle; margin-left: 2px;
-    }
-
-    /* Info grid (sidebar) */
-    .info-grid { display: flex; flex-direction: column; }
-    .info-row {
-      display: flex; align-items: flex-start; padding: 11px 20px;
-      border-bottom: 1px solid var(--border); gap: 12px;
-    }
-    .info-row:last-child { border-bottom: none; }
-    .info-label {
-      width: 110px; flex-shrink: 0; font-size: 11.5px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 1px;
-    }
-    .info-value { font-size: 13.5px; flex: 1; }
-    .user-inline { display: inline-flex; align-items: center; gap: 7px; }
-    .avatar-sm { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
-    .avatar-ph {
-      width: 22px; height: 22px; border-radius: 50%;
-      background: var(--surface2); border: 1px solid var(--border2);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 9px; color: var(--muted); flex-shrink: 0;
-    }
-
-    /* Misc */
-    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 14px; }
-    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
-
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css">
 </head>
-<body>
+<body class="detail-page">
 
 <!-- Topbar -->
-<div class="topbar">
+<div class="topbar topbar-detail">
   <a href="/dashboard/applications?server_id={{ server_id }}" class="back-link">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
       <path d="M15 18l-6-6 6-6"/>
@@ -205,21 +38,21 @@
   </div>
 </div>
 
-<!-- Layout -->
-<div class="layout">
+<!-- Detail layout -->
+<div class="detail-layout">
 
-  <!-- Left column -->
-  <div>
+  <!-- LEFT -->
+  <div class="detail-main">
 
-    <!-- Applicant hero -->
-    <div class="card">
+    <!-- Applicant hero card -->
+    <div class="detail-card">
       <div class="applicant-hero">
         {% if app.get('creator_avatar') %}
           <img class="applicant-avatar" src="{{ app.creator_avatar }}" alt="">
         {% else %}
           <div class="applicant-avatar-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
         {% endif %}
-        <div>
+        <div class="applicant-info">
           <div class="applicant-name">{{ app.get('creator_display', app.get('creator_name','Unbekannt')) }}</div>
           <div class="applicant-meta">
             Bewerbung #{{ app.app_id or app.id }}
@@ -240,7 +73,7 @@
       {% if app.get('answers') %}
         <div class="qa-list">
           {% for qa in app.answers %}
-          <div>
+          <div class="qa-item">
             <div class="qa-question">{{ qa.get('question') or ('Frage ' ~ loop.index) }}</div>
             <div class="qa-answer">{{ qa.get('answer') or '—' }}</div>
           </div>
@@ -248,7 +81,7 @@
         </div>
       {% elif app.get('content') %}
         <div class="qa-list">
-          <div>
+          <div class="qa-item">
             <div class="qa-question">Bewerbungstext</div>
             <div class="qa-answer">{{ app.content }}</div>
           </div>
@@ -256,32 +89,26 @@
       {% endif %}
     </div>
 
-    <!-- Messages -->
-    <div class="card">
-      <div class="card-header">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+    <!-- Messages card -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
         </svg>
-        <span class="card-title">Kanal-Verlauf</span>
-        <span class="mono" style="margin-left:auto;">
-          {{ messages|length }} Nachricht{{ 'en' if messages|length != 1 else '' }}
-        </span>
+        <span class="detail-card-title">Kanal-Verlauf</span>
+        <span class="detail-card-count">{{ messages|length }} Nachricht{{ 'en' if messages|length != 1 else '' }}</span>
       </div>
 
       {% if messages %}
-        <div class="messages">
+        <div class="msg-list">
           {% for msg in messages %}
-          <div class="msg">
-
-            {# Resolve author info from both old and new message format #}
+          <div class="msg-row">
             {% set author      = msg.get('author') or {} %}
             {% set author_name = msg.get('user') or author.get('global_name') or author.get('username') or '?' %}
             {% set uid         = msg.get('user_id','') or author.get('id','') %}
             {% set av_hash     = author.get('avatar') %}
             {% set avatar_url  = author.get('avatar_url') %}
             {% set is_bot      = author.get('bot', False) %}
-
-            {# Build Discord CDN URL if we have hash + uid #}
             {% if not avatar_url and av_hash and uid %}
               {% set avatar_url = 'https://cdn.discordapp.com/avatars/' ~ uid ~ '/' ~ av_hash ~ '.png?size=64' %}
             {% endif %}
@@ -301,12 +128,10 @@
                   <span class="msg-time">{{ ts[:16].replace('T',' ') }}</span>
                 {% endif %}
               </div>
-
               {% set text = msg.get('content') or msg.get('message','') %}
               {% if text %}
                 <div class="msg-text">{{ text }}</div>
               {% endif %}
-
               {% set atts = msg.get('attachments') or [] %}
               {% if atts %}
                 <div class="att-list">
@@ -317,43 +142,39 @@
                   {% endfor %}
                 </div>
               {% endif %}
-
             </div>
           </div>
           {% endfor %}
         </div>
       {% else %}
         <div class="empty-state">
-          <div style="font-size:2rem;margin-bottom:10px;opacity:.3">💬</div>
-          Noch keine Nachrichten im Kanal aufgezeichnet.
+          <div class="empty-icon">💬</div>
+          <p>Noch keine Nachrichten im Kanal aufgezeichnet.</p>
         </div>
       {% endif %}
     </div>
 
-  </div>
+  </div><!-- /detail-main -->
 
-  <!-- Right sidebar -->
-  <div>
-    <div class="card">
-      <div class="card-header">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
+  <!-- RIGHT sidebar -->
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span class="card-title">Details</span>
+        <span class="detail-card-title">Details</span>
       </div>
-
-      <div class="info-grid">
+      <div class="info-rows">
 
         <div class="info-row">
-          <div class="info-label">ID</div>
-          <div class="info-value mono">#{{ app.app_id or app.id }}</div>
+          <div class="info-row-label">ID</div>
+          <div class="info-row-value mono">#{{ app.app_id or app.id }}</div>
         </div>
 
         <div class="info-row">
-          <div class="info-label">Status</div>
-          <div class="info-value">
+          <div class="info-row-label">Status</div>
+          <div class="info-row-value">
             {% if status in ('pending','open') %}
               <span class="badge badge-pending"><span class="badge-dot"></span>{{ 'Offen' if status == 'open' else 'Ausstehend' }}</span>
             {% elif status == 'accepted' %}
@@ -368,26 +189,26 @@
 
         {% if app.get('minecraft_name') %}
         <div class="info-row">
-          <div class="info-label">Minecraft</div>
-          <div class="info-value" style="font-family:'DM Mono',monospace;font-size:13px;">⛏️ {{ app.minecraft_name }}</div>
+          <div class="info-row-label">Minecraft</div>
+          <div class="info-row-value mono-green">⛏️ {{ app.minecraft_name }}</div>
         </div>
         {% endif %}
 
         {% if app.get('type') or app.get('position') %}
         <div class="info-row">
-          <div class="info-label">Position</div>
-          <div class="info-value"><span class="module-chip">{{ app.get('type') or app.get('position') }}</span></div>
+          <div class="info-row-label">Position</div>
+          <div class="info-row-value"><span class="module-chip">{{ app.get('type') or app.get('position') }}</span></div>
         </div>
         {% endif %}
 
         <div class="info-row">
-          <div class="info-label">Bewerber</div>
-          <div class="info-value">
+          <div class="info-row-label">Bewerber</div>
+          <div class="info-row-value">
             <div class="user-inline">
               {% if app.get('creator_avatar') %}
-                <img class="avatar-sm" src="{{ app.creator_avatar }}" alt="">
+                <img class="avatar-xs" src="{{ app.creator_avatar }}" alt="">
               {% else %}
-                <div class="avatar-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
+                <div class="avatar-xs-ph">{{ (app.get('creator_display','?'))[:1].upper() }}</div>
               {% endif %}
               {{ app.get('creator_display', app.get('creator_name','Unbekannt')) }}
             </div>
@@ -396,34 +217,34 @@
 
         {% if app.get('claimed_by') %}
         <div class="info-row">
-          <div class="info-label">Bearbeiter</div>
-          <div class="info-value mono">{{ app.claimed_by }}</div>
+          <div class="info-row-label">Bearbeiter</div>
+          <div class="info-row-value mono">{{ app.claimed_by }}</div>
         </div>
         {% endif %}
 
         {% if app.get('created_at') %}
         <div class="info-row">
-          <div class="info-label">Eingereicht</div>
-          <div class="info-value mono">{{ app.created_at[:10] }}</div>
+          <div class="info-row-label">Eingereicht</div>
+          <div class="info-row-value mono">{{ app.created_at[:10] }}</div>
         </div>
         {% endif %}
 
         {% if app.get('closed_at') %}
         <div class="info-row">
-          <div class="info-label">Entschieden</div>
-          <div class="info-value mono">{{ app.closed_at[:10] }}</div>
+          <div class="info-row-label">Entschieden</div>
+          <div class="info-row-value mono">{{ app.closed_at[:10] }}</div>
         </div>
         {% endif %}
 
         <div class="info-row">
-          <div class="info-label">Nachrichten</div>
-          <div class="info-value mono">{{ messages|length }}</div>
+          <div class="info-row-label">Nachrichten</div>
+          <div class="info-row-value mono">{{ messages|length }}</div>
         </div>
 
       </div>
     </div>
   </div>
 
-</div>
+</div><!-- /detail-layout -->
 </body>
 </html>

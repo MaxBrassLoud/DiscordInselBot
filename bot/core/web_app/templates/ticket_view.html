@@ -5,132 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ticket #{{ ticket.get('ticket_id') or ticket.get('id') }} – Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:        #0e0f13;
-      --surface:   #16181f;
-      --surface2:  #1d2029;
-      --border:    #2a2d38;
-      --border2:   #353845;
-      --text:      #e8eaf0;
-      --muted:     #787d91;
-      --accent:    #5865f2;
-      --accent-h:  #4752c4;
-      --green:     #3ba55d;
-      --red:       #ed4245;
-      --radius:    10px;
-    }
-
-    html, body { height: 100%; }
-    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-
-    /* topbar */
-    .topbar {
-      padding: 0 28px; height: 54px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 12px;
-      position: sticky; top: 0; z-index: 10;
-    }
-    .back-link { display: flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500; transition: color .15s; }
-    .back-link:hover { color: var(--text); }
-    .topbar-sep { color: var(--border2); }
-    .topbar-title { font-size: 15px; font-weight: 600; }
-    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-
-    /* layout */
-    .layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; max-width: 1200px; margin: 0 auto; padding: 28px; }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-
-    /* card */
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-    .card-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
-    .card-title { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-    .card-body { padding: 20px; }
-
-    /* ticket title */
-    .ticket-title { font-size: 22px; font-weight: 600; line-height: 1.3; margin-bottom: 10px; }
-    .ticket-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 0; }
-
-    /* description */
-    .desc-box {
-      background: var(--bg); border: 1px solid var(--border);
-      border-left: 3px solid var(--accent); border-radius: var(--radius);
-      padding: 14px 18px; white-space: pre-wrap; line-height: 1.7;
-      font-size: .9rem; color: var(--muted); margin-top: 16px;
-    }
-
-    /* badges */
-    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-    .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
-    .badge-open   { background: rgba(59,165,93,.12);   color: #3ba55d; }
-    .badge-open   .badge-dot { background: #3ba55d; }
-    .badge-closed { background: rgba(114,118,125,.12); color: #8b8f9a; }
-    .badge-closed .badge-dot { background: #8b8f9a; }
-    .badge-pending { background: rgba(250,168,26,.12); color: #faa81a; }
-    .badge-pending .badge-dot { background: #faa81a; }
-    .module-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background: var(--surface2); border: 1px solid var(--border2); color: var(--muted); font-family: 'DM Mono', monospace; }
-
-    /* info grid */
-    .info-grid { display: flex; flex-direction: column; }
-    .info-row { display: flex; align-items: flex-start; padding: 11px 0; border-bottom: 1px solid var(--border); gap: 12px; }
-    .info-row:last-child { border-bottom: none; }
-    .info-label { width: 120px; flex-shrink: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 1px; }
-    .info-value { font-size: 13.5px; flex: 1; }
-
-    .user-inline { display: inline-flex; align-items: center; gap: 7px; }
-    .avatar-sm { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-    .avatar-ph {
-      width: 24px; height: 24px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--accent), #818cf8);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 9px; font-weight: 700; color: #fff; flex-shrink: 0;
-    }
-
-    /* messages */
-    .messages { display: flex; flex-direction: column; gap: 2px; }
-    .msg { display: flex; gap: 12px; padding: 12px 20px; transition: background .1s; }
-    .msg:hover { background: var(--surface2); }
-
-    .msg-avatar-img {
-      width: 36px; height: 36px; border-radius: 50%;
-      object-fit: cover; flex-shrink: 0; margin-top: 2px;
-    }
-    .msg-avatar-ph {
-      width: 36px; height: 36px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--accent), #818cf8);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 13px; font-weight: 700; color: #fff;
-      flex-shrink: 0; margin-top: 2px;
-      text-transform: uppercase;
-    }
-
-    .msg-body { flex: 1; min-width: 0; }
-    .msg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-    .msg-author { font-size: 14px; font-weight: 600; }
-    .msg-author.is-bot { color: var(--accent); }
-    .msg-time { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
-    .msg-text { font-size: 14px; line-height: 1.55; color: #c7cade; white-space: pre-wrap; word-break: break-word; }
-    .msg-attachments { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
-    .att-link { color: #818cf8; font-size: .82rem; text-decoration: none; }
-    .att-link:hover { color: var(--accent); text-decoration: underline; }
-
-    .bot-tag { display: inline-block; background: var(--accent); color: white; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; letter-spacing: .04em; vertical-align: middle; margin-left: 2px; }
-
-    .mono { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
-    .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); font-size: 14px; }
-
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css">
 </head>
-<body>
+<body class="detail-page">
 
 <!-- Topbar -->
-<div class="topbar">
+<div class="topbar topbar-detail">
   <a href="/dashboard/tickets?server_id={{ server_id }}" class="back-link">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
       <path d="M15 18l-6-6 6-6"/>
@@ -155,19 +36,19 @@
   </div>
 </div>
 
-<!-- Layout -->
-<div class="layout">
+<!-- Detail layout -->
+<div class="detail-layout">
 
-  <!-- LEFT: content -->
-  <div>
+  <!-- LEFT -->
+  <div class="detail-main">
 
-    <!-- Ticket header -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-body">
-        <div class="ticket-title">
+    <!-- Header card -->
+    <div class="detail-card">
+      <div class="detail-card-body">
+        <h1 class="detail-title">
           {{ ticket.get('title') or ticket.get('topic') or ('Ticket #' ~ (ticket.get('ticket_id') or ticket.get('id'))) }}
-        </div>
-        <div class="ticket-meta">
+        </h1>
+        <div class="detail-meta">
           {% set st = ticket.get('status','?') %}
           {% if st == 'open' %}
             <span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
@@ -180,7 +61,7 @@
             <span class="module-chip">{{ ticket.module }}</span>
           {% endif %}
           {% if ticket.get('created_at') %}
-            <span class="mono" style="margin-left:auto;">Erstellt {{ ticket.created_at[:10] }}</span>
+            <span class="detail-meta-date">Erstellt {{ ticket.created_at[:10] }}</span>
           {% endif %}
         </div>
         {% if ticket.get('description') %}
@@ -189,25 +70,24 @@
       </div>
     </div>
 
-    <!-- Messages -->
-    <div class="card">
-      <div class="card-header">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+    <!-- Messages card -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
         </svg>
-        <span class="card-title">Verlauf</span>
-        <span class="mono" style="margin-left:auto;">{{ messages|length }} Nachricht{{ 'en' if messages|length != 1 else '' }}</span>
+        <span class="detail-card-title">Verlauf</span>
+        <span class="detail-card-count">{{ messages|length }} Nachricht{{ 'en' if messages|length != 1 else '' }}</span>
       </div>
 
       {% if messages %}
-        <div class="messages">
+        <div class="msg-list">
           {% for msg in messages %}
-          <div class="msg">
-            {# resolve author fields #}
+          <div class="msg-row">
             {% set author = msg.get('author') or {} %}
-            {% set uid  = author.get('_uid') or author.get('id','') %}
-            {% set av   = author.get('avatar') %}
-            {% set name = author.get('global_name') or author.get('username') or 'Unbekannt' %}
+            {% set uid    = author.get('_uid') or author.get('id','') %}
+            {% set av     = author.get('avatar') %}
+            {% set name   = author.get('global_name') or author.get('username') or 'Unbekannt' %}
 
             {% if av and uid %}
               <img class="msg-avatar-img" src="https://cdn.discordapp.com/avatars/{{ uid }}/{{ av }}.png?size=64" alt="{{ name }}">
@@ -217,7 +97,7 @@
 
             <div class="msg-body">
               <div class="msg-header">
-                <span class="msg-author{{ ' is-bot' if author.get('bot') else '' }}">{{ name }}</span>
+                <span class="msg-author {{ 'is-bot' if author.get('bot') else '' }}">{{ name }}</span>
                 {% if author.get('bot') %}<span class="bot-tag">BOT</span>{% endif %}
                 {% if msg.get('timestamp') %}
                   <span class="msg-time">{{ msg.timestamp[:16].replace('T',' ') }}</span>
@@ -226,7 +106,7 @@
               <div class="msg-text">{{ msg.get('content') or '' }}</div>
               {% set atts = msg.get('attachments') or [] %}
               {% if atts %}
-                <div class="msg-attachments">
+                <div class="att-list">
                   {% for att in atts %}
                     <a class="att-link" href="{{ att }}" target="_blank" rel="noopener">
                       📎 {{ att.split('/')[-1].split('?')[0] }}
@@ -243,82 +123,85 @@
       {% endif %}
     </div>
 
-  </div><!-- /left -->
+  </div><!-- /detail-main -->
 
-  <!-- RIGHT: details sidebar -->
-  <div>
-    <div class="card">
-      <div class="card-header">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2">
+  <!-- RIGHT sidebar -->
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span class="card-title">Details</span>
+        <span class="detail-card-title">Details</span>
       </div>
-      <div class="card-body" style="padding:0 20px;">
-        <div class="info-grid">
+      <div class="info-rows">
 
-          <div class="info-row">
-            <div class="info-label">Ticket-ID</div>
-            <div class="info-value mono">#{{ ticket.get('ticket_id') or ticket.get('id') }}</div>
-          </div>
-
-          <div class="info-row">
-            <div class="info-label">Status</div>
-            <div class="info-value">
-              {% set st = ticket.get('status','?') %}
-              {% if st == 'open' %}<span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
-              {% elif st == 'closed' %}<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>
-              {% else %}<span class="badge badge-pending"><span class="badge-dot"></span>{{ st }}</span>{% endif %}
-            </div>
-          </div>
-
-          {% if ticket.get('module') %}
-          <div class="info-row">
-            <div class="info-label">Modul</div>
-            <div class="info-value"><span class="module-chip">{{ ticket.module }}</span></div>
-          </div>
-          {% endif %}
-
-          <div class="info-row">
-            <div class="info-label">Erstellt von</div>
-            <div class="info-value">
-              <div class="user-inline">
-                {% if ticket.get('creator_avatar') %}
-                  <img class="avatar-sm" src="{{ ticket.creator_avatar }}" alt="">
-                {% else %}
-                  <div class="avatar-ph">{{ (ticket.get('creator_display','?'))[:2].upper() }}</div>
-                {% endif %}
-                <span>{{ ticket.get('creator_display','Unbekannt') }}</span>
-              </div>
-            </div>
-          </div>
-
-          {% if ticket.get('claimed_by_display') %}
-          <div class="info-row">
-            <div class="info-label">Bearbeiter</div>
-            <div class="info-value">{{ ticket.claimed_by_display }}</div>
-          </div>
-          {% endif %}
-
-          {% if ticket.get('created_at') %}
-          <div class="info-row">
-            <div class="info-label">Erstellt am</div>
-            <div class="info-value mono">{{ ticket.created_at[:16].replace('T',' ') }}</div>
-          </div>
-          {% endif %}
-
-          {% if ticket.get('closed_at') %}
-          <div class="info-row">
-            <div class="info-label">Geschlossen</div>
-            <div class="info-value mono">{{ ticket.closed_at[:16].replace('T',' ') }}</div>
-          </div>
-          {% endif %}
-
+        <div class="info-row">
+          <div class="info-row-label">Ticket-ID</div>
+          <div class="info-row-value mono">#{{ ticket.get('ticket_id') or ticket.get('id') }}</div>
         </div>
+
+        <div class="info-row">
+          <div class="info-row-label">Status</div>
+          <div class="info-row-value">
+            {% set st = ticket.get('status','?') %}
+            {% if st == 'open' %}<span class="badge badge-open"><span class="badge-dot"></span>Offen</span>
+            {% elif st == 'closed' %}<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>
+            {% else %}<span class="badge badge-pending"><span class="badge-dot"></span>{{ st }}</span>{% endif %}
+          </div>
+        </div>
+
+        {% if ticket.get('module') %}
+        <div class="info-row">
+          <div class="info-row-label">Modul</div>
+          <div class="info-row-value"><span class="module-chip">{{ ticket.module }}</span></div>
+        </div>
+        {% endif %}
+
+        <div class="info-row">
+          <div class="info-row-label">Erstellt von</div>
+          <div class="info-row-value">
+            <div class="user-inline">
+              {% if ticket.get('creator_avatar') %}
+                <img class="avatar-xs" src="{{ ticket.creator_avatar }}" alt="">
+              {% else %}
+                <div class="avatar-xs-ph">{{ (ticket.get('creator_display','?'))[:2].upper() }}</div>
+              {% endif %}
+              <span>{{ ticket.get('creator_display','Unbekannt') }}</span>
+            </div>
+          </div>
+        </div>
+
+        {% if ticket.get('claimed_by_display') %}
+        <div class="info-row">
+          <div class="info-row-label">Bearbeiter</div>
+          <div class="info-row-value">{{ ticket.claimed_by_display }}</div>
+        </div>
+        {% endif %}
+
+        {% if ticket.get('created_at') %}
+        <div class="info-row">
+          <div class="info-row-label">Erstellt am</div>
+          <div class="info-row-value mono">{{ ticket.created_at[:16].replace('T',' ') }}</div>
+        </div>
+        {% endif %}
+
+        {% if ticket.get('closed_at') %}
+        <div class="info-row">
+          <div class="info-row-label">Geschlossen</div>
+          <div class="info-row-value mono">{{ ticket.closed_at[:16].replace('T',' ') }}</div>
+        </div>
+        {% endif %}
+
+        <div class="info-row">
+          <div class="info-row-label">Nachrichten</div>
+          <div class="info-row-value mono">{{ messages|length }}</div>
+        </div>
+
       </div>
     </div>
-  </div><!-- /right -->
+  </div>
 
-</div><!-- /layout -->
+</div><!-- /detail-layout -->
 </body>
 </html>
