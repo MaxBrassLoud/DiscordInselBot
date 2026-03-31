@@ -36,6 +36,7 @@ FEATURE_COGS = [
     "bot.features.applications.cog",
     "bot.features.web.cog",
     "bot.features.minecraft_names.cog",
+    "bot.features.voice.cog",
 ]
 
 
