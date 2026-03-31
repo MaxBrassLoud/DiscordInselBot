@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Insel Bot – Der Discord-Bot für deinen Minecraft-Clan</title>
+  <meta name="description" content="Tickets, Bewerbungen, Events, Spieleabende und mehr – alles für den Insel-Clan.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="home-body">
+
+<div class="page-bg">
+  <div class="bg-grid"></div>
+  <div class="bg-radial"></div>
+</div>
+
+<!-- Nav -->
+<nav class="home-nav">
+  <a href="{{ url_for('index') }}" class="nav-logo">
+    <div class="nav-logo-mark">
+      <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+        <rect width="34" height="34" rx="9" fill="#4ade80"/>
+        <path d="M10 22c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="13" cy="13" r="1.8" fill="#000"/>
+        <circle cx="21" cy="13" r="1.8" fill="#000"/>
+      </svg>
+    </div>
+    Insel <span class="g">Bot</span>
+  </a>
+  <div class="nav-links">
+    <a href="#features" class="nav-link">Features</a>
+    <a href="#dashboard" class="nav-link">Dashboard</a>
+    {% if user %}
+      <a href="{{ url_for('dashboard') }}" class="nav-cta">Dashboard öffnen →</a>
+    {% else %}
+      <a href="{{ url_for('login') }}" class="nav-cta">Anmelden →</a>
+    {% endif %}
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-badge">
+    <span class="dot"></span>
+    Insel Clan · Discord Bot
+  </div>
+
+  <h1 class="hero-title">
+    Der Bot für<br>
+    die <span class="accent">Insel</span>
+  </h1>
+
+  <p class="hero-sub">
+    Bewerbungen, Tickets, Events, Spieleabende – alles in einem Bot.
+    Mit vollem Web-Dashboard, rollenbasiertem Zugriff und
+    Minecraft-Name-Tracking.
+  </p>
+
+  <div class="hero-actions">
+    {% if user %}
+      <a href="{{ url_for('dashboard') }}" class="btn-primary">
+        Dashboard öffnen →
+      </a>
+    {% else %}
+      <a href="{{ url_for('login') }}" class="btn-primary">
+        Mit Discord anmelden →
+      </a>
+    {% endif %}
+    <a href="#features" class="btn-outline">Features ansehen</a>
+  </div>
+</section>
+
+<!-- Stats -->
+<div class="stats-row">
+  <div class="stat-item">
+    <div class="stat-num">9+</div>
+    <div class="stat-label">Module</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">24/7</div>
+    <div class="stat-label">Online</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">∞</div>
+    <div class="stat-label">Tickets</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-num">100%</div>
+    <div class="stat-label">Kostenlos</div>
+  </div>
+</div>
+
+<!-- Features -->
+<section class="section" id="features">
+  <div class="section-eyebrow">Was der Bot kann</div>
+  <h2 class="section-title">Alle Features im Überblick</h2>
+  <p class="section-sub">
+    Vom Bewerbungs-Prozess bis zum Spieleabend –
+    der Insel Bot deckt alles ab was euer Clan braucht.
+  </p>
+
+  <div class="features-grid">
+
+    <div class="feature-card">
+      <div class="feature-icon">📋</div>
+      <div class="feature-name">Bewerbungssystem</div>
+      <div class="feature-desc">
+        Neue Spieler bewerben sich mit ihrem Minecraft-Namen direkt auf Discord.
+        Staff kann mit einem Klick annehmen oder ablehnen – mit automatischer
+        DM, HTML-Log und einstellbarem Cooldown.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🎫</div>
+      <div class="feature-name">Ticket-System</div>
+      <div class="feature-desc">
+        Modulares Ticket-System mit mehreren Kategorien, eigenen Staff-Rollen
+        pro Modul, Claiming, Benutzer-Hinzufügen und automatischem
+        Gesprächs-Log per DM.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">⛏️</div>
+      <div class="feature-name">Minecraft-Namen</div>
+      <div class="feature-desc">
+        Mitglieder registrieren ihren Minecraft-Namen. Der Bot setzt automatisch
+        den Discord-Nickname und aktualisiert einen dedizierten Log-Kanal mit
+        Skin-Preview.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🎮</div>
+      <div class="feature-name">Spieleabende</div>
+      <div class="feature-desc">
+        Erstelle Spieleabende mit Titel, Uhrzeit und Beschreibung. Mitglieder
+        können mit „Dabei", „Vielleicht" oder „Keine Zeit" antworten –
+        mit automatischen Erinnerungen.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">📅</div>
+      <div class="feature-name">Event-System</div>
+      <div class="feature-desc">
+        Plane Server-Events mit Live-Status (geplant · live · verschoben ·
+        beendet). Follower erhalten Erinnerungen, alles läuft vollautomatisch.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🖥️</div>
+      <div class="feature-name">Web-Dashboard</div>
+      <div class="feature-desc">
+        Vollständiges Dashboard mit Discord-OAuth2-Login. Einsicht in Tickets
+        und Bewerbungen mit rollenbasiertem Zugriff – auch auf dem Handy.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">📷</div>
+      <div class="feature-name">Medien-Weiterleitung</div>
+      <div class="feature-desc">
+        Bilder, Videos, YouTube- und Twitch-Links werden automatisch in einen
+        Medienkanal weitergeleitet. Jede Funktion einzeln an- oder abschaltbar.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🏷️</div>
+      <div class="feature-name">Selbst-Rollenvergabe</div>
+      <div class="feature-desc">
+        Konfigurierbare Rollen-Module mit Buttons. Mitglieder holen sich
+        Rollen selbst – ohne Admin-Aufwand.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">👋</div>
+      <div class="feature-name">Willkommens-Nachrichten</div>
+      <div class="feature-desc">
+        Begrüßt neue Mitglieder mit zufälligen personalisierten Nachrichten
+        und verabschiedet austretende Mitglieder – kanalbasiert konfigurierbar.
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section" id="dashboard">
+  <div class="cta-card">
+    <div class="cta-emoji">🏝️</div>
+    <h2 class="cta-title">Dashboard öffnen</h2>
+    <p class="cta-sub">
+      Melde dich mit deinem Discord-Account an.
+      Nur autorisierte Mitglieder der Insel erhalten Zugang.
+    </p>
+    {% if user %}
+      <a href="{{ url_for('dashboard') }}" class="btn-primary">
+        Dashboard öffnen →
+      </a>
+    {% else %}
+      <a href="{{ url_for('login') }}" class="btn-primary">
+        Mit Discord anmelden →
+      </a>
+    {% endif %}
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="home-footer">
+  <div class="footer-brand">Insel <span>Bot</span></div>
+  <div class="footer-note">Discord Bot · Supabase · Flask · Python</div>
+</footer>
+
+</body>
+</html>

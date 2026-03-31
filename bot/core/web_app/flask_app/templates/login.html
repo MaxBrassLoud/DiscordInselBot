@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login – Insel Bot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="login-body">
+
+<div class="page-bg">
+  <div class="bg-grid"></div>
+  <div class="bg-radial"></div>
+</div>
+
+<div class="login-card">
+  <div class="login-icon">🏝️</div>
+  <h1 class="login-title">Insel <span class="g">Bot</span></h1>
+  <p class="login-sub">Dashboard · Nur für autorisierte Mitglieder</p>
+
+  {% if error %}
+    <div class="login-error">{{ error }}</div>
+  {% endif %}
+
+  {% if oauth_url %}
+    <a href="{{ oauth_url }}" class="discord-btn">
+      <svg width="20" height="15" viewBox="0 0 71 55" fill="#fff" xmlns="http://www.w3.org/2000/svg">
+        <path d="M60.1 4.9A58.6 58.6 0 0 0 45.6 0a40 40 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40 40 0 0 0 25.7 0 58.3 58.3 0 0 0 11 4.9C1.6 18.3-.9 31.3.3 44.1a58.9 58.9 0 0 0 18 9.1 44 44 0 0 0 3.8-6.2 38.4 38.4 0 0 1-6-2.9l1.5-1.1a42.2 42.2 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 18-9.1c1.5-15.3-2.6-28.2-10.8-39.1ZM23.7 36.1c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.2 6.4-7.2 6.5 3.2 6.4 7.2c0 3.9-2.8 7.1-6.4 7.1Zm23.6 0c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.2 6.4-7.2 6.5 3.2 6.4 7.2c0 3.9-2.8 7.1-6.4 7.1Z"/>
+      </svg>
+      Mit Discord anmelden
+    </a>
+  {% else %}
+    <div class="login-error">⚠️ Konfigurationsfehler – bitte Admin kontaktieren.</div>
+  {% endif %}
+
+  <div class="login-note">
+    <span class="dot"></span>
+    Nur autorisierte Servermitglieder erhalten Zugang
+  </div>
+
+  <a href="{{ url_for('index') }}" class="back-home">← Zurück zur Startseite</a>
+</div>
+
+</body>
+</html>

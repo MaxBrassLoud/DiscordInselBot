@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bewerbung #{{ app_id }} – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="detail-body">
+
+<!-- Topbar -->
+<div class="detail-topbar">
+  <a href="/dashboard/applications?server_id={{ server_id }}" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+    Bewerbungen
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">Bewerbung #{{ app_id }}</span>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;" id="topbarBadges"></div>
+</div>
+
+<!-- Skeleton -->
+<div id="skeleton" class="detail-layout">
+  <div class="detail-main">
+    <div class="detail-card">
+      <div class="applicant-hero">
+        <div class="sk" style="width:50px;height:50px;border-radius:50%;flex-shrink:0;"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+          <div class="sk" style="width:50%;height:18px;"></div>
+          <div class="sk" style="width:70%;height:12px;"></div>
+        </div>
+      </div>
+      <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+        <div class="sk" style="height:12px;width:30%;"></div>
+        <div class="sk" style="height:60px;"></div>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-card-header"><span class="detail-card-title">Verlauf</span></div>
+      {% for _ in range(3) %}
+      <div style="display:flex;gap:12px;padding:12px 18px;">
+        <div class="sk" style="width:32px;height:32px;border-radius:50%;flex-shrink:0;"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+          <div class="sk" style="width:30%;height:12px;"></div>
+          <div class="sk" style="width:75%;height:12px;"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header"><span class="detail-card-title">Details</span></div>
+      {% for _ in range(5) %}
+      <div class="info-row">
+        <div class="sk info-row-label" style="height:12px;width:70px;"></div>
+        <div class="sk" style="height:12px;width:100px;"></div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Real content -->
+<div id="realContent" style="display:none;" class="detail-layout">
+  <div class="detail-main">
+    <!-- Applicant hero card -->
+    <div class="detail-card">
+      <div class="applicant-hero">
+        <div class="applicant-avatar-ph" id="creatorAvatar">?</div>
+        <div class="applicant-info">
+          <div class="applicant-name" id="creatorName">—</div>
+          <div class="applicant-meta" id="creatorMeta"></div>
+        </div>
+      </div>
+
+      <div id="rejectionBox" style="display:none;" class="rejection-box">
+        <div class="rejection-label">❌ Ablehnungsgrund</div>
+        <div class="rejection-text" id="rejectionText"></div>
+      </div>
+
+      <div class="qa-list" id="qaList">
+        <div style="padding:20px; color:var(--text3); text-align:center;">Lade Inhalt…</div>
+      </div>
+    </div>
+
+    <!-- Messages -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        <span class="detail-card-title">Kanal-Verlauf</span>
+        <span class="detail-card-count" id="msgCount">—</span>
+      </div>
+      <div class="msg-list" id="msgList"></div>
+    </div>
+  </div>
+
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="detail-card-title">Details</span>
+      </div>
+      <div class="info-rows" id="infoRows"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+.sk {
+  background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
+  background-size:400px 100%;
+  animation:shimmer 1.4s ease infinite;
+  border-radius:4px;
+}
+</style>
+
+<script>
+const APP_ID    = {{ app_id | tojson }};
+const SERVER_ID = {{ server_id | tojson }};
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function statusBadge(st) {
+  const map = {
+    pending:  '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    open:     '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    accepted: '<span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>',
+    rejected: '<span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>',
+  };
+  return map[st] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(st)}</span>`;
+}
+
+function infoRow(label, value) {
+  return `<div class="info-row">
+    <div class="info-row-label">${label}</div>
+    <div class="info-row-value">${value}</div>
+  </div>`;
+}
+
+async function load() {
+  try {
+    const res = await fetch(`/api/applications/${APP_ID}?server_id=${SERVER_ID}`);
+    if (res.status === 403) { window.location.href = '/dashboard'; return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { app, messages } = await res.json();
+
+    document.getElementById('skeleton').style.display    = 'none';
+    document.getElementById('realContent').style.display = 'grid';
+
+    // Topbar badges
+    document.getElementById('topbarBadges').innerHTML =
+      statusBadge(app.status) +
+      (app.minecraft_name ? `<span class="module-chip">⛏ ${escHtml(app.minecraft_name)}</span>` : '');
+
+    // Applicant hero
+    const initials = (app.creator_name||'?').slice(0,1).toUpperCase();
+    document.getElementById('creatorAvatar').textContent = initials;
+    document.getElementById('creatorAvatar').id = `creatorAvatar-${app.creator_id}`;
+    document.getElementById('creatorName').textContent = app.creator_name;
+    document.getElementById('creatorMeta').innerHTML =
+      `Bewerbung #${app.app_id}` +
+      (app.minecraft_name ? ` &nbsp;·&nbsp; ⛏ ${escHtml(app.minecraft_name)}` : '') +
+      (app.created_at ? ` &nbsp;·&nbsp; ${app.created_at}` : '');
+
+    // Rejection
+    if (app.rejection_reason) {
+      document.getElementById('rejectionText').textContent = app.rejection_reason;
+      document.getElementById('rejectionBox').style.display = '';
+    }
+
+    // Q&A / content
+    let qaHtml = '';
+    if (app.answers && app.answers.length > 0) {
+      qaHtml = app.answers.map((qa, i) => `
+        <div class="qa-item">
+          <div class="qa-question">${escHtml(qa.question || `Frage ${i+1}`)}</div>
+          <div class="qa-answer">${escHtml(qa.answer || '—')}</div>
+        </div>`).join('');
+    } else if (app.content) {
+      qaHtml = `<div class="qa-item">
+        <div class="qa-question">Bewerbungstext</div>
+        <div class="qa-answer">${escHtml(app.content)}</div>
+      </div>`;
+    } else {
+      qaHtml = '<div style="color:var(--text3);text-align:center;padding:16px;">Kein Inhalt.</div>';
+    }
+    document.getElementById('qaList').innerHTML = qaHtml;
+
+    // Sidebar
+    document.getElementById('infoRows').innerHTML = [
+      infoRow('ID', `<span class="mono">#${app.app_id}</span>`),
+      infoRow('Status', statusBadge(app.status)),
+      app.minecraft_name ? infoRow('Minecraft', `<span class="mono-green">⛏ ${escHtml(app.minecraft_name)}</span>`) : '',
+      infoRow('Bewerber',
+        `<div class="user-inline">
+          <div class="avatar-xs-ph" id="sidebarAv-${app.creator_id}">${initials}</div>
+          <span id="sidebarName-${app.creator_id}">${escHtml(app.creator_name)}</span>
+        </div>`),
+      app.claimed_by ? infoRow('Bearbeiter', `<span class="mono">${escHtml(app.claimed_by)}</span>`) : '',
+      app.created_at ? infoRow('Eingereicht', `<span class="mono">${app.created_at}</span>`) : '',
+      app.closed_at  ? infoRow('Entschieden', `<span class="mono">${app.closed_at}</span>`) : '',
+      infoRow('Nachrichten', `<span class="mono">${messages.length}</span>`),
+    ].filter(Boolean).join('');
+
+    // Messages
+    document.getElementById('msgCount').textContent =
+      `${messages.length} Nachricht${messages.length !== 1 ? 'en' : ''}`;
+
+    if (messages.length === 0) {
+      document.getElementById('msgList').innerHTML =
+        '<div class="empty-state"><div class="empty-icon">💬</div><p>Noch keine Nachrichten aufgezeichnet.</p></div>';
+    } else {
+      document.getElementById('msgList').innerHTML = messages.map(msg => {
+        const initials2 = (msg.user_name||'?').slice(0,2).toUpperCase();
+        const atts = (msg.attachments||[]).map(url =>
+          `<a class="att-link" href="${escHtml(url)}" target="_blank" rel="noopener">📎 ${escHtml(url.split('/').pop().split('?')[0]||'Anhang')}</a>`
+        ).join('');
+        return `<div class="msg-row">
+          <div class="msg-avatar-ph" id="msgav-${msg.user_id}">${initials2}</div>
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-author" id="msgname-${msg.user_id}">${escHtml(msg.user_name)}</span>
+              ${msg.timestamp ? `<span class="msg-time">${escHtml(msg.timestamp)}</span>` : ''}
+            </div>
+            ${msg.content ? `<div class="msg-text">${escHtml(msg.content)}</div>` : ''}
+            ${atts ? `<div class="att-list">${atts}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Lazy enrich all member avatars + names
+    const toEnrich = new Set([
+      app.creator_id,
+      ...messages.map(m => m.user_id),
+    ].filter(Boolean));
+    toEnrich.forEach(uid => enrichMember(uid, app.creator_id));
+
+  } catch(e) {
+    document.getElementById('skeleton').style.display = 'none';
+    document.getElementById('realContent').style.display = 'grid';
+    document.getElementById('qaList').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+const _fetched = {};
+
+async function enrichMember(uid, creatorId) {
+  if (_fetched[uid]) return;
+  _fetched[uid] = true;
+  try {
+    const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
+    const data = await res.json();
+    if (data.name) {
+      document.querySelectorAll(`#msgname-${uid}, #sidebarName-${uid}`)
+        .forEach(el => el.textContent = data.name);
+      if (uid === creatorId) {
+        document.getElementById('creatorName').textContent = data.name;
+      }
+    }
+    if (data.avatar) {
+      document.querySelectorAll(`#msgav-${uid}`)
+        .forEach(el => el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="">`);
+      const sav = document.getElementById(`sidebarAv-${uid}`);
+      if (sav) sav.outerHTML = `<img class="avatar-xs" src="${escHtml(data.avatar)}" alt="">`;
+      if (uid === creatorId) {
+        const cav = document.getElementById(`creatorAvatar-${uid}`);
+        if (cav) cav.outerHTML = `<img class="applicant-avatar" src="${escHtml(data.avatar)}" alt="">`;
+      }
+    }
+  } catch(_) {}
+}
+
+load();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="dash-body">
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-logo">
+      <svg width="18" height="18" viewBox="0 0 34 34" fill="none">
+        <path d="M7 21c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="11" cy="11" r="2" fill="#000"/>
+        <circle cx="23" cy="11" r="2" fill="#000"/>
+      </svg>
+    </div>
+    <div class="brand-name">Insel <span class="g">Bot</span></div>
+    <div class="online-badge"><span class="dot"></span></div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <span class="nav-section-lbl">Navigation</span>
+    <a href="/dashboard/tickets{% if server_id %}?server_id={{ server_id }}{% endif %}"
+       class="nav-item {% if active_tab == 'tickets' %}active{% endif %}">
+      <span class="nav-icon">🎫</span> Tickets
+    </a>
+    <a href="/dashboard/applications{% if server_id %}?server_id={{ server_id }}{% endif %}"
+       class="nav-item {% if active_tab == 'applications' %}active{% endif %}">
+      <span class="nav-icon">📋</span> Bewerbungen
+    </a>
+    <a href="/" class="nav-item">
+      <span class="nav-icon">🏝️</span> Startseite
+    </a>
+
+    <span class="nav-section-lbl">Server</span>
+    <div class="server-list" id="serverList">
+      <div class="nav-skeleton" style="height:32px; margin:4px 0;"></div>
+    </div>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="user-chip">
+      <img src="{{ user.avatar }}" alt="{{ user.username }}">
+      <div class="user-chip-info">
+        <div class="chip-name">{{ user.display_name or user.username }}</div>
+        <div class="chip-tag">@{{ user.username }}</div>
+      </div>
+      <a href="/logout" class="logout-btn" title="Abmelden">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+        </svg>
+      </a>
+    </div>
+  </div>
+</aside>
+
+<!-- ── Main ── -->
+<div class="main-wrap">
+
+  <div class="topbar">
+    <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menü">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <div class="topbar-left">
+      <div class="topbar-title" id="topbarTitle">Dashboard</div>
+      <div class="topbar-sub" id="topbarSub" style="display:none">Wähle einen Server</div>
+    </div>
+    <div class="tabs">
+      <a href="/dashboard/tickets{% if server_id %}?server_id={{ server_id }}{% endif %}"
+         class="tab {% if active_tab == 'tickets' %}active{% endif %}">🎫 Tickets</a>
+      <a href="/dashboard/applications{% if server_id %}?server_id={{ server_id }}{% endif %}"
+         class="tab {% if active_tab == 'applications' %}active{% endif %}">📋 Bewerbungen</a>
+    </div>
+  </div>
+
+  <div class="content" id="mainContent">
+    <!-- Loading skeleton -->
+    <div id="skeleton">
+      <div class="filter-bar">
+        <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
+        <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
+        <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
+      </div>
+      <div class="table-wrap">
+        {% for _ in range(6) %}
+        <div style="display:flex; gap:16px; padding:12px 14px; border-bottom:1px solid var(--border);">
+          <div class="nav-skeleton" style="width:40px; height:16px; border-radius:4px;"></div>
+          <div class="nav-skeleton" style="flex:1; height:16px; border-radius:4px;"></div>
+          <div class="nav-skeleton" style="width:100px; height:16px; border-radius:4px;"></div>
+          <div class="nav-skeleton" style="width:80px; height:16px; border-radius:4px;"></div>
+          <div class="nav-skeleton" style="width:60px; height:16px; border-radius:4px;"></div>
+          <div class="nav-skeleton" style="width:80px; height:16px; border-radius:4px;"></div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Real content injected here -->
+    <div id="realContent" style="display:none;"></div>
+  </div>
+
+</div>
+
+<style>
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.nav-skeleton {
+  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-hover) 50%, var(--bg-surface) 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 4px;
+}
+</style>
+
+<script>
+const SERVER_ID  = {{ server_id | tojson }};
+const ACTIVE_TAB = {{ active_tab | tojson }};
+
+// ── Sidebar server list ────────────────────────────────────────
+
+async function loadServers() {
+  try {
+    const res  = await fetch('/api/guild');
+    const data = await res.json();
+    const servers = ACTIVE_TAB === 'tickets' ? data.ticket_servers : data.app_servers;
+    const list    = document.getElementById('serverList');
+    if (!servers || servers.length === 0) {
+      list.innerHTML = '<span style="font-size:.78rem;color:var(--text3);padding:6px 10px;display:block;">Keine Server</span>';
+      return;
+    }
+    list.innerHTML = servers.map(srv => {
+      const active  = srv.server_id === SERVER_ID ? 'active' : '';
+      const baseUrl = ACTIVE_TAB === 'tickets' ? '/dashboard/tickets' : '/dashboard/applications';
+      const icon    = srv.guild_icon
+        ? `<img class="server-icon" src="${srv.guild_icon}" alt="">`
+        : `<div class="server-icon-ph">${srv.guild_name.slice(0,2).toUpperCase()}</div>`;
+      return `<a class="server-item ${active}" href="${baseUrl}?server_id=${srv.server_id}">
+        ${icon}<span class="server-name">${escHtml(srv.guild_name)}</span></a>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('serverList').innerHTML =
+      '<span style="font-size:.78rem;color:var(--red);padding:6px 10px;display:block;">Fehler beim Laden</span>';
+  }
+}
+
+// ── Main content ───────────────────────────────────────────────
+
+async function loadContent() {
+  if (!SERVER_ID) {
+    showNoServer();
+    return;
+  }
+
+  const params  = new URLSearchParams(window.location.search);
+  const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets' : '/api/applications';
+  const url     = `${apiBase}?${params.toString()}`;
+
+  try {
+    const res  = await fetch(url);
+    if (!res.ok) { showError(`HTTP ${res.status}`); return; }
+    const data = await res.json();
+
+    if (ACTIVE_TAB === 'tickets') {
+      renderTickets(data.tickets || [], data.modules || [], params);
+    } else {
+      renderApplications(data.applications || [], params);
+    }
+
+    // Update topbar title via guild API
+    updateTopbar();
+
+  } catch(e) {
+    showError('Netzwerkfehler: ' + e.message);
+  }
+}
+
+async function updateTopbar() {
+  try {
+    const res  = await fetch('/api/guild');
+    const data = await res.json();
+    const list = ACTIVE_TAB === 'tickets' ? data.ticket_servers : data.app_servers;
+    const srv  = list?.find(s => s.server_id === SERVER_ID);
+    if (srv) {
+      const icon = srv.guild_icon ? `<img class="topbar-guild-icon" src="${srv.guild_icon}" alt="">` : '';
+      document.getElementById('topbarTitle').innerHTML = `${icon}${escHtml(srv.guild_name)}`;
+    }
+  } catch(_) {}
+}
+
+// ── Ticket rendering ───────────────────────────────────────────
+
+function renderTickets(tickets, modules, params) {
+  showSkeleton(false);
+
+  const statusF = params.get('status') || '';
+  const moduleF = params.get('module') || '';
+  const sortF   = params.get('sort')   || 'newest';
+
+  const moduleOpts = modules.map(m =>
+    `<option value="${escHtml(m)}" ${moduleF===m?'selected':''}>${escHtml(m)}</option>`).join('');
+
+  const filterBar = `
+    <div class="filter-bar">
+      <form class="filter-form" id="filterForm">
+        <input type="hidden" name="server_id" value="${escHtml(SERVER_ID)}">
+        <select class="filter-select" name="status" onchange="submitFilter()">
+          <option value="">Alle Status</option>
+          <option value="open"   ${statusF==='open'?'selected':''}>Offen</option>
+          <option value="closed" ${statusF==='closed'?'selected':''}>Geschlossen</option>
+        </select>
+        ${modules.length ? `<select class="filter-select" name="module" onchange="submitFilter()">
+          <option value="">Alle Module</option>${moduleOpts}</select>` : ''}
+        <select class="filter-select" name="sort" onchange="submitFilter()">
+          <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
+          <option value="oldest" ${sortF==='oldest'?'selected':''}>Älteste zuerst</option>
+        </select>
+      </form>
+      <span class="filter-count">${tickets.length} Ticket${tickets.length!==1?'s':''}</span>
+    </div>`;
+
+  if (tickets.length === 0) {
+    inject(filterBar + `<div class="empty-state">
+      <div class="empty-icon">🎫</div>
+      <div class="empty-title">Keine Tickets gefunden</div>
+      <p>Mit den aktuellen Filtern gibt es keine Ergebnisse.</p></div>`);
+    return;
+  }
+
+  const rows = tickets.map(t => {
+    const badge  = statusBadge(t.status);
+    const module = t.module ? `<span class="module-chip">${escHtml(t.module)}</span>` : '<span class="muted">—</span>';
+    const avatar = `<div class="avatar-ph" id="av-${t.creator_id}">${(t.creator_name||'?').slice(0,1)}</div>`;
+    return `<tr>
+      <td><span class="mono">#${t.ticket_id}</span></td>
+      <td><a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link">${escHtml(t.title)}</a></td>
+      <td><div class="creator-cell">${avatar}<span id="name-${t.creator_id}">${escHtml(t.creator_name)}</span></div></td>
+      <td>${module}</td>
+      <td>${badge}</td>
+      <td><span class="mono">${t.created_at||'—'}</span></td>
+    </tr>`;
+  }).join('');
+
+  inject(filterBar + `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>#</th><th>Titel</th><th>Erstellt von</th><th>Modul</th><th>Status</th><th>Datum</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`);
+
+  // Lazy-load avatars in background
+  const uniqueIds = [...new Set(tickets.map(t => t.creator_id).filter(Boolean))];
+  uniqueIds.forEach(uid => loadMemberLazy(uid));
+}
+
+// ── Application rendering ──────────────────────────────────────
+
+function renderApplications(apps, params) {
+  showSkeleton(false);
+
+  const statusF = params.get('status') || '';
+  const sortF   = params.get('sort')   || 'newest';
+
+  const filterBar = `
+    <div class="filter-bar">
+      <form class="filter-form" id="filterForm">
+        <input type="hidden" name="server_id" value="${escHtml(SERVER_ID)}">
+        <select class="filter-select" name="status" onchange="submitFilter()">
+          <option value="">Alle Status</option>
+          <option value="pending"  ${statusF==='pending'?'selected':''}>Ausstehend</option>
+          <option value="open"     ${statusF==='open'?'selected':''}>Offen</option>
+          <option value="accepted" ${statusF==='accepted'?'selected':''}>Angenommen</option>
+          <option value="rejected" ${statusF==='rejected'?'selected':''}>Abgelehnt</option>
+        </select>
+        <select class="filter-select" name="sort" onchange="submitFilter()">
+          <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
+          <option value="oldest" ${sortF==='oldest'?'selected':''}>Älteste zuerst</option>
+        </select>
+      </form>
+      <span class="filter-count">${apps.length} Bewerbung${apps.length!==1?'en':''}</span>
+    </div>`;
+
+  if (apps.length === 0) {
+    inject(filterBar + `<div class="empty-state">
+      <div class="empty-icon">📋</div>
+      <div class="empty-title">Keine Bewerbungen gefunden</div>
+      <p>Mit den aktuellen Filtern gibt es keine Ergebnisse.</p></div>`);
+    return;
+  }
+
+  const rows = apps.map(a => {
+    const badge = statusBadgeApp(a.status);
+    const mc    = a.minecraft_name ? `<span class="mono-green">⛏ ${escHtml(a.minecraft_name)}</span>` : '<span class="muted">—</span>';
+    const avatar = `<div class="avatar-ph" id="av-${a.creator_id}">${(a.creator_name||'?').slice(0,1)}</div>`;
+    return `<tr>
+      <td><span class="mono">#${a.app_id}</span></td>
+      <td><a href="/dashboard/applications/${a.app_id}?server_id=${SERVER_ID}" class="row-link">
+        <div class="creator-cell">${avatar}<span id="name-${a.creator_id}">${escHtml(a.creator_name)}</span></div>
+      </a></td>
+      <td>${mc}</td>
+      <td>${badge}</td>
+      <td><span class="mono">${a.created_at||'—'}</span></td>
+    </tr>`;
+  }).join('');
+
+  inject(filterBar + `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>#</th><th>Bewerber</th><th>Minecraft-Name</th><th>Status</th><th>Eingereicht</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`);
+
+  const uniqueIds = [...new Set(apps.map(a => a.creator_id).filter(Boolean))];
+  uniqueIds.forEach(uid => loadMemberLazy(uid));
+}
+
+// ── Lazy member enrichment ─────────────────────────────────────
+
+const _memberFetched = new Set();
+
+async function loadMemberLazy(uid) {
+  if (_memberFetched.has(uid)) return;
+  _memberFetched.add(uid);
+  try {
+    const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
+    const data = await res.json();
+    if (data.name) {
+      document.querySelectorAll(`#name-${uid}`).forEach(el => el.textContent = data.name);
+    }
+    if (data.avatar) {
+      document.querySelectorAll(`#av-${uid}`).forEach(el => {
+        el.outerHTML = `<img class="avatar-sm" src="${data.avatar}" alt="" id="av-${uid}">`;
+      });
+    }
+  } catch(_) {}
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+function statusBadge(status) {
+  const map = {
+    open:   '<span class="badge badge-open"><span class="badge-dot"></span>Offen</span>',
+    closed: '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
+  };
+  return map[status] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(status)}</span>`;
+}
+
+function statusBadgeApp(status) {
+  const map = {
+    pending:  '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    open:     '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    accepted: '<span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>',
+    rejected: '<span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>',
+  };
+  return map[status] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(status)}</span>`;
+}
+
+function escHtml(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showNoServer() {
+  showSkeleton(false);
+  inject(`<div class="no-server">
+    <div class="no-server-icon">🏝️</div>
+    <div><h2>Kein Server ausgewählt</h2><p>Wähle in der Sidebar einen Server.</p></div>
+  </div>`);
+}
+
+function showError(msg) {
+  showSkeleton(false);
+  inject(`<div class="empty-state">
+    <div class="empty-icon">⚠️</div>
+    <div class="empty-title">Fehler beim Laden</div>
+    <p>${escHtml(msg)}</p>
+  </div>`);
+}
+
+function showSkeleton(show) {
+  document.getElementById('skeleton').style.display    = show ? '' : 'none';
+  document.getElementById('realContent').style.display = show ? 'none' : '';
+}
+
+function inject(html) {
+  document.getElementById('realContent').innerHTML = html;
+}
+
+function submitFilter() {
+  const form = document.getElementById('filterForm');
+  if (form) {
+    const params = new URLSearchParams(new FormData(form));
+    window.location.href = `${window.location.pathname}?${params.toString()}`;
+  }
+}
+
+// ── Sidebar toggle ─────────────────────────────────────────────
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('active');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('active');
+}
+
+// ── Boot ───────────────────────────────────────────────────────
+
+loadServers();
+loadContent();
+</script>
+
+</body>
+</html>

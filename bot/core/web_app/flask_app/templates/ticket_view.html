@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ticket #{{ ticket_id }} – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="detail-body">
+
+<!-- Topbar -->
+<div class="detail-topbar">
+  <a href="/dashboard/tickets?server_id={{ server_id }}" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+    Tickets
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title" id="topbarTitle">Ticket #{{ ticket_id }}</span>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;" id="topbarBadges">
+    <!-- filled by JS -->
+  </div>
+</div>
+
+<!-- Skeleton -->
+<div id="skeleton" class="detail-layout">
+  <div class="detail-main">
+    <div class="detail-card">
+      <div class="detail-card-body">
+        <div class="sk" style="width:60%;height:22px;margin-bottom:14px;"></div>
+        <div class="sk" style="width:40%;height:14px;"></div>
+        <div class="sk" style="height:80px;margin-top:16px;"></div>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-card-header"><span class="detail-card-title">Verlauf</span></div>
+      {% for _ in range(4) %}
+      <div style="display:flex;gap:12px;padding:12px 18px;">
+        <div class="sk" style="width:32px;height:32px;border-radius:50%;flex-shrink:0;"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+          <div class="sk" style="width:30%;height:12px;"></div>
+          <div class="sk" style="width:80%;height:12px;"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header"><span class="detail-card-title">Details</span></div>
+      {% for _ in range(5) %}
+      <div class="info-row">
+        <div class="sk info-row-label" style="height:12px;width:70px;"></div>
+        <div class="sk" style="height:12px;width:100px;"></div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Real content -->
+<div id="realContent" style="display:none;" class="detail-layout">
+  <div class="detail-main">
+    <!-- Header card -->
+    <div class="detail-card">
+      <div class="detail-card-body">
+        <h1 class="detail-title" id="ticketTitle">Ticket #{{ ticket_id }}</h1>
+        <div class="detail-meta" id="ticketMeta"></div>
+        <div class="desc-box" id="ticketDesc" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- Messages -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        <span class="detail-card-title">Verlauf</span>
+        <span class="detail-card-count" id="msgCount">—</span>
+      </div>
+      <div class="msg-list" id="msgList">
+        <div class="empty-state"><div class="empty-icon">💬</div><p>Lade Verlauf…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-sidebar">
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="detail-card-title">Details</span>
+      </div>
+      <div class="info-rows" id="infoRows">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+.sk {
+  background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
+  background-size:400px 100%;
+  animation:shimmer 1.4s ease infinite;
+  border-radius:4px;
+}
+</style>
+
+<script>
+const TICKET_ID = {{ ticket_id | tojson }};
+const SERVER_ID = {{ server_id | tojson }};
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function statusBadge(st) {
+  const map = {
+    open:   '<span class="badge badge-open"><span class="badge-dot"></span>Offen</span>',
+    closed: '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
+  };
+  return map[st] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(st)}</span>`;
+}
+
+function infoRow(label, value) {
+  return `<div class="info-row">
+    <div class="info-row-label">${label}</div>
+    <div class="info-row-value">${value}</div>
+  </div>`;
+}
+
+async function load() {
+  try {
+    const res  = await fetch(`/api/tickets/${TICKET_ID}?server_id=${SERVER_ID}`);
+    if (res.status === 403) { window.location.href = '/dashboard'; return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { ticket, messages } = await res.json();
+
+    // Hide skeleton, show content
+    document.getElementById('skeleton').style.display    = 'none';
+    document.getElementById('realContent').style.display = 'grid';
+
+    // Topbar
+    document.getElementById('topbarTitle').textContent = `Ticket #${ticket.ticket_id}`;
+    document.getElementById('topbarBadges').innerHTML  =
+      statusBadge(ticket.status) +
+      (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '');
+
+    // Header
+    document.getElementById('ticketTitle').textContent = ticket.title;
+    document.getElementById('ticketMeta').innerHTML =
+      statusBadge(ticket.status) +
+      (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '') +
+      (ticket.created_at ? `<span class="detail-meta-date">${ticket.created_at}</span>` : '');
+
+    if (ticket.description) {
+      const d = document.getElementById('ticketDesc');
+      d.textContent = ticket.description;
+      d.style.display = '';
+    }
+
+    // Sidebar info rows
+    const rows = [
+      infoRow('Ticket-ID', `<span class="mono">#${ticket.ticket_id}</span>`),
+      infoRow('Status', statusBadge(ticket.status)),
+      ticket.module ? infoRow('Modul', `<span class="module-chip">${escHtml(ticket.module)}</span>`) : '',
+      infoRow('Erstellt von',
+        `<div class="user-inline">
+          <div class="avatar-xs-ph" id="creator-av">${(ticket.creator_name||'?').slice(0,1)}</div>
+          <span id="creator-name">${escHtml(ticket.creator_name)}</span>
+        </div>`),
+      ticket.claimed_by ? infoRow('Bearbeiter', `<span class="mono" id="claimer-name">${ticket.claimed_by}</span>`) : '',
+      ticket.created_at ? infoRow('Erstellt', `<span class="mono">${ticket.created_at}</span>`) : '',
+      ticket.closed_at  ? infoRow('Geschlossen', `<span class="mono">${ticket.closed_at}</span>`) : '',
+      infoRow('Nachrichten', `<span class="mono">${messages.length}</span>`),
+    ].filter(Boolean).join('');
+    document.getElementById('infoRows').innerHTML = rows;
+
+    // Messages
+    document.getElementById('msgCount').textContent =
+      `${messages.length} Nachricht${messages.length !== 1 ? 'en' : ''}`;
+
+    if (messages.length === 0) {
+      document.getElementById('msgList').innerHTML =
+        '<div class="empty-state"><div class="empty-icon">💬</div><p>Kein Verlauf gespeichert.</p></div>';
+    } else {
+      document.getElementById('msgList').innerHTML = messages.map(msg => {
+        const initials = (msg.user_name||'?').slice(0,2).toUpperCase();
+        const atts = (msg.attachments||[]).map(url =>
+          `<a class="att-link" href="${escHtml(url)}" target="_blank" rel="noopener">📎 ${escHtml(url.split('/').pop().split('?')[0]||'Anhang')}</a>`
+        ).join('');
+        return `<div class="msg-row">
+          <div class="msg-avatar-ph" id="msgav-${msg.user_id}">${initials}</div>
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-author" id="msgname-${msg.user_id}">${escHtml(msg.user_name)}</span>
+              ${msg.timestamp ? `<span class="msg-time">${escHtml(msg.timestamp)}</span>` : ''}
+            </div>
+            ${msg.content ? `<div class="msg-text">${escHtml(msg.content)}</div>` : ''}
+            ${atts ? `<div class="att-list">${atts}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Lazy-enrich creator + claimer + message authors
+    const toEnrich = new Set([
+      ticket.creator_id,
+      ticket.claimed_by,
+      ...messages.map(m => m.user_id),
+    ].filter(Boolean));
+
+    toEnrich.forEach(uid => enrichMember(uid));
+
+  } catch(e) {
+    document.getElementById('skeleton').style.display = 'none';
+    document.getElementById('realContent').style.display = 'grid';
+    document.getElementById('ticketTitle').textContent = 'Fehler beim Laden';
+    document.getElementById('msgList').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+const _fetched = {};
+
+async function enrichMember(uid) {
+  if (_fetched[uid]) return;
+  _fetched[uid] = true;
+  try {
+    const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
+    const data = await res.json();
+
+    // Update all elements that reference this uid
+    if (data.name) {
+      document.querySelectorAll(`#msgname-${uid}, #creator-name, #claimer-name`)
+        .forEach(el => el.textContent = data.name);
+    }
+    if (data.avatar) {
+      document.querySelectorAll(`#msgav-${uid}`)
+        .forEach(el => el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="" id="msgav-${uid}">`);
+      const cav = document.getElementById('creator-av');
+      if (cav && uid === {{ ticket_id | tojson }}) {  // refined per-creator below
+        cav.outerHTML = `<img class="avatar-xs" src="${escHtml(data.avatar)}" alt="">`;
+      }
+    }
+  } catch(_) {}
+}
+
+load();
+</script>
+
+</body>
+</html>
