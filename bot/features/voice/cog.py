@@ -1197,53 +1197,6 @@ class VoiceCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="voice_info",
-        description="Aktive Voice-Creator-Kanäle und Konfiguration",
-    )
-    async def voice_info(self, interaction: discord.Interaction):
-        if not has_admin_rights(interaction):
-            await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-
-        cfg = _get_config(str(interaction.guild_id))
-        if not cfg:
-            await interaction.followup.send("❌ Nicht eingerichtet. Nutze `/voice_setup`.", ephemeral=True)
-            return
-
-        vcs   = _get_all_vcs(str(interaction.guild_id))
-        roles = _parse_role_ids(cfg.get("allowed_role_ids", ""))
-        embed = discord.Embed(title="🎙️ Voice Creator – Übersicht", color=discord.Color.blurple())
-        category = f"<#{cfg['category_id']}>" if cfg.get('category_id') else "*keine*"
-        embed.add_field(
-            name="⚙️ Konfiguration",
-            
-
-            value = (
-                f"Erstell-Kanal: <#{cfg['channel_id']}>\n"
-                f"Kategorie: {category}\n"
-                f"Timeout: {cfg.get('empty_timeout', 30)}s\n"
-                f"Panel-Rollen: {', '.join(f'<@&{r}>' for r in roles) or '*keine*'}"
-            ),
-            inline=False,
-        )
-        for vc in vcs:
-            owner     = interaction.guild.get_member(int(vc["owner_id"]))
-            mode_icon = "🔓" if vc["is_open"] else "🔒"
-            embed.add_field(
-                name=f"{mode_icon} <#{vc['main_channel_id']}>",
-                value=(
-                    f"Besitzer: {owner.mention if owner else vc['owner_id']}\n"
-                    f"Warteraum: {f'<#{vc["wait_channel_id"]}>' if vc.get('wait_channel_id') else '*keiner*'}\n"
-                    f"Zugangs-Rolle: {f'<@&{vc["access_role_id"]}>' if vc.get('access_role_id') else '*–*'}\n"
-                    f"Limit: {vc.get('user_limit') or 'kein'}"
-                ),
-                inline=True,
-            )
-        if not vcs:
-            embed.add_field(name="Aktive Kanäle", value="*Keine*", inline=False)
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @commands.Cog.listener()
     async def on_voice_state_update(
