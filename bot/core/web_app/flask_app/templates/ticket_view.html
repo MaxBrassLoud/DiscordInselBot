@@ -6,8 +6,296 @@
   <title>Ticket #{{ ticket_id }} – Insel Bot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    /* ── Participants Panel ─────────────────────────────────────────── */
+    .participants-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 14px 18px;
+    }
+
+    .participant-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 11px 7px 8px;
+      cursor: pointer;
+      transition: all var(--mid);
+      position: relative;
+    }
+    .participant-chip:hover {
+      border-color: var(--green2);
+      background: var(--bg-hover);
+    }
+    .participant-chip.active {
+      border-color: var(--green);
+      background: var(--green-glow);
+    }
+    .participant-chip.active .pc-name { color: var(--green); }
+
+    .pc-avatar {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .pc-avatar-ph {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--green-dim), var(--green));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: #000;
+      flex-shrink: 0;
+    }
+    .pc-info { display: flex; flex-direction: column; gap: 1px; }
+    .pc-name { font-size: 0.81rem; font-weight: 600; color: var(--text); }
+    .pc-meta { font-size: 0.66rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+    .pc-badge {
+      position: absolute;
+      top: -4px; right: -4px;
+      background: var(--green);
+      color: #000;
+      font-size: 0.55rem;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 10px;
+      min-width: 16px;
+      text-align: center;
+    }
+
+    /* ── Filter Bar (participants) ─────────────────────────────────── */
+    .msg-filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-raised);
+      flex-wrap: wrap;
+    }
+    .msg-filter-label {
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text3);
+      flex-shrink: 0;
+    }
+    .filter-clear-btn {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border2);
+      color: var(--text3);
+      font-size: 0.75rem;
+      padding: 3px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all var(--fast);
+    }
+    .filter-clear-btn:hover {
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .filter-clear-btn.hidden { display: none; }
+
+    /* ── Message rows – enhanced ───────────────────────────────────── */
+    .msg-row {
+      position: relative;
+    }
+    .msg-row.is-deleted {
+      opacity: 0.55;
+    }
+    .msg-row.is-filtered-out {
+      display: none !important;
+    }
+
+    .msg-deleted-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.63rem;
+      color: var(--red);
+      background: var(--red-bg);
+      border: 1px solid var(--red-border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      margin-top: 3px;
+    }
+
+    .msg-edited-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.63rem;
+      color: var(--text3);
+      cursor: pointer;
+      transition: color var(--fast);
+      margin-top: 3px;
+    }
+    .msg-edited-tag:hover { color: var(--green); }
+
+    /* ── Edit History Popup ────────────────────────────────────────── */
+    .edit-history-popup {
+      position: fixed;
+      z-index: 9999;
+      background: var(--bg-card);
+      border: 1px solid var(--border2);
+      border-radius: var(--r-lg);
+      padding: 14px;
+      max-width: 460px;
+      min-width: 280px;
+      box-shadow: var(--shadow-xl);
+      display: none;
+    }
+    .edit-history-popup.visible { display: block; }
+    .ehp-title {
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--green);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .ehp-close {
+      background: none;
+      border: none;
+      color: var(--text3);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      transition: color var(--fast);
+    }
+    .ehp-close:hover { color: var(--text); }
+    .ehp-version {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      margin-bottom: 6px;
+      background: var(--bg-surface);
+    }
+    .ehp-version:last-child { margin-bottom: 0; }
+    .ehp-ver-label {
+      font-size: 0.60rem;
+      color: var(--text3);
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 4px;
+    }
+    .ehp-ver-content {
+      font-size: 0.82rem;
+      color: var(--text2);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .ehp-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9998;
+      display: none;
+    }
+    .ehp-overlay.visible { display: block; }
+
+    /* ── Added users info row ──────────────────────────────────────── */
+    .added-users-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .added-user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 2px 8px 2px 5px;
+      font-size: 0.75rem;
+      color: var(--text2);
+    }
+    .added-user-chip img {
+      width: 16px; height: 16px;
+      border-radius: 50%;
+    }
+    .added-user-chip-ph {
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: var(--bg-hover);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.52rem;
+      color: var(--text3);
+    }
+
+    /* ── Stats row in sidebar ──────────────────────────────────────── */
+    .ticket-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 14px 18px;
+    }
+    .stat-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .stat-box-num {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--green);
+      line-height: 1;
+    }
+    .stat-box-label {
+      font-size: 0.60rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text3);
+      margin-top: 3px;
+    }
+
+    /* ── System messages ───────────────────────────────────────────── */
+    .msg-row.system-msg {
+      background: none;
+      padding: 4px 18px;
+    }
+    .system-msg-text {
+      font-size: 0.78rem;
+      color: var(--text3);
+      font-style: italic;
+      padding: 4px 0;
+      border-left: 2px solid var(--border2);
+      padding-left: 10px;
+    }
+
+    /* ── Shimmer skeleton ──────────────────────────────────────────── */
+    @keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+    .sk {
+      background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
+      background-size:400px 100%;
+      animation:shimmer 1.4s ease infinite;
+      border-radius:4px;
+    }
+  </style>
 </head>
 <body class="detail-body">
+
+<!-- Edit History Popup -->
+<div class="ehp-overlay" id="ehpOverlay" onclick="closeEditHistory()"></div>
+<div class="edit-history-popup" id="editHistoryPopup">
+  <div class="ehp-title">
+    <span>📝 Bearbeitungs-Verlauf</span>
+    <button class="ehp-close" onclick="closeEditHistory()">✕</button>
+  </div>
+  <div id="editHistoryContent"></div>
+</div>
 
 <!-- Topbar -->
 <div class="detail-topbar">
@@ -19,9 +307,7 @@
   </a>
   <span class="topbar-sep">/</span>
   <span class="topbar-title" id="topbarTitle">Ticket #{{ ticket_id }}</span>
-  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;" id="topbarBadges">
-    <!-- filled by JS -->
-  </div>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;" id="topbarBadges"></div>
 </div>
 
 <!-- Skeleton -->
@@ -35,8 +321,16 @@
       </div>
     </div>
     <div class="detail-card">
+      <div class="detail-card-header"><span class="detail-card-title">Teilnehmer</span></div>
+      <div style="padding:14px 18px;display:flex;gap:8px;flex-wrap:wrap;">
+        {% for _ in range(4) %}
+        <div class="sk" style="width:120px;height:44px;border-radius:8px;"></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="detail-card">
       <div class="detail-card-header"><span class="detail-card-title">Verlauf</span></div>
-      {% for _ in range(4) %}
+      {% for _ in range(5) %}
       <div style="display:flex;gap:12px;padding:12px 18px;">
         <div class="sk" style="width:32px;height:32px;border-radius:50%;flex-shrink:0;"></div>
         <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
@@ -50,7 +344,7 @@
   <div class="detail-sidebar">
     <div class="detail-card">
       <div class="detail-card-header"><span class="detail-card-title">Details</span></div>
-      {% for _ in range(5) %}
+      {% for _ in range(6) %}
       <div class="info-row">
         <div class="sk info-row-label" style="height:12px;width:70px;"></div>
         <div class="sk" style="height:12px;width:100px;"></div>
@@ -63,6 +357,7 @@
 <!-- Real content -->
 <div id="realContent" style="display:none;" class="detail-layout">
   <div class="detail-main">
+
     <!-- Header card -->
     <div class="detail-card">
       <div class="detail-card-body">
@@ -72,14 +367,37 @@
       </div>
     </div>
 
+    <!-- Participants -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+        </svg>
+        <span class="detail-card-title">Teilnehmer</span>
+        <span class="detail-card-count" id="participantCount">—</span>
+        <span style="margin-left:auto;font-size:0.68rem;color:var(--text3);">Klicke zum Filtern</span>
+      </div>
+      <div class="participants-grid" id="participantsGrid">
+        <span style="color:var(--text3);font-size:0.8rem;padding:4px 0;">Lade Teilnehmer…</span>
+      </div>
+    </div>
+
     <!-- Messages -->
     <div class="detail-card">
       <div class="detail-card-header">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
         </svg>
-        <span class="detail-card-title">Verlauf</span>
+        <span class="detail-card-title">Nachrichten-Verlauf</span>
         <span class="detail-card-count" id="msgCount">—</span>
+      </div>
+      <!-- Filter bar -->
+      <div class="msg-filter-bar" id="msgFilterBar">
+        <span class="msg-filter-label">Filter:</span>
+        <span id="filterChip" style="font-size:0.78rem;color:var(--text2);">Alle Nachrichten</span>
+        <button class="filter-clear-btn hidden" id="filterClearBtn" onclick="clearFilter()">✕ Zurücksetzen</button>
       </div>
       <div class="msg-list" id="msgList">
         <div class="empty-state"><div class="empty-icon">💬</div><p>Lade Verlauf…</p></div>
@@ -88,33 +406,43 @@
   </div>
 
   <div class="detail-sidebar">
+    <!-- Stats -->
     <div class="detail-card">
       <div class="detail-card-header">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        <span class="detail-card-title">Statistiken</span>
+      </div>
+      <div class="ticket-stats" id="ticketStats"></div>
+    </div>
+
+    <!-- Details -->
+    <div class="detail-card">
+      <div class="detail-card-header">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
         <span class="detail-card-title">Details</span>
       </div>
-      <div class="info-rows" id="infoRows">
-        <!-- filled by JS -->
-      </div>
+      <div class="info-rows" id="infoRows"></div>
     </div>
   </div>
 </div>
 
-<style>
-@keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
-.sk {
-  background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
-  background-size:400px 100%;
-  animation:shimmer 1.4s ease infinite;
-  border-radius:4px;
-}
-</style>
-
 <script>
 const TICKET_ID = {{ ticket_id | tojson }};
 const SERVER_ID = {{ server_id | tojson }};
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+let _allMessages  = [];
+let _participants  = [];
+let _activeFilter = null;  // user_id or null
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -135,88 +463,46 @@ function infoRow(label, value) {
   </div>`;
 }
 
+function avatarHtml(src, name, cls = 'msg-avatar') {
+  const init = (name||'?').slice(0,2).toUpperCase();
+  if (src) return `<img class="${cls}-img" src="${escHtml(src)}" alt="" onerror="this.outerHTML=fallbackAv('${init}','${cls}')">`;
+  return `<div class="${cls}-ph">${init}</div>`;
+}
+
+function fallbackAv(init, cls) {
+  return `<div class="${cls}-ph">${init}</div>`;
+}
+
+// ── Load ─────────────────────────────────────────────────────────────────────
+
 async function load() {
   try {
-    const res  = await fetch(`/api/tickets/${TICKET_ID}?server_id=${SERVER_ID}`);
+    const res = await fetch(`/api/tickets/${TICKET_ID}?server_id=${SERVER_ID}`);
     if (res.status === 403) { window.location.href = '/dashboard'; return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const { ticket, messages } = await res.json();
+    const { ticket, messages, participants, server_id } = await res.json();
 
-    // Hide skeleton, show content
+    _allMessages  = messages || [];
+    _participants = participants || [];
+
     document.getElementById('skeleton').style.display    = 'none';
     document.getElementById('realContent').style.display = 'grid';
 
-    // Topbar
-    document.getElementById('topbarTitle').textContent = `Ticket #${ticket.ticket_id}`;
-    document.getElementById('topbarBadges').innerHTML  =
-      statusBadge(ticket.status) +
-      (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '');
+    renderTopbar(ticket);
+    renderHeader(ticket);
+    renderStats(ticket, messages);
+    renderSidebar(ticket);
+    renderParticipants(participants, ticket);
+    renderMessages(_allMessages, ticket);
 
-    // Header
-    document.getElementById('ticketTitle').textContent = ticket.title;
-    document.getElementById('ticketMeta').innerHTML =
-      statusBadge(ticket.status) +
-      (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '') +
-      (ticket.created_at ? `<span class="detail-meta-date">${ticket.created_at}</span>` : '');
-
-    if (ticket.description) {
-      const d = document.getElementById('ticketDesc');
-      d.textContent = ticket.description;
-      d.style.display = '';
-    }
-
-    // Sidebar info rows
-    const rows = [
-      infoRow('Ticket-ID', `<span class="mono">#${ticket.ticket_id}</span>`),
-      infoRow('Status', statusBadge(ticket.status)),
-      ticket.module ? infoRow('Modul', `<span class="module-chip">${escHtml(ticket.module)}</span>`) : '',
-      infoRow('Erstellt von',
-        `<div class="user-inline">
-          <div class="avatar-xs-ph" id="creator-av">${(ticket.creator_name||'?').slice(0,1)}</div>
-          <span id="creator-name">${escHtml(ticket.creator_name)}</span>
-        </div>`),
-      ticket.claimed_by ? infoRow('Bearbeiter', `<span class="mono" id="claimer-name">${ticket.claimed_by}</span>`) : '',
-      ticket.created_at ? infoRow('Erstellt', `<span class="mono">${ticket.created_at}</span>`) : '',
-      ticket.closed_at  ? infoRow('Geschlossen', `<span class="mono">${ticket.closed_at}</span>`) : '',
-      infoRow('Nachrichten', `<span class="mono">${messages.length}</span>`),
-    ].filter(Boolean).join('');
-    document.getElementById('infoRows').innerHTML = rows;
-
-    // Messages
-    document.getElementById('msgCount').textContent =
-      `${messages.length} Nachricht${messages.length !== 1 ? 'en' : ''}`;
-
-    if (messages.length === 0) {
-      document.getElementById('msgList').innerHTML =
-        '<div class="empty-state"><div class="empty-icon">💬</div><p>Kein Verlauf gespeichert.</p></div>';
-    } else {
-      document.getElementById('msgList').innerHTML = messages.map(msg => {
-        const initials = (msg.user_name||'?').slice(0,2).toUpperCase();
-        const atts = (msg.attachments||[]).map(url =>
-          `<a class="att-link" href="${escHtml(url)}" target="_blank" rel="noopener">📎 ${escHtml(url.split('/').pop().split('?')[0]||'Anhang')}</a>`
-        ).join('');
-        return `<div class="msg-row">
-          <div class="msg-avatar-ph" id="msgav-${msg.user_id}">${initials}</div>
-          <div class="msg-body">
-            <div class="msg-header">
-              <span class="msg-author" id="msgname-${msg.user_id}">${escHtml(msg.user_name)}</span>
-              ${msg.timestamp ? `<span class="msg-time">${escHtml(msg.timestamp)}</span>` : ''}
-            </div>
-            ${msg.content ? `<div class="msg-text">${escHtml(msg.content)}</div>` : ''}
-            ${atts ? `<div class="att-list">${atts}</div>` : ''}
-          </div>
-        </div>`;
-      }).join('');
-    }
-
-    // Lazy-enrich creator + claimer + message authors
-    const toEnrich = new Set([
+    // Lazy enrich all unique user IDs
+    const uids = new Set([
       ticket.creator_id,
       ticket.claimed_by,
       ...messages.map(m => m.user_id),
+      ...(ticket.added_users || []),
     ].filter(Boolean));
-
-    toEnrich.forEach(uid => enrichMember(uid));
+    uids.forEach(uid => enrichMember(uid));
 
   } catch(e) {
     document.getElementById('skeleton').style.display = 'none';
@@ -227,6 +513,250 @@ async function load() {
   }
 }
 
+// ── Render functions ──────────────────────────────────────────────────────────
+
+function renderTopbar(ticket) {
+  document.getElementById('topbarTitle').textContent = `Ticket #${ticket.ticket_id}`;
+  document.getElementById('topbarBadges').innerHTML =
+    statusBadge(ticket.status) +
+    (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '');
+}
+
+function renderHeader(ticket) {
+  document.getElementById('ticketTitle').textContent =
+    ticket.title || `Ticket #${ticket.ticket_id}`;
+  document.getElementById('ticketMeta').innerHTML =
+    statusBadge(ticket.status) +
+    (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '') +
+    (ticket.created_at ? `<span class="detail-meta-date">${escHtml(ticket.created_at)}</span>` : '');
+
+  if (ticket.description) {
+    const d = document.getElementById('ticketDesc');
+    d.textContent = ticket.description;
+    d.style.display = '';
+  }
+}
+
+function renderStats(ticket, messages) {
+  const total    = messages.length;
+  const deleted  = messages.filter(m => m.is_deleted).length;
+  const edited   = messages.filter(m => (m.edit_history||[]).length > 0).length;
+  const uniqueU  = new Set(messages.map(m => m.user_id).filter(Boolean)).size;
+
+  document.getElementById('ticketStats').innerHTML = `
+    <div class="stat-box">
+      <div class="stat-box-num">${total}</div>
+      <div class="stat-box-label">Nachrichten</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-num">${uniqueU}</div>
+      <div class="stat-box-label">Aktive User</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-num">${edited}</div>
+      <div class="stat-box-label">Bearbeitet</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-num">${deleted}</div>
+      <div class="stat-box-label">Gelöscht</div>
+    </div>
+  `;
+}
+
+function renderSidebar(ticket) {
+  const addedUsers = ticket.added_users || [];
+
+  let addedVal = '<span class="added-users-chips" id="addedUsersChips">';
+  if (addedUsers.length === 0) {
+    addedVal += '<span style="color:var(--text3);font-size:0.8rem;">Keine</span>';
+  } else {
+    addedUsers.forEach(uid => {
+      addedVal += `<span class="added-user-chip">
+        <span class="added-user-chip-ph" id="addusr-ph-${uid}">?</span>
+        <span id="addusr-name-${uid}">…</span>
+      </span>`;
+    });
+  }
+  addedVal += '</span>';
+
+  document.getElementById('infoRows').innerHTML = [
+    infoRow('Ticket-ID', `<span class="mono">#${ticket.ticket_id}</span>`),
+    infoRow('Status', statusBadge(ticket.status)),
+    ticket.module ? infoRow('Modul', `<span class="module-chip">${escHtml(ticket.module)}</span>`) : '',
+    infoRow('Erstellt von',
+      `<div class="user-inline">
+        <div class="avatar-xs-ph" id="creator-av">${(ticket.creator_name||'?').slice(0,1)}</div>
+        <span id="creator-name">${escHtml(ticket.creator_name)}</span>
+      </div>`),
+    ticket.claimed_by ? infoRow('Bearbeiter',
+      `<div class="user-inline">
+        <div class="avatar-xs-ph" id="claimer-av">${'?'}</div>
+        <span id="claimer-name">${escHtml(ticket.claimed_by)}</span>
+      </div>`) : '',
+    infoRow('Hinzugefügt', addedVal),
+    ticket.created_at ? infoRow('Erstellt', `<span class="mono">${escHtml(ticket.created_at)}</span>`) : '',
+    ticket.closed_at  ? infoRow('Geschlossen', `<span class="mono">${escHtml(ticket.closed_at)}</span>`) : '',
+  ].filter(Boolean).join('');
+}
+
+function renderParticipants(participants, ticket) {
+  const count = participants.length;
+  document.getElementById('participantCount').textContent =
+    `${count} Teilnehmer${count !== 1 ? '' : ''}`;
+
+  if (count === 0) {
+    document.getElementById('participantsGrid').innerHTML =
+      '<span style="color:var(--text3);font-size:0.8rem;padding:4px 0;">Noch keine Teilnehmer erfasst.</span>';
+    return;
+  }
+
+  const actionIcon = { message: '💬', added: '➕', removed: '➖', claimed: '📥', closed: '🔒', created: '🎫' };
+
+  document.getElementById('participantsGrid').innerHTML = participants.map(p => {
+    const init  = (p.user_name||'?').slice(0,2).toUpperCase();
+    const icon  = actionIcon[p.action] || '👤';
+    const count = p.message_count || 0;
+    const avHtml = p.avatar_url
+      ? `<img class="pc-avatar" src="${escHtml(p.avatar_url)}" alt="" onerror="this.outerHTML='<div class=pc-avatar-ph>${init}</div>'">`
+      : `<div class="pc-avatar-ph" id="pcav-${p.user_id}">${init}</div>`;
+    return `
+      <div class="participant-chip" id="pc-${p.user_id}"
+           onclick="toggleFilter('${p.user_id}','${escHtml(p.user_name)}')"
+           title="${escHtml(p.user_name)} – ${count} Nachricht${count !== 1 ? 'en' : ''}">
+        ${avHtml}
+        <div class="pc-info">
+          <span class="pc-name" id="pcname-${p.user_id}">${escHtml(p.user_name)}</span>
+          <span class="pc-meta">${icon} ${count > 0 ? count + ' Msg' : 'Kein Msg'}</span>
+        </div>
+        ${count > 0 ? `<span class="pc-badge">${count}</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderMessages(messages, ticket) {
+  document.getElementById('msgCount').textContent =
+    `${messages.length} Nachricht${messages.length !== 1 ? 'en' : ''}`;
+
+  if (messages.length === 0) {
+    document.getElementById('msgList').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">💬</div><p>Kein Verlauf gespeichert.</p></div>';
+    return;
+  }
+
+  document.getElementById('msgList').innerHTML = messages.map((msg, idx) => {
+    const uid      = msg.user_id || '';
+    const isBot    = !uid;
+    const initials = (msg.user_name||'?').slice(0,2).toUpperCase();
+    const isDeleted = msg.is_deleted;
+    const editHist  = msg.edit_history || [];
+    const hasEdits  = editHist.length > 0;
+
+    const atts = (msg.attachments||[]).map(url =>
+      `<a class="att-link" href="${escHtml(url)}" target="_blank" rel="noopener">📎 ${escHtml(url.split('/').pop().split('?')[0]||'Anhang')}</a>`
+    ).join('');
+
+    let extraTags = '';
+    if (isDeleted) {
+      const delAt = msg.deleted_at ? ` · ${escHtml(msg.deleted_at)}` : '';
+      extraTags += `<span class="msg-deleted-tag">🗑️ Gelöscht${delAt}</span>`;
+    }
+    if (hasEdits) {
+      extraTags += `<span class="msg-edited-tag" onclick="showEditHistory(${idx})" title="${editHist.length} Bearbeitung${editHist.length!==1?'en':''}">✏️ ${editHist.length}× bearbeitet</span>`;
+    }
+
+    return `<div class="msg-row ${isDeleted ? 'is-deleted' : ''}" data-uid="${uid}" id="msgrow-${idx}">
+      <div class="msg-avatar-ph" id="msgav-${uid}-${idx}">${initials}</div>
+      <div class="msg-body">
+        <div class="msg-header">
+          <span class="msg-author ${isBot ? 'is-bot' : ''}" id="msgname-${uid}">${escHtml(msg.user_name)}</span>
+          ${msg.timestamp ? `<span class="msg-time">${escHtml(msg.timestamp)}</span>` : ''}
+        </div>
+        ${msg.content ? `<div class="msg-text ${isDeleted ? 'muted' : ''}">${escHtml(msg.content)}</div>` : ''}
+        ${atts ? `<div class="att-list">${atts}</div>` : ''}
+        ${extraTags ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">${extraTags}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+function toggleFilter(uid, name) {
+  if (_activeFilter === uid) {
+    clearFilter();
+  } else {
+    _activeFilter = uid;
+    applyFilter(uid, name);
+  }
+}
+
+function applyFilter(uid, name) {
+  document.querySelectorAll('.participant-chip').forEach(el => {
+    el.classList.toggle('active', el.id === `pc-${uid}`);
+  });
+  document.querySelectorAll('.msg-row[data-uid]').forEach(row => {
+    row.classList.toggle('is-filtered-out', row.dataset.uid !== uid);
+  });
+  document.getElementById('filterChip').innerHTML =
+    `Gefiltert nach: <strong style="color:var(--green)">${escHtml(name)}</strong>`;
+  document.getElementById('filterClearBtn').classList.remove('hidden');
+
+  // Count visible
+  const visible = document.querySelectorAll('.msg-row:not(.is-filtered-out)').length;
+  document.getElementById('msgCount').textContent =
+    `${visible} Nachricht${visible !== 1 ? 'en' : ''} (gefiltert)`;
+}
+
+function clearFilter() {
+  _activeFilter = null;
+  document.querySelectorAll('.participant-chip').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.msg-row').forEach(row => row.classList.remove('is-filtered-out'));
+  document.getElementById('filterChip').textContent = 'Alle Nachrichten';
+  document.getElementById('filterClearBtn').classList.add('hidden');
+  document.getElementById('msgCount').textContent =
+    `${_allMessages.length} Nachricht${_allMessages.length !== 1 ? 'en' : ''}`;
+}
+
+// ── Edit History ──────────────────────────────────────────────────────────────
+
+function showEditHistory(msgIdx) {
+  const msg = _allMessages[msgIdx];
+  if (!msg) return;
+  const hist = msg.edit_history || [];
+
+  const popup = document.getElementById('editHistoryPopup');
+  const overlay = document.getElementById('ehpOverlay');
+
+  // Versions: älteste zuerst (hist), dann aktuelle Version
+  let html = '';
+  hist.forEach((entry, i) => {
+    html += `<div class="ehp-version">
+      <div class="ehp-ver-label">Version ${i + 1} · ${escHtml(entry.edited_at)}</div>
+      <div class="ehp-ver-content">${escHtml(entry.content || '(leer)')}</div>
+    </div>`;
+  });
+  html += `<div class="ehp-version" style="border-color:var(--green2);">
+    <div class="ehp-ver-label" style="color:var(--green);">Aktuelle Version</div>
+    <div class="ehp-ver-content">${escHtml(msg.content || '(leer)')}</div>
+  </div>`;
+
+  document.getElementById('editHistoryContent').innerHTML = html;
+  popup.classList.add('visible');
+  overlay.classList.add('visible');
+
+  // Position near center
+  popup.style.left = '50%';
+  popup.style.top  = '50%';
+  popup.style.transform = 'translate(-50%, -50%)';
+}
+
+function closeEditHistory() {
+  document.getElementById('editHistoryPopup').classList.remove('visible');
+  document.getElementById('ehpOverlay').classList.remove('visible');
+}
+
+// ── Member enrichment ─────────────────────────────────────────────────────────
+
 const _fetched = {};
 
 async function enrichMember(uid) {
@@ -236,20 +766,54 @@ async function enrichMember(uid) {
     const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
     const data = await res.json();
 
-    // Update all elements that reference this uid
     if (data.name) {
-      document.querySelectorAll(`#msgname-${uid}, #creator-name, #claimer-name`)
-        .forEach(el => el.textContent = data.name);
+      // Nachricht-Autoren
+      document.querySelectorAll(`#msgname-${uid}`).forEach(el => el.textContent = data.name);
+      // Creator Sidebar
+      const cn = document.getElementById('creator-name');
+      // Participant-Chips
+      document.querySelectorAll(`#pcname-${uid}`).forEach(el => el.textContent = data.name);
+      // Added-users
+      document.querySelectorAll(`#addusr-name-${uid}`).forEach(el => el.textContent = data.name);
     }
+
     if (data.avatar) {
-      document.querySelectorAll(`#msgav-${uid}`)
-        .forEach(el => el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="" id="msgav-${uid}">`);
+      // Message avatars
+      document.querySelectorAll(`[id^="msgav-${uid}-"]`).forEach(el => {
+        el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="">`;
+      });
+      // Participant chip avatars
+      document.querySelectorAll(`#pcav-${uid}`).forEach(el => {
+        el.outerHTML = `<img class="pc-avatar" src="${escHtml(data.avatar)}" alt="">`;
+      });
+      // Creator sidebar
       const cav = document.getElementById('creator-av');
-      if (cav && uid === {{ ticket_id | tojson }}) {  // refined per-creator below
-        cav.outerHTML = `<img class="avatar-xs" src="${escHtml(data.avatar)}" alt="">`;
+      // Added-user chips
+      document.querySelectorAll(`#addusr-ph-${uid}`).forEach(el => {
+        el.outerHTML = `<img src="${escHtml(data.avatar)}" style="width:16px;height:16px;border-radius:50%;" alt="">`;
+      });
+      // Creator and claimer in sidebar
+      const xav = document.getElementById('creator-av');
+      if (xav && xav.tagName === 'DIV') {
+        // Try to match: only replace if this is the creator
+        // We compare by matching what we know from context
       }
     }
+
+    // Creator-specific enrichment (avatar + name in sidebar)
+    // We handle this generically for all IDs that match
+    _enrichSidebarRole(uid, data);
+
   } catch(_) {}
+}
+
+function _enrichSidebarRole(uid, data) {
+  // Creator
+  const cname = document.getElementById('creator-name');
+  if (cname && cname.dataset && cname.dataset.uid === uid && data.name) {
+    cname.textContent = data.name;
+  }
+  // For claimer, we track via claimed_by text initially set
 }
 
 load();

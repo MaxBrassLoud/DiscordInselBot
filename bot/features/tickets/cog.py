@@ -6,7 +6,11 @@ from bot.core.supabase_client import get_supabase
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
 from .setup_views import TicketSetupView
-from .storage import append_message, load_ticket
+from .storage import (
+    append_message, load_ticket, update_ticket,
+    mark_message_deleted, append_message_edit,
+    add_participant_event, _upsert_participant,
+)
 from .manager import TicketManager, ticket_web_url
 
 logger = get_logger("tickets")
@@ -18,12 +22,10 @@ class TicketsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Restore all persistent ticket views on bot restart."""
         await self._restore_panel_views()
         await self._restore_channel_views()
 
     async def _restore_panel_views(self):
-        """Re-register TicketPanelView for every server."""
         from .views import TicketPanelView
         try:
             supabase = get_supabase()
@@ -42,7 +44,6 @@ class TicketsCog(commands.Cog):
             logger.error(f"[_restore_panel_views] {e}")
 
     async def _restore_channel_views(self):
-        """Re-register TicketChannelView for all open tickets."""
         from .views import TicketChannelView
         try:
             supabase = get_supabase()
@@ -81,6 +82,8 @@ class TicketsCog(commands.Cog):
         except Exception as e:
             logger.error(f"[_restore_channel_views] {e}")
 
+    # ── Message logging ───────────────────────────────────────────────────────
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """Log all messages in ticket channels to ticket_messages table."""
@@ -114,6 +117,68 @@ class TicketsCog(commands.Cog):
                 user_id=str(message.author.id),
                 content=message.content or "",
                 attachments=attachments,
+                discord_message_id=str(message.id),
+            )
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        """Track message edits in ticket channels."""
+        if after.author.bot or not after.guild:
+            return
+        if before.content == after.content:
+            return
+        try:
+            server_id  = str(after.guild.id)
+            channel_id = str(after.channel.id)
+            supabase   = get_supabase()
+            result = (
+                supabase.table("tickets")
+                .select("ticket_id")
+                .eq("server_id", server_id)
+                .eq("channel_id", channel_id)
+                .eq("status", "open")
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                return
+            ticket_id = result.data[0]["ticket_id"]
+            append_message_edit(
+                server_id=server_id,
+                ticket_id=ticket_id,
+                discord_message_id=str(after.id),
+                old_content=before.content or "",
+                new_content=after.content or "",
+            )
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message):
+        """Track message deletions in ticket channels."""
+        if message.author.bot or not message.guild:
+            return
+        try:
+            server_id  = str(message.guild.id)
+            channel_id = str(message.channel.id)
+            supabase   = get_supabase()
+            result = (
+                supabase.table("tickets")
+                .select("ticket_id")
+                .eq("server_id", server_id)
+                .eq("channel_id", channel_id)
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                return
+            ticket_id = result.data[0]["ticket_id"]
+            mark_message_deleted(
+                server_id=server_id,
+                ticket_id=ticket_id,
+                discord_message_id=str(message.id),
             )
         except Exception:
             pass
@@ -158,6 +223,215 @@ class TicketsCog(commands.Cog):
             embed=view.build_embed(), view=view, ephemeral=True
         )
 
+    # ── /ticket_add ───────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="ticket_add",
+        description="[Staff] Füge ein Mitglied zum aktuellen Ticket hinzu",
+    )
+    @app_commands.describe(mitglied="Das Mitglied das hinzugefügt werden soll")
+    async def ticket_add(self, interaction: discord.Interaction, mitglied: discord.Member):
+        await interaction.response.defer(ephemeral=True)
+        server_id  = str(interaction.guild_id)
+        channel_id = str(interaction.channel_id)
+
+        # Ticket für diesen Kanal finden
+        supabase = get_supabase()
+        result = (
+            supabase.table("tickets")
+            .select("*")
+            .eq("server_id", server_id)
+            .eq("channel_id", channel_id)
+            .eq("status", "open")
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            await interaction.followup.send(
+                "❌ Dieser Kanal ist kein aktives Ticket.", ephemeral=True
+            )
+            return
+
+        ticket = result.data[0]
+        ticket_id = ticket["ticket_id"]
+
+        # Modul laden für Staff-Check
+        mods = supabase.table("ticket_modules")\
+            .select("*").eq("server_id", server_id).eq("name", ticket["module"]).execute().data
+        module = None
+        if mods:
+            module = await TicketManager.get_module(mods[0]["id"])
+        if not module:
+            module = {"name": ticket["module"], "staff_role_ids": []}
+
+        # Berechtigung prüfen
+        is_staff = interaction.user.guild_permissions.administrator or \
+            any(str(r.id) in module.get("staff_role_ids", []) for r in interaction.user.roles)
+        if not is_staff:
+            await interaction.followup.send("❌ Nur Staff kann Mitglieder hinzufügen.", ephemeral=True)
+            return
+
+        # Schon im Ticket?
+        added_users = ticket.get("added_users") or []
+        if str(mitglied.id) in added_users or str(mitglied.id) == ticket.get("creator_id"):
+            await interaction.followup.send(
+                f"ℹ️ {mitglied.mention} hat bereits Zugang zu diesem Ticket.", ephemeral=True
+            )
+            return
+
+        # Channel-Permission setzen
+        try:
+            await interaction.channel.set_permissions(
+                mitglied,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Konnte Berechtigungen nicht setzen.", ephemeral=True)
+            return
+
+        # DB updaten
+        merged = list(set(added_users + [str(mitglied.id)]))
+        update_ticket(server_id, ticket_id, {"added_users": merged})
+        supabase.table("tickets").update({"added_users": merged})\
+            .eq("ticket_id", ticket_id).eq("server_id", server_id).execute()
+
+        # Teilnehmer-Event tracken
+        add_participant_event(
+            server_id=server_id,
+            ticket_id=ticket_id,
+            user_id=str(mitglied.id),
+            user_name=mitglied.display_name,
+            action="added",
+            avatar_url=str(mitglied.display_avatar.url) if mitglied.display_avatar else None,
+        )
+
+        # System-Nachricht im Kanal
+        embed = discord.Embed(
+            description=(
+                f"➕ **{mitglied.mention}** wurde von {interaction.user.mention} "
+                f"zum Ticket hinzugefügt."
+            ),
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=f"Ticket #{ticket_id}")
+        await interaction.channel.send(embed=embed)
+        await interaction.followup.send(
+            f"✅ {mitglied.mention} wurde zum Ticket hinzugefügt.", ephemeral=True
+        )
+        logger.info(
+            f"[ticket_add] Ticket #{ticket_id}: {mitglied} hinzugefügt von {interaction.user}"
+        )
+
+    # ── /ticket_remove ────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="ticket_remove",
+        description="[Staff] Entferne ein Mitglied aus dem aktuellen Ticket",
+    )
+    @app_commands.describe(mitglied="Das Mitglied das entfernt werden soll")
+    async def ticket_remove(self, interaction: discord.Interaction, mitglied: discord.Member):
+        await interaction.response.defer(ephemeral=True)
+        server_id  = str(interaction.guild_id)
+        channel_id = str(interaction.channel_id)
+
+        supabase = get_supabase()
+        result = (
+            supabase.table("tickets")
+            .select("*")
+            .eq("server_id", server_id)
+            .eq("channel_id", channel_id)
+            .eq("status", "open")
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            await interaction.followup.send(
+                "❌ Dieser Kanal ist kein aktives Ticket.", ephemeral=True
+            )
+            return
+
+        ticket    = result.data[0]
+        ticket_id = ticket["ticket_id"]
+
+        # Ersteller kann nicht entfernt werden
+        if str(mitglied.id) == ticket.get("creator_id"):
+            await interaction.followup.send(
+                "❌ Der Ticket-Ersteller kann nicht entfernt werden.", ephemeral=True
+            )
+            return
+
+        # Modul + Staff-Check
+        mods = supabase.table("ticket_modules")\
+            .select("*").eq("server_id", server_id).eq("name", ticket["module"]).execute().data
+        module = None
+        if mods:
+            module = await TicketManager.get_module(mods[0]["id"])
+        if not module:
+            module = {"name": ticket["module"], "staff_role_ids": []}
+
+        is_staff = interaction.user.guild_permissions.administrator or \
+            any(str(r.id) in module.get("staff_role_ids", []) for r in interaction.user.roles)
+        if not is_staff:
+            await interaction.followup.send("❌ Nur Staff kann Mitglieder entfernen.", ephemeral=True)
+            return
+
+        added_users = ticket.get("added_users") or []
+        if str(mitglied.id) not in added_users:
+            await interaction.followup.send(
+                f"ℹ️ {mitglied.mention} ist nicht in der Hinzugefügt-Liste dieses Tickets.",
+                ephemeral=True,
+            )
+            return
+
+        # Channel-Permission entfernen
+        try:
+            await interaction.channel.set_permissions(mitglied, overwrite=None)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Konnte Berechtigungen nicht entfernen.", ephemeral=True)
+            return
+
+        # Aus dem Kanal kicken falls aktuell drin
+        if mitglied.voice and mitglied.voice.channel == interaction.channel:
+            try:
+                await mitglied.move_to(None)
+            except Exception:
+                pass
+
+        # DB updaten
+        merged = [uid for uid in added_users if uid != str(mitglied.id)]
+        update_ticket(server_id, ticket_id, {"added_users": merged})
+        supabase.table("tickets").update({"added_users": merged})\
+            .eq("ticket_id", ticket_id).eq("server_id", server_id).execute()
+
+        # Teilnehmer-Event tracken
+        add_participant_event(
+            server_id=server_id,
+            ticket_id=ticket_id,
+            user_id=str(mitglied.id),
+            user_name=mitglied.display_name,
+            action="removed",
+            avatar_url=str(mitglied.display_avatar.url) if mitglied.display_avatar else None,
+        )
+
+        # System-Nachricht
+        embed = discord.Embed(
+            description=(
+                f"➖ **{mitglied.mention}** wurde von {interaction.user.mention} "
+                f"aus dem Ticket entfernt."
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text=f"Ticket #{ticket_id}")
+        await interaction.channel.send(embed=embed)
+        await interaction.followup.send(
+            f"✅ {mitglied.mention} wurde aus dem Ticket entfernt.", ephemeral=True
+        )
+        logger.info(
+            f"[ticket_remove] Ticket #{ticket_id}: {mitglied} entfernt von {interaction.user}"
+        )
+
     # ── /ticket_fuer ──────────────────────────────────────────────────────────
 
     @app_commands.command(
@@ -166,7 +440,7 @@ class TicketsCog(commands.Cog):
     )
     @app_commands.describe(
         mitglied="Für welches Mitglied soll das Ticket erstellt werden?",
-        modul="In welchem Modul soll das Ticket erstellt werden? (Nur Module auf die du Staff-Zugriff hast)",
+        modul="In welchem Modul soll das Ticket erstellt werden?",
     )
     async def ticket_fuer(
         self,
@@ -178,15 +452,13 @@ class TicketsCog(commands.Cog):
 
         server_id = str(interaction.guild_id)
 
-        # Sich selbst kann man nicht vertreten – dann einfach normal /ticket nutzen
         if mitglied.id == interaction.user.id:
             await interaction.response.send_message(
-                "❌ Du kannst kein Ticket im Namen von dir selbst erstellen. Nutze dafür das normale Panel.",
+                "❌ Du kannst kein Ticket im Namen von dir selbst erstellen.",
                 ephemeral=True,
             )
             return
 
-        # Modul aus DB laden
         try:
             supabase = get_supabase()
             mods = (
@@ -199,56 +471,41 @@ class TicketsCog(commands.Cog):
             )
             if not mods:
                 await interaction.response.send_message(
-                    f"❌ Modul **{modul}** nicht gefunden. Nutze die Autocomplete-Liste.",
-                    ephemeral=True,
+                    f"❌ Modul **{modul}** nicht gefunden.", ephemeral=True
                 )
                 return
             mod_id = mods[0]["id"]
             module = await TicketManager.get_module(mod_id)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Fehler beim Laden des Moduls: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
             return
 
         if not module:
             await interaction.response.send_message("❌ Modul konnte nicht geladen werden.", ephemeral=True)
             return
 
-        # Staff-Prüfung: nur Staff für *dieses* Modul oder Admin darf den Command nutzen
         staff_role_ids = set(module.get("staff_role_ids", []))
         user_role_ids  = {str(r.id) for r in interaction.user.roles}
         is_admin       = interaction.user.guild_permissions.administrator
 
         if not is_admin and not (staff_role_ids & user_role_ids):
             await interaction.response.send_message(
-                f"❌ Du hast keinen Staff-Zugang für das Modul **{module['name']}**.\n"
-                f"Nur Staff-Mitglieder dieses Moduls können Tickets dafür erstellen.",
-                ephemeral=True,
+                f"❌ Du hast keinen Staff-Zugang für das Modul **{module['name']}**.", ephemeral=True
             )
             return
 
-        # Server-Config für globale Kategorie
         server_cfg = await TicketManager.get_server_config(server_id)
         global_cat = int(server_cfg["category_id"]) if server_cfg and server_cfg.get("category_id") else 0
 
-        # Modal öffnen – Staff füllt es aus
         modal = ProxyTicketModal(
-            module=module,
-            category_id=global_cat,
-            bot=self.bot,
-            behalf_of=mitglied,
+            module=module, category_id=global_cat, bot=self.bot, behalf_of=mitglied,
         )
         await interaction.response.send_modal(modal)
 
     @ticket_fuer.autocomplete("modul")
     async def ticket_fuer_modul_autocomplete(
-        self,
-        interaction: discord.Interaction,
-        current: str,
+        self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
-        """
-        Zeigt nur Module an, für die der ausführende User Staff-Zugang hat.
-        Admins sehen alle Module.
-        """
         try:
             supabase      = get_supabase()
             server_id     = str(interaction.guild_id)
@@ -260,32 +517,26 @@ class TicketsCog(commands.Cog):
                 .select("id, name, button_emoji")
                 .eq("server_id", server_id)
                 .execute()
-                .data
-                or []
+                .data or []
             )
 
             choices = []
             for m in mods:
-                # Filtern nach Suchbegriff
                 if current and current.lower() not in m["name"].lower():
                     continue
-
-                # Staff-Check pro Modul (Admins überspringen)
                 if not is_admin:
                     roles = (
                         supabase.table("ticket_module_roles")
                         .select("role_id")
                         .eq("module_id", m["id"])
                         .execute()
-                        .data
-                        or []
+                        .data or []
                     )
                     mod_role_ids = {r["role_id"] for r in roles}
                     if not (mod_role_ids & user_role_ids):
-                        continue  # kein Staff-Zugriff → nicht anzeigen
+                        continue
 
                 emoji = m.get("button_emoji") or ""
-                # Benutzerdefinierte Emojis (<:name:id>) im Autocomplete-Label weglassen
                 if emoji.startswith("<"):
                     emoji = "🎫"
                 label = f"{emoji} {m['name']}".strip()[:100]
@@ -320,19 +571,14 @@ class TicketsCog(commands.Cog):
                                 value=f"<#{s.get('category_id')}>" if s.get("category_id") else "*nicht gesetzt*", inline=True)
                 embed.add_field(name="📋 Log-Kanal",
                                 value=f"<#{s.get('log_channel_id')}>" if s.get("log_channel_id") else "*nicht gesetzt*", inline=True)
-                embed.add_field(name="🔔 Staff-Ping Kanal",
-                                value=f"<#{s.get('staff_ping_channel_id')}>" if s.get("staff_ping_channel_id") else "*nicht gesetzt*", inline=True)
-                embed.add_field(name="🔢 Tickets gesamt",
-                                value=str(s.get("ticket_counter", 0)), inline=True)
             else:
-                embed.add_field(name="Status", value="❌ Nicht eingerichtet. Nutze `/ticket_setup`.", inline=False)
+                embed.add_field(name="Status", value="❌ Nicht eingerichtet.", inline=False)
 
             if modules.data:
                 for mod in modules.data:
-                    cat = f"<#{mod['category_id']}>" if mod.get("category_id") else "*global*"
                     embed.add_field(
                         name=f"📂 {mod['name']}",
-                        value=f"Max/User: {mod['max_tickets']} | Kategorie: {cat}",
+                        value=f"Max/User: {mod['max_tickets']}",
                         inline=True,
                     )
 
@@ -341,6 +587,13 @@ class TicketsCog(commands.Cog):
                 closed_t = sum(1 for t in tickets.data if t["status"] == "closed")
                 embed.add_field(name="📊 Offene Tickets",      value=str(open_t),   inline=True)
                 embed.add_field(name="✅ Geschlossene Tickets", value=str(closed_t), inline=True)
+
+            embed.add_field(
+                name="💡 Neue Commands",
+                value="`/ticket_add @Mitglied` – Mitglied hinzufügen\n"
+                      "`/ticket_remove @Mitglied` – Mitglied entfernen",
+                inline=False,
+            )
 
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:

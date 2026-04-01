@@ -821,8 +821,8 @@ def api_tickets():
 @app.route("/api/tickets/<int:ticket_id>")
 @login_required
 def api_ticket_detail(ticket_id):
-    from bot.features.tickets.storage import load_ticket, load_messages
-    user      = session["user"]
+    from bot.features.tickets.storage import load_ticket, load_messages, load_participants
+    user = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
 
     if not server_id:
@@ -835,29 +835,65 @@ def api_ticket_detail(ticket_id):
     if not can_see_ticket(user, ticket, server_id):
         return jsonify({"error": "Kein Zugriff auf dieses Ticket"}), 403
 
-    messages = [{
-        "timestamp":   (m.get("timestamp") or "")[:16].replace("T", " "),
-        "content":     m.get("content") or m.get("message", ""),
-        "attachments": m.get("attachments") or [],
-        "user_name":   m.get("user", "?"),
-        "user_id":     m.get("user_id", ""),
-    } for m in load_messages(server_id, ticket_id)]
+    # Nachrichten mit vollständigen Metadaten (edit/delete)
+    messages = []
+    for m in load_messages(server_id, ticket_id):
+        messages.append({
+            "id": m.get("id"),
+            "discord_message_id": m.get("discord_message_id"),
+            "timestamp": (m.get("timestamp") or "")[:16].replace("T", " "),
+            "content": m.get("content") or m.get("message", ""),
+            "attachments": m.get("attachments") or [],
+            "user_name": m.get("user", "?"),
+            "user_id": m.get("user_id", ""),
+            "is_deleted": bool(m.get("is_deleted", False)),
+            "deleted_at": (m.get("deleted_at") or "")[:16].replace("T", " ")
+            if m.get("deleted_at") else None,
+            "edit_history": [
+                {
+                    "content": e.get("content", ""),
+                    "edited_at": (e.get("edited_at") or "")[:16].replace("T", " "),
+                }
+                for e in (m.get("edit_history") or [])
+            ],
+        })
+
+    # Teilnehmer laden (graceful fallback für ältere Tickets ohne Einträge)
+    try:
+        participants_raw = load_participants(server_id, ticket_id)
+        participants = [
+            {
+                "user_id": p.get("user_id", ""),
+                "user_name": p.get("user_name", "?"),
+                "avatar_url": p.get("avatar_url"),
+                "action": p.get("action", "message"),
+                "message_count": p.get("message_count", 0),
+                "first_seen": (p.get("first_seen") or "")[:16].replace("T", " "),
+                "last_seen": (p.get("last_seen") or "")[:16].replace("T", " "),
+            }
+            for p in participants_raw
+        ]
+    except Exception as e:
+        log.warning(f"[api_ticket_detail] Participants-Load fehlgeschlagen (normal bei alten Tickets): {e}")
+        participants = []
 
     tid = ticket.get("ticket_id") or ticket.get("id")
     return jsonify({
         "ticket": {
-            "ticket_id":    tid,
-            "title":        ticket.get("title") or f"Ticket #{tid}",
-            "module":       ticket.get("module", ""),
-            "status":       ticket.get("status", "open"),
-            "description":  ticket.get("description", ""),
-            "creator_id":   ticket.get("creator_id", ""),
+            "ticket_id": tid,
+            "title": ticket.get("title") or f"Ticket #{tid}",
+            "module": ticket.get("module", ""),
+            "status": ticket.get("status", "open"),
+            "description": ticket.get("description", ""),
+            "creator_id": ticket.get("creator_id", ""),
             "creator_name": ticket.get("creator_name") or "Unbekannt",
-            "claimed_by":   ticket.get("claimed_by"),
-            "created_at":   (ticket.get("created_at") or "")[:16].replace("T", " "),
-            "closed_at":    (ticket.get("closed_at") or "")[:16].replace("T", " "),
+            "claimed_by": ticket.get("claimed_by"),
+            "added_users": ticket.get("added_users") or [],
+            "created_at": (ticket.get("created_at") or "")[:16].replace("T", " "),
+            "closed_at": (ticket.get("closed_at") or "")[:16].replace("T", " "),
         },
-        "messages":  messages,
+        "messages": messages,
+        "participants": participants,
         "server_id": server_id,
     })
 
