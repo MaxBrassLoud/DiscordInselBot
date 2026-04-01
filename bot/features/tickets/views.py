@@ -21,7 +21,7 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
     def __init__(self, module: dict, category_id: int, bot: discord.Client):
         super().__init__(title=f"Ticket: {module['name']}")
         self.module      = module
-        self.category_id = category_id   # global fallback; module may override
+        self.category_id = category_id
         self.bot         = bot
         self.beschreibung.placeholder = module.get("modal_question", "Bitte beschreibe dein Anliegen.")
 
@@ -39,7 +39,6 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
                 )
                 return
 
-            # Pass global category_id; manager.create_ticket checks module["category_id"] for override
             channel, ticket_id = await TicketManager.create_ticket(
                 guild=interaction.guild,
                 creator=interaction.user,
@@ -68,6 +67,159 @@ class TicketDescriptionModal(discord.ui.Modal, title="Ticket erstellen"):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PROXY TICKET MODAL  –  Staff erstellt Ticket im Namen eines anderen Mitglieds
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ProxyTicketModal(discord.ui.Modal):
+    """
+    Öffnet sich wenn ein Staff-Mitglied `/ticket_fuer @Mitglied Modul` ausführt.
+
+    Felder:
+      • grund       – Warum wird dieses Ticket im Namen des Mitglieds erstellt?
+                      (interner Staff-Hinweis, wird im Ticket-Header angezeigt)
+      • beschreibung – Eigentlicher Ticket-Inhalt (so als würde das Mitglied selbst schreiben)
+    """
+
+    grund = discord.ui.TextInput(
+        label="Grund (warum erstellst du das Ticket?)",
+        placeholder="z.B. Mitglied hat mich per DM kontaktiert und kann nicht selbst…",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=500,
+    )
+
+    beschreibung = discord.ui.TextInput(
+        label="Ticket-Beschreibung (Anliegen des Mitglieds)",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(
+        self,
+        module: dict,
+        category_id: int,
+        bot: discord.Client,
+        behalf_of: discord.Member,
+    ):
+        super().__init__(title=f"Ticket für {behalf_of.display_name[:20]}: {module['name']}")
+        self.module      = module
+        self.category_id = category_id
+        self.bot         = bot
+        self.behalf_of   = behalf_of
+        # Placeholder aus dem Modul übernehmen
+        self.beschreibung.placeholder = module.get(
+            "modal_question", "Beschreibe das Anliegen des Mitglieds."
+        )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            guild      = interaction.guild
+            staff      = interaction.user       # wer den Command ausgeführt hat
+            behalf_of  = self.behalf_of         # für wen das Ticket erstellt wird
+
+            # Vollständige Beschreibung: Anliegen + Staff-Hinweis
+            full_description = (
+                f"{self.beschreibung.value}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📌 *Dieses Ticket wurde von {staff.display_name} "
+                f"im Namen von {behalf_of.display_name} erstellt.*\n"
+                f"**Grund:** {self.grund.value}"
+            )
+
+            # Ticket anlegen – als Ersteller gilt das Ziel-Mitglied (behalf_of),
+            # damit es Zugang zum Kanal erhält und im Dashboard als Ersteller erscheint.
+            channel, ticket_id = await TicketManager.create_ticket(
+                guild=guild,
+                creator=behalf_of,          # Ticket gehört dem Mitglied
+                module=self.module,
+                description=full_description,
+                category_id=self.category_id,
+            )
+
+            # Ticket-Embed im Kanal
+            embed = discord.Embed(
+                title=f"🎫 Ticket #{ticket_id}",
+                color=discord.Color.blurple(),
+            )
+            embed.add_field(
+                name="👤 Mitglied",
+                value=behalf_of.mention,
+                inline=True,
+            )
+            embed.add_field(
+                name="📂 Modul",
+                value=self.module["name"],
+                inline=True,
+            )
+            embed.add_field(
+                name="👮 Erstellt von Staff",
+                value=staff.mention,
+                inline=True,
+            )
+            embed.add_field(
+                name="📋 Grund",
+                value=self.grund.value,
+                inline=False,
+            )
+            embed.add_field(
+                name="📝 Anliegen",
+                value=self.beschreibung.value,
+                inline=False,
+            )
+            embed.set_footer(
+                text=f"Erstellt von {staff.display_name} im Namen von {behalf_of.display_name}"
+            )
+
+            # Staff-Mitglied ebenfalls zum Kanal hinzufügen
+            # (er erstellt das Ticket, soll aber auch direkt drin sein)
+            try:
+                await channel.set_permissions(
+                    staff,
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                )
+            except Exception as e:
+                logger.warning(f"[ProxyTicketModal] Staff-Permission: {e}")
+
+            view = TicketChannelView(
+                ticket_id=ticket_id,
+                server_id=str(guild.id),
+                creator_id=str(behalf_of.id),
+                module=self.module,
+                bot=self.bot,
+            )
+            await channel.send(embed=embed, view=view)
+
+            # Mitglied per DM benachrichtigen (best-effort)
+            try:
+                dm_embed = discord.Embed(
+                    title=f"🎫 Ein Ticket wurde für dich erstellt – #{ticket_id}",
+                    description=(
+                        f"**{staff.display_name}** hat im Modul **{self.module['name']}** "
+                        f"ein Ticket in deinem Namen erstellt.\n\n"
+                        f"Du kannst es hier einsehen: {channel.mention}"
+                    ),
+                    color=discord.Color.blurple(),
+                )
+                dm_embed.set_footer(text=f"Server: {guild.name}")
+                await behalf_of.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass  # DMs gesperrt – kein Problem
+
+            await interaction.followup.send(
+                f"✅ Ticket #{ticket_id} für {behalf_of.mention} erstellt: {channel.mention}",
+                ephemeral=True,
+            )
+
+        except Exception as e:
+            logger.error(f"[ProxyTicketModal] {e}")
+            await interaction.followup.send(f"❌ Fehler beim Erstellen des Tickets: {e}", ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TICKET PANEL  –  Ein Button pro Modul
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -77,14 +229,13 @@ class TicketPanelView(discord.ui.View):
     def __init__(self, modules: list[dict], category_id: int, bot: discord.Client):
         super().__init__(timeout=None)
         self.modules     = modules
-        self.category_id = category_id   # global fallback
+        self.category_id = category_id
         self.bot         = bot
         self._build_buttons()
 
     def _build_buttons(self):
         for mod in self.modules[:25]:
             raw_emoji = mod.get("button_emoji") or "🎫"
-            # Parse custom emoji (<:name:id>) into PartialEmoji so discord.py accepts it
             if raw_emoji.startswith("<") and raw_emoji.endswith(">"):
                 try:
                     animated = raw_emoji.startswith("<a:")
@@ -113,10 +264,8 @@ class TicketPanelView(discord.ui.View):
             await interaction.response.send_message("❌ Modul nicht gefunden.", ephemeral=True)
             return
 
-        # Use per-module category if set, otherwise use global from server config
         server_cfg  = await TicketManager.get_server_config(str(interaction.guild_id))
         global_cat  = int(server_cfg["category_id"]) if server_cfg else self.category_id
-        # module["category_id"] may be set from DB; manager.create_ticket will apply the override
         modal = TicketDescriptionModal(
             module=module,
             category_id=global_cat,
@@ -341,14 +490,6 @@ class TicketCloseRequestView(discord.ui.View):
 # ADD USER
 # ══════════════════════════════════════════════════════════════════════════════
 
-"""
-Patch for bot/features/tickets/views.py  –  AddUserView
-Updates the tickets table with added_users so the dashboard permission
-system can grant those users view access to their ticket.
-
-Replace the existing AddUserView class with this one.
-"""
-
 class AddUserView(discord.ui.View):
     def __init__(self, ticket_id: int, server_id: str, channel: discord.TextChannel):
         super().__init__(timeout=60)
@@ -363,7 +504,6 @@ class AddUserView(discord.ui.View):
     async def user_selected(self, interaction: discord.Interaction):
         added_ids = interaction.data["values"]
 
-        # Grant Discord channel permissions
         for user_id in added_ids:
             member = interaction.guild.get_member(int(user_id))
             if member:
@@ -371,7 +511,6 @@ class AddUserView(discord.ui.View):
                     member, view_channel=True, send_messages=True, read_message_history=True,
                 )
 
-        # Persist added_users to local storage and Supabase
         try:
             from bot.features.tickets.storage import load_ticket, update_ticket
             from bot.core.supabase_client import get_supabase
@@ -381,7 +520,6 @@ class AddUserView(discord.ui.View):
             merged = list(set(existing + added_ids))
             update_ticket(self.server_id, self.ticket_id, {"added_users": merged})
 
-            # Also update Supabase so the dashboard can read it
             supabase = get_supabase()
             supabase.table("tickets").update({"added_users": merged})\
                 .eq("ticket_id", self.ticket_id)\

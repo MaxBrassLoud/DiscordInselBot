@@ -92,10 +92,6 @@ class TicketsCog(commands.Cog):
             server_id  = str(message.guild.id)
             channel_id = str(message.channel.id)
 
-            # Prüfe explizit ob dieser Kanal ein offenes Ticket ist.
-            # KEIN Kanalname-Parsing – verhindert dass Bewerbungskanäle
-            # (die ebenfalls mit einer Zahl beginnen) hier fälschlicherweise
-            # als Ticket-Kanal erkannt werden.
             supabase = get_supabase()
             result = (
                 supabase.table("tickets")
@@ -107,7 +103,7 @@ class TicketsCog(commands.Cog):
                 .execute()
             )
             if not result.data:
-                return  # Kein Ticket-Kanal → nichts tun
+                return
 
             ticket_id   = result.data[0]["ticket_id"]
             attachments = [a.url for a in message.attachments]
@@ -146,7 +142,6 @@ class TicketsCog(commands.Cog):
 
         from .ticket_edit_views import TicketEditMainView
 
-        # Check ticket system exists
         supabase = get_supabase()
         srv = supabase.table("ticket_servers").select("server_id")\
             .eq("server_id", str(interaction.guild_id)).execute()
@@ -162,6 +157,144 @@ class TicketsCog(commands.Cog):
         await interaction.response.send_message(
             embed=view.build_embed(), view=view, ephemeral=True
         )
+
+    # ── /ticket_fuer ──────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="ticket_fuer",
+        description="[Staff] Erstelle ein Ticket im Namen eines anderen Mitglieds",
+    )
+    @app_commands.describe(
+        mitglied="Für welches Mitglied soll das Ticket erstellt werden?",
+        modul="In welchem Modul soll das Ticket erstellt werden? (Nur Module auf die du Staff-Zugriff hast)",
+    )
+    async def ticket_fuer(
+        self,
+        interaction: discord.Interaction,
+        mitglied: discord.Member,
+        modul: str,
+    ):
+        from .views import ProxyTicketModal
+
+        server_id = str(interaction.guild_id)
+
+        # Sich selbst kann man nicht vertreten – dann einfach normal /ticket nutzen
+        if mitglied.id == interaction.user.id:
+            await interaction.response.send_message(
+                "❌ Du kannst kein Ticket im Namen von dir selbst erstellen. Nutze dafür das normale Panel.",
+                ephemeral=True,
+            )
+            return
+
+        # Modul aus DB laden
+        try:
+            supabase = get_supabase()
+            mods = (
+                supabase.table("ticket_modules")
+                .select("*")
+                .eq("server_id", server_id)
+                .eq("name", modul)
+                .execute()
+                .data
+            )
+            if not mods:
+                await interaction.response.send_message(
+                    f"❌ Modul **{modul}** nicht gefunden. Nutze die Autocomplete-Liste.",
+                    ephemeral=True,
+                )
+                return
+            mod_id = mods[0]["id"]
+            module = await TicketManager.get_module(mod_id)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Fehler beim Laden des Moduls: {e}", ephemeral=True)
+            return
+
+        if not module:
+            await interaction.response.send_message("❌ Modul konnte nicht geladen werden.", ephemeral=True)
+            return
+
+        # Staff-Prüfung: nur Staff für *dieses* Modul oder Admin darf den Command nutzen
+        staff_role_ids = set(module.get("staff_role_ids", []))
+        user_role_ids  = {str(r.id) for r in interaction.user.roles}
+        is_admin       = interaction.user.guild_permissions.administrator
+
+        if not is_admin and not (staff_role_ids & user_role_ids):
+            await interaction.response.send_message(
+                f"❌ Du hast keinen Staff-Zugang für das Modul **{module['name']}**.\n"
+                f"Nur Staff-Mitglieder dieses Moduls können Tickets dafür erstellen.",
+                ephemeral=True,
+            )
+            return
+
+        # Server-Config für globale Kategorie
+        server_cfg = await TicketManager.get_server_config(server_id)
+        global_cat = int(server_cfg["category_id"]) if server_cfg and server_cfg.get("category_id") else 0
+
+        # Modal öffnen – Staff füllt es aus
+        modal = ProxyTicketModal(
+            module=module,
+            category_id=global_cat,
+            bot=self.bot,
+            behalf_of=mitglied,
+        )
+        await interaction.response.send_modal(modal)
+
+    @ticket_fuer.autocomplete("modul")
+    async def ticket_fuer_modul_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """
+        Zeigt nur Module an, für die der ausführende User Staff-Zugang hat.
+        Admins sehen alle Module.
+        """
+        try:
+            supabase      = get_supabase()
+            server_id     = str(interaction.guild_id)
+            user_role_ids = {str(r.id) for r in interaction.user.roles}
+            is_admin      = interaction.user.guild_permissions.administrator
+
+            mods = (
+                supabase.table("ticket_modules")
+                .select("id, name, button_emoji")
+                .eq("server_id", server_id)
+                .execute()
+                .data
+                or []
+            )
+
+            choices = []
+            for m in mods:
+                # Filtern nach Suchbegriff
+                if current and current.lower() not in m["name"].lower():
+                    continue
+
+                # Staff-Check pro Modul (Admins überspringen)
+                if not is_admin:
+                    roles = (
+                        supabase.table("ticket_module_roles")
+                        .select("role_id")
+                        .eq("module_id", m["id"])
+                        .execute()
+                        .data
+                        or []
+                    )
+                    mod_role_ids = {r["role_id"] for r in roles}
+                    if not (mod_role_ids & user_role_ids):
+                        continue  # kein Staff-Zugriff → nicht anzeigen
+
+                emoji = m.get("button_emoji") or ""
+                # Benutzerdefinierte Emojis (<:name:id>) im Autocomplete-Label weglassen
+                if emoji.startswith("<"):
+                    emoji = "🎫"
+                label = f"{emoji} {m['name']}".strip()[:100]
+                choices.append(app_commands.Choice(name=label, value=m["name"]))
+
+            return choices[:25]
+        except Exception as e:
+            logger.error(f"[ticket_fuer_autocomplete] {e}")
+            return []
 
     # ── /ticket_info ──────────────────────────────────────────────────────────
 
