@@ -1219,7 +1219,7 @@ class VoiceCog(commands.Cog):
             name="⚙️ Konfiguration",
             value=(
                 f"Erstell-Kanal: <#{cfg['channel_id']}>\n"
-                f"Kategorie: {f'<#{cfg["category_id"]}>' if cfg.get('category_id') else '*keine*'}\n"
+                f"Kategorie: {f'<#{cfg['category_id']}>' if cfg.get('category_id') else '*keine*'}\n"
                 f"Timeout: {cfg.get('empty_timeout', 30)}s\n"
                 f"Panel-Rollen: {', '.join(f'<@&{r}>' for r in roles) or '*keine*'}"
             ),
