@@ -26,8 +26,9 @@ SUPABASE SQL:
         category_id   TEXT,
         channel_id    TEXT NOT NULL,
         channel_name  TEXT NOT NULL DEFAULT '➕  Kanal erstellen',
-        empty_timeout INTEGER NOT NULL DEFAULT 30,
-        allowed_role_ids TEXT NOT NULL DEFAULT ''
+        empty_timeout    INTEGER NOT NULL DEFAULT 30,
+        allowed_role_ids TEXT NOT NULL DEFAULT '',
+        creator_role_ids TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS voice_channels (
@@ -769,7 +770,8 @@ class VoiceSetupView(discord.ui.View):
         self.category_id:    str | None   = None
         self.channel_name:   str          = "➕  Kanal erstellen"
         self.empty_timeout:  int          = 30
-        self.allowed_roles:  list[str]    = []
+        self.allowed_roles:  list[str]    = []   # Panel-Berechtigung + immer joinen
+        self.creator_roles:  list[str]    = []   # darf überhaupt einen Kanal erstellen
         self._rebuild()
 
     def _build_embed(self) -> discord.Embed:
@@ -787,15 +789,22 @@ class VoiceSetupView(discord.ui.View):
             value=f"<#{self.category_id}>" if self.category_id else "*Server-Root*",
             inline=True,
         )
-        e.add_field(name="🎙️ Kanal-Name",   value=f"`{self.channel_name}`",  inline=True)
-        e.add_field(name="⏱️ Timeout",       value=f"{self.empty_timeout}s",  inline=True)
-        roles_val = (
-            ", ".join(f"<@&{r}>" for r in self.allowed_roles)
-            if self.allowed_roles else "*keine*"
+        e.add_field(name="🎙️ Kanal-Name", value=f"`{self.channel_name}`", inline=True)
+        e.add_field(name="⏱️ Timeout",    value=f"{self.empty_timeout}s", inline=True)
+        e.add_field(
+            name="🎙️ Erstell-Berechtigung",
+            value=(
+                ", ".join(f"<@&{r}>" for r in self.creator_roles)
+                if self.creator_roles else "*Jeder darf einen Kanal erstellen*"
+            ),
+            inline=False,
         )
         e.add_field(
-            name="🔑 Berechtigte Rollen",
-            value=roles_val,
+            name="🔑 Panel-Rollen (immer joinen + Panel nutzen)",
+            value=(
+                ", ".join(f"<@&{r}>" for r in self.allowed_roles)
+                if self.allowed_roles else "*keine*"
+            ),
             inline=False,
         )
         return e
@@ -812,10 +821,18 @@ class VoiceSetupView(discord.ui.View):
         cat_sel.callback = self._cb_category
         self.add_item(cat_sel)
 
-        role_sel = discord.ui.RoleSelect(
-            placeholder="🔑 Berechtigte Rollen (können immer joinen + Panel nutzen)",
+        creator_sel = discord.ui.RoleSelect(
+            placeholder="🎙️ Erstell-Rollen: Wer darf Kanäle erstellen? (leer = jeder)",
             min_values=0, max_values=10,
             row=1,
+        )
+        creator_sel.callback = self._cb_creator_roles
+        self.add_item(creator_sel)
+
+        role_sel = discord.ui.RoleSelect(
+            placeholder="🔑 Panel-Rollen: können immer joinen + Panel nutzen",
+            min_values=0, max_values=10,
+            row=2,
         )
         role_sel.callback = self._cb_roles
         self.add_item(role_sel)
@@ -823,7 +840,7 @@ class VoiceSetupView(discord.ui.View):
         btn_name = discord.ui.Button(
             label="✏️ Kanal-Namen ändern",
             style=discord.ButtonStyle.secondary,
-            row=2,
+            row=3,
         )
         btn_name.callback = self._cb_name
         self.add_item(btn_name)
@@ -831,7 +848,7 @@ class VoiceSetupView(discord.ui.View):
         btn_timeout = discord.ui.Button(
             label=f"⏱️ Timeout: {self.empty_timeout}s",
             style=discord.ButtonStyle.secondary,
-            row=2,
+            row=3,
         )
         btn_timeout.callback = self._cb_timeout
         self.add_item(btn_timeout)
@@ -839,7 +856,7 @@ class VoiceSetupView(discord.ui.View):
         save_btn = discord.ui.Button(
             label="🚀 Setup abschließen",
             style=discord.ButtonStyle.success,
-            row=3,
+            row=4,
         )
         save_btn.callback = self._cb_save
         self.add_item(save_btn)
@@ -848,6 +865,10 @@ class VoiceSetupView(discord.ui.View):
         vals = interaction.data.get("values", [])
         self.category_id = vals[0] if vals else None
         self._rebuild()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def _cb_creator_roles(self, interaction: discord.Interaction):
+        self.creator_roles = interaction.data.get("values", [])
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
     async def _cb_roles(self, interaction: discord.Interaction):
@@ -901,11 +922,12 @@ class VoiceSetupView(discord.ui.View):
             )
 
             _save_config(str(guild.id), {
-                "category_id":     str(self.category_id) if self.category_id else None,
-                "channel_id":      str(creator_ch.id),
-                "channel_name":    self.channel_name,
-                "empty_timeout":   self.empty_timeout,
+                "category_id":      str(self.category_id) if self.category_id else None,
+                "channel_id":       str(creator_ch.id),
+                "channel_name":     self.channel_name,
+                "empty_timeout":    self.empty_timeout,
                 "allowed_role_ids": ",".join(self.allowed_roles),
+                "creator_role_ids": ",".join(self.creator_roles),
             })
 
             embed = self._build_embed()
@@ -1066,6 +1088,27 @@ class VoiceCog(commands.Cog):
 
         # ── 1. User betritt den Erstell-Kanal ─────────────────────────────────
         if after.channel and str(after.channel.id) == creator_ch_id:
+            # Prüfen ob User berechtigt ist einen Kanal zu erstellen
+            creator_role_ids = set(_parse_role_ids(cfg.get("creator_role_ids", "")))
+            if creator_role_ids:
+                user_role_ids = {str(r.id) for r in member.roles}
+                if not (member.guild_permissions.administrator or creator_role_ids & user_role_ids):
+                    # Keine Berechtigung → aus dem Kanal kicken
+                    try:
+                        await member.move_to(None)
+                    except Exception:
+                        pass
+                    try:
+                        await member.send(
+                            embed=discord.Embed(
+                                title="❌ Keine Berechtigung",
+                                description="Du hast nicht die nötige Rolle um einen eigenen Voice-Kanal zu erstellen.",
+                                color=discord.Color.red(),
+                            )
+                        )
+                    except discord.Forbidden:
+                        pass
+                    return
             await _create_voice_channels(guild=guild, member=member, cfg=cfg, bot=self.bot)
             return
 
