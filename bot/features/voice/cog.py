@@ -14,8 +14,11 @@ ABLAUF:
       👥       User-Limit setzen (nur offen)  [+ / - / Reset]
       🗑️       Kanal löschen
   • Warteraum (nur wenn privat):
-      → Warteraum-Beitritt → Anfrage-Nachricht im Haupt-Kanal-Chat
-      → Besitzer / berechtigte Rollen: ✅ Annehmen | ❌ Ablehnen
+      → Hauptkanal ist für ALLE sichtbar, aber nur ANGENOMMENE User können joinen.
+      → Warteraum-Beitritt → Anfrage-Nachricht im Haupt-Kanal-Chat.
+      → Besitzer / berechtigte Rollen: ✅ Annehmen | ❌ Ablehnen.
+      → Annehmen: User bekommt dauerhaft connect=True auf dem Hauptkanal.
+      → Ablehnen / Kick: connect-Berechtigung wird entzogen.
   • Cleanup-Task (alle 30s):
       → Haupt + Warteraum leer ≥ empty_timeout Sekunden → automatisch löschen.
 
@@ -140,6 +143,37 @@ def _can_manage(member: discord.Member, vc_row: dict, cfg: dict) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PRIVATE MODE PERMISSION HELPERS
+#
+# Im privaten Modus gilt:
+#   • Hauptkanal: view_channel=True für alle (sichtbar)
+#                 connect=False für default_role (nicht joinbar)
+#   • Angenommene User: individuelle Overrides mit connect=True
+#   • Gekickte / abgelehnte User: individuelle Overrides mit connect=False
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _grant_connect(channel: discord.VoiceChannel, member: discord.Member) -> None:
+    """Gibt einem Member dauerhaft connect=True auf dem privaten Hauptkanal."""
+    await channel.set_permissions(
+        member,
+        view_channel=True,
+        connect=True,
+    )
+
+
+async def _revoke_connect(channel: discord.VoiceChannel, member: discord.Member) -> None:
+    """
+    Entzieht einem Member die Berechtigung dem privaten Hauptkanal beizutreten.
+    Kanal bleibt sichtbar (view_channel=True, connect=False).
+    """
+    await channel.set_permissions(
+        member,
+        view_channel=True,
+        connect=False,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PANEL VIEW  (persistent im Voice-Text-Chat)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -175,6 +209,15 @@ def _build_panel_embed(vc_row: dict, guild: discord.Guild) -> discord.Embed:
             value=f"<#{vc_row['wait_channel_id']}>",
             inline=False,
         )
+    if not is_open:
+        embed.add_field(
+            name="ℹ️ Hinweis",
+            value=(
+                "Der Kanal ist für alle **sichtbar**, aber nur **angenommene** Mitglieder "
+                "können beitreten. Alle anderen müssen den Warteraum nutzen."
+            ),
+            inline=False,
+        )
     embed.set_footer(text="Nur Besitzer und berechtigte Rollen können die Buttons nutzen.")
     return embed
 
@@ -183,7 +226,6 @@ class VoicePanelView(discord.ui.View):
     """Persistentes Panel im Text-Chat des Hauptkanals."""
 
     def __init__(self):
-        # timeout=None → überlebt Bot-Neustart (muss in on_ready re-registriert werden)
         super().__init__(timeout=None)
 
     # ── Privat / Öffentlich togglen ───────────────────────────────────────────
@@ -213,12 +255,16 @@ class VoicePanelView(discord.ui.View):
             return
 
         if new_open:
-            # → Öffentlich: alle dürfen rein, Limit beibehalten
+            # ── Öffentlich ────────────────────────────────────────────────────
+            # Alle dürfen rein → default_role connect=True.
+            # Individuelle Overrides (von privatem Modus) belassen wir;
+            # sie schaden nicht, da default_role jetzt eh erlaubt ist.
             await main_ch.set_permissions(
                 interaction.guild.default_role,
                 view_channel=True, connect=True,
             )
-            # Warteraum löschen falls vorhanden
+
+            # Warteraum löschen
             if vc_row.get("wait_channel_id"):
                 wait_ch = interaction.guild.get_channel(int(vc_row["wait_channel_id"]))
                 if wait_ch:
@@ -229,13 +275,18 @@ class VoicePanelView(discord.ui.View):
                 _update_vc(vc_row["id"], {"is_open": True, "wait_channel_id": None})
             else:
                 _update_vc(vc_row["id"], {"is_open": True})
+
         else:
-            # → Privat: default_role kann nicht connecten
+            # ── Privat ────────────────────────────────────────────────────────
+            # Hauptkanal: für alle SICHTBAR, aber nur angenommene User können joinen.
+
+            # default_role: sehen ja, joinen nein
             await main_ch.set_permissions(
                 interaction.guild.default_role,
-                view_channel=False, connect=False,
+                view_channel=True, connect=False,
             )
-            # Besitzer bekommt Rechte
+
+            # Besitzer: volle Rechte
             owner = interaction.guild.get_member(int(vc_row["owner_id"]))
             if owner:
                 await main_ch.set_permissions(
@@ -244,44 +295,66 @@ class VoicePanelView(discord.ui.View):
                     move_members=True, manage_channels=True,
                 )
 
-            # Warteraum erstellen falls noch nicht vorhanden
+            # Bot: volle Rechte
+            await main_ch.set_permissions(
+                interaction.guild.me,
+                view_channel=True, connect=True,
+                move_members=True, manage_channels=True,
+            )
+
+            # Berechtigte Panel-Rollen (allowed_role_ids):
+            # können joinen + Panel nutzen
+            for role_id in _parse_role_ids(cfg.get("allowed_role_ids", "")):
+                role = interaction.guild.get_role(int(role_id))
+                if role:
+                    await main_ch.set_permissions(
+                        role,
+                        view_channel=True, connect=True, move_members=True,
+                    )
+
+            # Warteraum erstellen
             wait_ch_id = vc_row.get("wait_channel_id")
             if not wait_ch_id:
-                wait_ow = {
+                owner_display = owner.display_name if owner else "Kanal"
+                wait_ow: dict = {
+                    # Alle dürfen den Warteraum betreten (um anzuklopfen)
                     interaction.guild.default_role: discord.PermissionOverwrite(
                         view_channel=True, connect=True, speak=False, send_messages=False,
                     ),
-                    owner: discord.PermissionOverwrite(
-                        view_channel=True, connect=False,
-                    ) if owner else discord.PermissionOverwrite(),
                     interaction.guild.me: discord.PermissionOverwrite(
                         view_channel=True, connect=True,
                         move_members=True, manage_channels=True,
                     ),
                 }
-                # Berechtigte Rollen ebenfalls sperren (kein Sprechen)
+                # Besitzer darf Warteraum NICHT betreten
+                if owner:
+                    wait_ow[owner] = discord.PermissionOverwrite(
+                        view_channel=True, connect=False,
+                    )
+                # Berechtigte Rollen sehen Warteraum, joinen unnötig (sie können direkt rein)
                 for role_id in _parse_role_ids(cfg.get("allowed_role_ids", "")):
                     role = interaction.guild.get_role(int(role_id))
                     if role:
                         wait_ow[role] = discord.PermissionOverwrite(
-                            view_channel=True, connect=True, speak=False, send_messages=False,
+                            view_channel=True, connect=False,
                         )
 
                 category = main_ch.category
                 wait_ch  = await interaction.guild.create_voice_channel(
-                    name=f"⏳ Warteraum – {interaction.guild.get_member(int(vc_row['owner_id'])).display_name if interaction.guild.get_member(int(vc_row['owner_id'])) else 'Kanal'}",
+                    name=f"⏳ Warteraum – {owner_display}",
                     category=category,
                     overwrites=wait_ow,
                     reason="Kanal auf privat gestellt",
                 )
                 wait_ch_id = str(wait_ch.id)
+
             _update_vc(vc_row["id"], {"is_open": False, "wait_channel_id": wait_ch_id, "user_limit": 0})
 
         # Panel aktualisieren
         vc_row = _get_vc_by_main(str(interaction.channel_id))
         await self._refresh_panel(interaction, vc_row)
         await interaction.followup.send(
-            f"{'🔓 Kanal ist jetzt öffentlich.' if new_open else '🔒 Kanal ist jetzt privat.'}",
+            f"{'🔓 Kanal ist jetzt öffentlich.' if new_open else '🔒 Kanal ist jetzt privat. Der Kanal ist für alle sichtbar, aber nur angenommene Mitglieder können beitreten.'}",
             ephemeral=True,
         )
 
@@ -313,11 +386,14 @@ class VoicePanelView(discord.ui.View):
             )
             return
 
-        view = _KickSelectView(members_in_vc, main_ch)
+        view = _KickSelectView(members_in_vc, main_ch, vc_row)
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="👟 User aus dem Kanal entfernen",
-                description="Wähle einen oder mehrere Nutzer die aus dem Voice-Kanal entfernt werden sollen.",
+                description=(
+                    "Wähle einen oder mehrere Nutzer die aus dem Voice-Kanal entfernt werden sollen.\n"
+                    "Im **privaten Modus** wird ihnen auch die Berechtigung entzogen, wieder beizutreten."
+                ),
                 color=discord.Color.red(),
             ),
             view=view,
@@ -403,12 +479,15 @@ class VoicePanelView(discord.ui.View):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # KICK SELECT VIEW
+# Beim Kick im privaten Modus wird connect=False gesetzt → User kann nicht mehr joinen
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _KickSelectView(discord.ui.View):
-    def __init__(self, members: list[discord.Member], channel: discord.VoiceChannel):
+    def __init__(self, members: list[discord.Member], channel: discord.VoiceChannel,
+                 vc_row: dict):
         super().__init__(timeout=60)
         self.channel = channel
+        self.vc_row  = vc_row
 
         options = [
             discord.SelectOption(
@@ -429,19 +508,36 @@ class _KickSelectView(discord.ui.View):
 
     async def _selected(self, interaction: discord.Interaction):
         kicked = []
+        is_private = not self.vc_row.get("is_open", True)
+
         for uid in interaction.data["values"]:
             member = interaction.guild.get_member(int(uid))
-            if member and member.voice and member.voice.channel == self.channel:
+            if not member:
+                continue
+            # Aus dem Kanal entfernen
+            if member.voice and member.voice.channel == self.channel:
                 try:
                     await member.move_to(None, reason="Voice-Kick durch Kanalbesitzer")
                     kicked.append(member.display_name)
                 except Exception as e:
-                    logger.error(f"[kick] {e}")
+                    logger.error(f"[kick] move_to: {e}")
+            else:
+                kicked.append(member.display_name)
+
+            # Im privaten Modus: connect-Berechtigung entziehen
+            if is_private:
+                try:
+                    await _revoke_connect(self.channel, member)
+                except Exception as e:
+                    logger.error(f"[kick] revoke_connect: {e}")
+
         self.stop()
         names = ", ".join(kicked) if kicked else "Niemand"
+        extra = "\nIm privaten Modus können sie nicht mehr beitreten." if is_private and kicked else ""
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title=f"👟 {names} {'wurde' if len(kicked) == 1 else 'wurden'} entfernt",
+                description=extra,
                 color=discord.Color.orange(),
             ),
             view=None,
@@ -491,17 +587,14 @@ class _LimitView(discord.ui.View):
         await self._apply(interaction)
 
     async def _apply(self, interaction: discord.Interaction):
-        # Discord Voice-Kanal Limit setzen
         main_ch = interaction.guild.get_channel(int(self.vc_row["main_channel_id"]))
         if main_ch:
             try:
                 await main_ch.edit(user_limit=self.current)
             except Exception as e:
                 logger.error(f"[limit] {e}")
-        # DB updaten
         _update_vc(self.vc_row["id"], {"user_limit": self.current})
 
-        # Panel-Embed aktualisieren
         fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
         if fresh and fresh.get("panel_message_id") and main_ch:
             try:
@@ -539,16 +632,15 @@ class _DeleteConfirmView(discord.ui.View):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WARTERAUM-ANFRAGE VIEW  (erscheint im Text-Chat des Hauptkanals)
+# WARTERAUM-ANFRAGE VIEW
+#
+# Erscheint im Text-Chat des Hauptkanals wenn jemand den Warteraum betritt.
+#
+# ✅ Annehmen → _grant_connect() → dauerhaftes connect=True auf Hauptkanal
+# ❌ Ablehnen → User wird aus Warteraum entfernt, KEINE connect-Berechtigung
 # ══════════════════════════════════════════════════════════════════════════════
 
 class WaitingRoomRequestView(discord.ui.View):
-    """
-    Wird in den Text-Chat des Hauptkanals gepostet wenn jemand den Warteraum betritt.
-    Besitzer UND berechtigte Rollen können annehmen/ablehnen.
-    Timeout: 2 Minuten → automatisch ablehnen.
-    """
-
     def __init__(
         self,
         requester: discord.Member,
@@ -584,9 +676,9 @@ class WaitingRoomRequestView(discord.ui.View):
         self.stop()
 
         try:
-            await self.main_ch.set_permissions(
-                self.requester, view_channel=True, connect=True,
-            )
+            # Dauerhafte connect-Berechtigung vergeben
+            await _grant_connect(self.main_ch, self.requester)
+            # User in den Hauptkanal verschieben
             if self._still_waiting():
                 await self.requester.move_to(self.main_ch)
         except Exception as e:
@@ -597,6 +689,7 @@ class WaitingRoomRequestView(discord.ui.View):
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title=f"✅ {self.requester.display_name} wurde angenommen",
+                description="Der User hat dauerhaft Zugang zu diesem Kanal.",
                 color=discord.Color.green(),
             ),
             view=self,
@@ -614,6 +707,8 @@ class WaitingRoomRequestView(discord.ui.View):
         self.stop()
 
         try:
+            # Aus Warteraum entfernen – keine connect-Berechtigung wird gesetzt,
+            # der User bleibt auf dem default_role-Niveau (sehen, nicht joinen).
             if self._still_waiting():
                 await self.requester.move_to(None)
         except Exception as e:
@@ -624,6 +719,7 @@ class WaitingRoomRequestView(discord.ui.View):
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title=f"❌ {self.requester.display_name} wurde abgelehnt",
+                description="Der User kann weiterhin den Warteraum nutzen um erneut anzufragen.",
                 color=discord.Color.red(),
             ),
             view=self,
@@ -655,7 +751,6 @@ async def _create_voice_channels(
     Kein Warteraum initial – User kann per Panel auf privat stellen.
     Berechtigte Rollen können immer joinen.
     """
-    # Kein doppelter Kanal pro User
     existing = _get_vc_by_owner(str(guild.id), str(member.id))
     if existing:
         main_ch = guild.get_channel(int(existing["main_channel_id"]))
@@ -670,10 +765,9 @@ async def _create_voice_channels(
     category    = guild.get_channel(int(category_id)) if category_id else None
     base_name   = member.display_name
 
-    # Berechtigte Rollen
     allowed_role_ids = _parse_role_ids(cfg.get("allowed_role_ids", ""))
 
-    # Hauptkanal – Standard: öffentlich
+    # Hauptkanal – Standard: öffentlich (alle dürfen sehen + joinen)
     main_ow = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=True, connect=True,
@@ -701,14 +795,12 @@ async def _create_voice_channels(
         reason=f"Voice Creator – {member.display_name}",
     )
 
-    # Member direkt verschieben
     if member.voice:
         try:
             await member.move_to(main_ch)
         except Exception as e:
             logger.warning(f"[voice] Move fehlgeschlagen: {e}")
 
-    # DB speichern (ohne panel_message_id – wird gleich gesetzt)
     vc_data = _save_vc({
         "server_id":        str(guild.id),
         "owner_id":         str(member.id),
@@ -721,13 +813,11 @@ async def _create_voice_channels(
         "last_empty_at":    None,
     })
 
-    # Panel in den Text-Chat des Voice-Kanals senden
     try:
         panel_embed = _build_panel_embed(vc_data, guild)
         panel_view  = VoicePanelView()
         panel_msg   = await main_ch.send(embed=panel_embed, view=panel_view)
         _update_vc(vc_data["id"], {"panel_message_id": str(panel_msg.id)})
-        # Nachricht anpinnen
         try:
             await panel_msg.pin()
         except Exception:
@@ -735,9 +825,7 @@ async def _create_voice_channels(
     except Exception as e:
         logger.error(f"[voice] Panel senden fehlgeschlagen: {e}")
 
-    logger.info(
-        f"[voice] Erstellt für {member.display_name}: main={main_ch.id}"
-    )
+    logger.info(f"[voice] Erstellt für {member.display_name}: main={main_ch.id}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -770,8 +858,8 @@ class VoiceSetupView(discord.ui.View):
         self.category_id:    str | None   = None
         self.channel_name:   str          = "➕  Kanal erstellen"
         self.empty_timeout:  int          = 30
-        self.allowed_roles:  list[str]    = []   # Panel-Berechtigung + immer joinen
-        self.creator_roles:  list[str]    = []   # darf überhaupt einen Kanal erstellen
+        self.allowed_roles:  list[str]    = []
+        self.creator_roles:  list[str]    = []
         self._rebuild()
 
     def _build_embed(self) -> discord.Embed:
@@ -780,7 +868,10 @@ class VoiceSetupView(discord.ui.View):
             description=(
                 "Richtet einen **Join-to-Create** Voice-Kanal ein.\n"
                 "Tritt ein User diesem Kanal bei, erstellt der Bot automatisch\n"
-                "einen eigenen Kanal mit Panel zur Steuerung."
+                "einen eigenen Kanal mit Panel zur Steuerung.\n\n"
+                "**Privater Modus:** Hauptkanal ist für alle **sichtbar**, "
+                "aber nur **angenommene** Mitglieder können beitreten. "
+                "Alle anderen müssen über den Warteraum anfragen."
             ),
             color=discord.Color.blurple(),
         )
@@ -887,7 +978,6 @@ class VoiceSetupView(discord.ui.View):
             guild    = interaction.guild
             category = guild.get_channel(int(self.category_id)) if self.category_id else None
 
-            # Alten Erstell-Kanal löschen
             cfg = _get_config(str(guild.id))
             if cfg and cfg.get("channel_id"):
                 old_ch = guild.get_channel(int(cfg["channel_id"]))
@@ -897,7 +987,6 @@ class VoiceSetupView(discord.ui.View):
                     except Exception:
                         pass
 
-            # Neuen Erstell-Kanal anlegen
             ow = {
                 guild.default_role: discord.PermissionOverwrite(
                     view_channel=True, connect=True, speak=False,
@@ -1000,11 +1089,8 @@ class VoiceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Panel-Views persistent re-registrieren
         self.bot.add_view(VoicePanelView())
         logger.info("✅ VoicePanelView registriert")
-
-    # ── /voice_setup ──────────────────────────────────────────────────────────
 
     @app_commands.command(
         name="voice_setup",
@@ -1018,8 +1104,6 @@ class VoiceCog(commands.Cog):
         await interaction.response.send_message(
             embed=view._build_embed(), view=view, ephemeral=True
         )
-
-    # ── /voice_info ───────────────────────────────────────────────────────────
 
     @app_commands.command(
         name="voice_info",
@@ -1069,8 +1153,6 @@ class VoiceCog(commands.Cog):
             embed.add_field(name="Aktive Kanäle", value="*Keine*", inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── Voice State Update ────────────────────────────────────────────────────
-
     @commands.Cog.listener()
     async def on_voice_state_update(
         self,
@@ -1088,12 +1170,10 @@ class VoiceCog(commands.Cog):
 
         # ── 1. User betritt den Erstell-Kanal ─────────────────────────────────
         if after.channel and str(after.channel.id) == creator_ch_id:
-            # Prüfen ob User berechtigt ist einen Kanal zu erstellen
             creator_role_ids = set(_parse_role_ids(cfg.get("creator_role_ids", "")))
             if creator_role_ids:
                 user_role_ids = {str(r.id) for r in member.roles}
                 if not (member.guild_permissions.administrator or creator_role_ids & user_role_ids):
-                    # Keine Berechtigung → aus dem Kanal kicken
                     try:
                         await member.move_to(None)
                     except Exception:
@@ -1131,23 +1211,37 @@ class VoiceCog(commands.Cog):
     async def _handle_waitroom_join(
         self, guild: discord.Guild, member: discord.Member, vc_row: dict, cfg: dict
     ):
-        """User betritt Warteraum → Anfrage im Text-Chat des Hauptkanals."""
-        # Besitzer betritt eigenen Warteraum → direkt rein
-        if str(member.id) == vc_row["owner_id"] or _can_manage(member, vc_row, cfg):
-            main_ch = guild.get_channel(int(vc_row["main_channel_id"]))
-            if main_ch and member.voice:
-                try:
-                    await main_ch.set_permissions(member, view_channel=True, connect=True)
-                    await member.move_to(main_ch)
-                except Exception as e:
-                    logger.error(f"[waitroom auto-join] {e}")
-            return
-
+        """
+        User betritt Warteraum.
+        • Besitzer / berechtigte Rollen → direkt in den Hauptkanal verschieben.
+        • Alle anderen → Anfrage im Text-Chat des Hauptkanals posten.
+        """
         main_ch = guild.get_channel(int(vc_row["main_channel_id"]))
         wait_ch = guild.get_channel(int(vc_row["wait_channel_id"]))
         if not main_ch or not wait_ch:
             return
 
+        # Besitzer oder berechtigte Rollen → direkt rein
+        if _can_manage(member, vc_row, cfg):
+            try:
+                await _grant_connect(main_ch, member)
+                await member.move_to(main_ch)
+            except Exception as e:
+                logger.error(f"[waitroom auto-join] {e}")
+            return
+
+        # Prüfen ob der User bereits eine explizite connect=True Berechtigung hat
+        # (wurde schon einmal angenommen und nicht gekickt)
+        overwrite = main_ch.overwrites_for(member)
+        if overwrite.connect is True:
+            # Bereits angenommen → direkt verschieben
+            try:
+                await member.move_to(main_ch)
+            except Exception as e:
+                logger.error(f"[waitroom re-join] {e}")
+            return
+
+        # Anfrage-Nachricht senden
         embed = discord.Embed(
             title="🔔 Beitrittsanfrage",
             description=(
@@ -1185,8 +1279,6 @@ class VoiceCog(commands.Cog):
             if vc_row.get("last_empty_at"):
                 _update_vc(vc_row["id"], {"last_empty_at": None})
 
-    # ── Cleanup Task ──────────────────────────────────────────────────────────
-
     @tasks.loop(seconds=30)
     async def cleanup_task(self):
         try:
@@ -1199,7 +1291,6 @@ class VoiceCog(commands.Cog):
                 for vc_row in _get_all_vcs(str(guild.id)):
                     last_empty = vc_row.get("last_empty_at")
                     if not last_empty:
-                        # Kanal extern gelöscht?
                         if not guild.get_channel(int(vc_row["main_channel_id"])):
                             await _delete_vc_channels(guild, vc_row)
                         continue
