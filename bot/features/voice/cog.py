@@ -36,6 +36,7 @@ SUPABASE SQL (Ergänzung – einmalig ausführen):
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import discord
@@ -47,6 +48,18 @@ from bot.utils.logger import get_logger
 from bot.utils.permissions import has_admin_rights
 
 logger = get_logger("voice")
+
+# ── Per-channel toggle locks (prevents race condition on simultaneous presses) ─
+# Module-level dict survives across VoicePanelView instances (persistent views
+# create a new object per interaction, so instance-level locks don't work).
+_toggle_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_toggle_lock(channel_id: str) -> asyncio.Lock:
+    """Returns (and lazily creates) an asyncio.Lock for a given channel ID."""
+    if channel_id not in _toggle_locks:
+        _toggle_locks[channel_id] = asyncio.Lock()
+    return _toggle_locks[channel_id]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -133,18 +146,9 @@ def _has_access_role(member: discord.Member, vc_row: dict) -> bool:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ZUGANGS-ROLLEN HELFER
-#
-# Statt Member-Overwrites (braucht manage_roles AUF DEM KANAL ≈ quasi Admin)
-# nutzen wir eine temporäre Rolle die der Bot selbst erstellt und vergibt.
-# Der Bot kann Rollen vergeben/entziehen solange die Rolle UNTER seiner liegt.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _create_access_role(guild: discord.Guild, channel_name: str) -> discord.Role | None:
-    """
-    Erstellt eine temporäre Zugangs-Rolle für einen privaten Voice-Kanal.
-    Die Rolle wird direkt unter der Bot-Rolle positioniert, damit der Bot
-    sie ohne Admin-Rechte vergeben/entziehen kann.
-    """
     try:
         role = await guild.create_role(
             name=f"🔒 VC-Zugang – {channel_name[:40]}",
@@ -152,13 +156,12 @@ async def _create_access_role(guild: discord.Guild, channel_name: str) -> discor
             mentionable=False,
             hoist=False,
         )
-        # Rolle direkt unter Bot-Rolle positionieren
         bot_top = guild.me.top_role
         if bot_top.position > 1:
             try:
                 await role.edit(position=max(1, bot_top.position - 1))
             except discord.HTTPException:
-                pass  # Position ist nice-to-have, kein Showstopper
+                pass
         logger.info(f"[voice] Zugangs-Rolle erstellt: {role.name} ({role.id})")
         return role
     except discord.Forbidden:
@@ -173,7 +176,6 @@ async def _create_access_role(guild: discord.Guild, channel_name: str) -> discor
 
 
 async def _delete_access_role(guild: discord.Guild, role_id: str | None) -> None:
-    """Löscht die temporäre Zugangs-Rolle."""
     if not role_id:
         return
     try:
@@ -192,10 +194,6 @@ async def _grant_access(
     member: discord.Member,
     access_role_id: str,
 ) -> None:
-    """
-    Gibt einem Member Zugang zum privaten Kanal indem die Zugangs-Rolle vergeben wird.
-    Braucht nur 'Manage Roles' auf Server-Ebene – kein Channel-Overwrite nötig.
-    """
     role = guild.get_role(int(access_role_id))
     if not role:
         logger.warning(f"[voice] _grant_access: Rolle {access_role_id} nicht gefunden")
@@ -216,7 +214,6 @@ async def _revoke_access(
     member: discord.Member,
     access_role_id: str,
 ) -> None:
-    """Entzieht einem Member die Zugangs-Rolle."""
     role = guild.get_role(int(access_role_id))
     if not role:
         return
@@ -302,6 +299,7 @@ class VoicePanelView(discord.ui.View):
         row=0,
     )
     async def toggle_private(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ── Basic checks BEFORE deferring (must respond within 3s) ───────────
         cfg    = _get_config(str(interaction.guild_id))
         vc_row = _get_vc_by_main(str(interaction.channel_id))
         if not cfg or not vc_row:
@@ -311,162 +309,196 @@ class VoicePanelView(discord.ui.View):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
-        new_open = not vc_row.get("is_open", True)
-        guild    = interaction.guild
-        main_ch  = guild.get_channel(int(vc_row["main_channel_id"]))
-        if not main_ch:
-            await interaction.followup.send("❌ Voice-Kanal nicht gefunden.", ephemeral=True)
+        # ── Per-channel lock ──────────────────────────────────────────────────
+        # Module-level dict ensures the same lock object is used across all
+        # VoicePanelView instances (persistent views create new objects per click).
+        channel_key = str(interaction.channel_id)
+        lock = _get_toggle_lock(channel_key)
+
+        if lock.locked():
+            # Another toggle is already in progress – respond immediately
+            # so Discord doesn't show "interaction failed".
+            await interaction.response.send_message(
+                "⏳ Der Kanal wird gerade umgestellt – bitte einen Moment warten.",
+                ephemeral=True,
+            )
             return
 
-        owner = guild.get_member(int(vc_row["owner_id"]))
-
-        if new_open:
-            # ── Öffentlich ────────────────────────────────────────────────────
-            # default_role darf wieder joinen – einfacher set_permissions Aufruf
-            # (für default_role ist das immer erlaubt ohne manage_roles auf Kanal)
-            try:
-                await main_ch.set_permissions(
-                    guild.default_role,
-                    view_channel=True, connect=True,
-                )
-            except discord.Forbidden:
-                logger.warning("[voice] toggle→öffentlich: Forbidden bei default_role")
-
-            # Warteraum löschen
-            if vc_row.get("wait_channel_id"):
-                wait_ch = guild.get_channel(int(vc_row["wait_channel_id"]))
-                if wait_ch:
-                    try:
-                        await wait_ch.delete(reason="Kanal auf öffentlich gestellt")
-                    except Exception:
-                        pass
-
-            # Zugangs-Rolle löschen
-            await _delete_access_role(guild, vc_row.get("access_role_id"))
-            _update_vc(vc_row["id"], {
-                "is_open": True,
-                "wait_channel_id": None,
-                "access_role_id": None,
-            })
-            msg = "🔓 Kanal ist jetzt öffentlich."
-
-        else:
-            # ── Privat ────────────────────────────────────────────────────────
-            # 1) Zugangs-Rolle erstellen (liegt unter Bot-Rolle → Bot darf sie vergeben)
-            access_role = await _create_access_role(guild, main_ch.name)
-            if not access_role:
-                await interaction.followup.send(
-                    "❌ Konnte Zugangs-Rolle nicht erstellen.\n"
-                    "Stelle sicher dass der Bot **Manage Roles** auf Server-Ebene hat.",
-                    ephemeral=True,
+        async with lock:
+            # ── Re-fetch inside lock: always use latest DB state ──────────────
+            vc_row = _get_vc_by_main(channel_key)
+            if not vc_row:
+                await interaction.response.send_message(
+                    "❌ Kanal nicht mehr gefunden.", ephemeral=True
                 )
                 return
 
-            # 2) Kanal neu konfigurieren mit channel.edit(overwrites=...)
-            # Wir nutzen channel.edit() mit dem kompletten overwrites-Dict –
-            # das ist ein einziger API-Call und braucht nur Manage Channels,
-            # KEIN manage_roles auf dem Kanal.
-            new_overwrites = {
-                guild.default_role: discord.PermissionOverwrite(
-                    view_channel=True, connect=False,
-                ),
-                access_role: discord.PermissionOverwrite(
-                    view_channel=True, connect=True,
-                ),
-                guild.me: discord.PermissionOverwrite(
-                    view_channel=True, connect=True,
-                    move_members=True, manage_channels=True,
-                ),
-            }
-            if owner:
-                new_overwrites[owner] = discord.PermissionOverwrite(
-                    view_channel=True, connect=True,
-                    move_members=True, manage_channels=True,
-                )
-            for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
-                role = guild.get_role(int(rid))
-                if role:
-                    new_overwrites[role] = discord.PermissionOverwrite(
-                        view_channel=True, connect=True, move_members=True,
+            current_is_open = vc_row.get("is_open", True)
+            new_open = not current_is_open
+
+            # ── Optimistic DB lock: flip the flag immediately ─────────────────
+            # Any concurrent request that slips past lock.locked() will re-fetch
+            # and see the already-flipped value, so it won't create a second
+            # waitroom / access role.
+            _update_vc(vc_row["id"], {"is_open": new_open})
+
+            # Safe to defer now – we own the operation
+            await interaction.response.defer(ephemeral=True)
+
+            guild   = interaction.guild
+            main_ch = guild.get_channel(int(vc_row["main_channel_id"]))
+            if not main_ch:
+                # Roll back
+                _update_vc(vc_row["id"], {"is_open": current_is_open})
+                await interaction.followup.send("❌ Voice-Kanal nicht gefunden.", ephemeral=True)
+                return
+
+            owner = guild.get_member(int(vc_row["owner_id"]))
+
+            if new_open:
+                # ── Öffentlich ────────────────────────────────────────────────
+                try:
+                    await main_ch.set_permissions(
+                        guild.default_role,
+                        view_channel=True, connect=True,
                     )
+                except discord.Forbidden:
+                    logger.warning("[voice] toggle→öffentlich: Forbidden bei default_role")
 
-            try:
-                await main_ch.edit(
-                    overwrites=new_overwrites,
-                    sync_permissions=False,
-                    reason="Voice Creator – Kanal auf privat gestellt",
-                )
-            except discord.Forbidden:
-                await _delete_access_role(guild, str(access_role.id))
-                await interaction.followup.send(
-                    "❌ Konnte Kanal-Berechtigungen nicht setzen.\n"
-                    "Stelle sicher dass der Bot **Manage Channels** hat.",
-                    ephemeral=True,
-                )
-                return
+                # Warteraum löschen
+                if vc_row.get("wait_channel_id"):
+                    wait_ch = guild.get_channel(int(vc_row["wait_channel_id"]))
+                    if wait_ch:
+                        try:
+                            await wait_ch.delete(reason="Kanal auf öffentlich gestellt")
+                        except Exception:
+                            pass
 
-            # 3) Aktuellen Mitgliedern im Kanal sofort Zugangs-Rolle geben
-            for m in main_ch.members:
-                if m.id != guild.me.id:
-                    await _grant_access(guild, m, str(access_role.id))
+                # Zugangs-Rolle löschen
+                await _delete_access_role(guild, vc_row.get("access_role_id"))
+                _update_vc(vc_row["id"], {
+                    "is_open": True,
+                    "wait_channel_id": None,
+                    "access_role_id": None,
+                })
+                msg = "🔓 Kanal ist jetzt öffentlich."
 
-            # 4) Warteraum erstellen
-            owner_display = owner.display_name if owner else "Kanal"
-            wait_overwrites = {
-                guild.default_role: discord.PermissionOverwrite(
-                    view_channel=True, connect=True, speak=False, send_messages=False,
-                ),
-                guild.me: discord.PermissionOverwrite(
-                    view_channel=True, connect=True,
-                    move_members=True, manage_channels=True,
-                ),
-                # Zugangs-Rolle: Warteraum nicht nötig, direkt in Hauptkanal
-                access_role: discord.PermissionOverwrite(
-                    view_channel=True, connect=False,
-                ),
-            }
-            if owner:
-                wait_overwrites[owner] = discord.PermissionOverwrite(
-                    view_channel=True, connect=False,
-                )
-            for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
-                role = guild.get_role(int(rid))
-                if role:
-                    wait_overwrites[role] = discord.PermissionOverwrite(
+            else:
+                # ── Privat ────────────────────────────────────────────────────
+
+                # Zugangs-Rolle erstellen
+                access_role = await _create_access_role(guild, main_ch.name)
+                if not access_role:
+                    # Roll back
+                    _update_vc(vc_row["id"], {"is_open": True})
+                    await interaction.followup.send(
+                        "❌ Konnte Zugangs-Rolle nicht erstellen.\n"
+                        "Stelle sicher dass der Bot **Manage Roles** auf Server-Ebene hat.",
+                        ephemeral=True,
+                    )
+                    return
+
+                new_overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(
+                        view_channel=True, connect=False,
+                    ),
+                    access_role: discord.PermissionOverwrite(
+                        view_channel=True, connect=True,
+                    ),
+                    guild.me: discord.PermissionOverwrite(
+                        view_channel=True, connect=True,
+                        move_members=True, manage_channels=True,
+                    ),
+                }
+                if owner:
+                    new_overwrites[owner] = discord.PermissionOverwrite(
+                        view_channel=True, connect=True,
+                        move_members=True, manage_channels=True,
+                    )
+                for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
+                    role = guild.get_role(int(rid))
+                    if role:
+                        new_overwrites[role] = discord.PermissionOverwrite(
+                            view_channel=True, connect=True, move_members=True,
+                        )
+
+                try:
+                    await main_ch.edit(
+                        overwrites=new_overwrites,
+                        sync_permissions=False,
+                        reason="Voice Creator – Kanal auf privat gestellt",
+                    )
+                except discord.Forbidden:
+                    await _delete_access_role(guild, str(access_role.id))
+                    _update_vc(vc_row["id"], {"is_open": True})
+                    await interaction.followup.send(
+                        "❌ Konnte Kanal-Berechtigungen nicht setzen.\n"
+                        "Stelle sicher dass der Bot **Manage Channels** hat.",
+                        ephemeral=True,
+                    )
+                    return
+
+                # Aktuelle Mitglieder bekommen sofort die Zugangs-Rolle
+                for m in main_ch.members:
+                    if m.id != guild.me.id:
+                        await _grant_access(guild, m, str(access_role.id))
+
+                # Warteraum erstellen
+                owner_display = owner.display_name if owner else "Kanal"
+                wait_overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(
+                        view_channel=True, connect=True, speak=False, send_messages=False,
+                    ),
+                    guild.me: discord.PermissionOverwrite(
+                        view_channel=True, connect=True,
+                        move_members=True, manage_channels=True,
+                    ),
+                    access_role: discord.PermissionOverwrite(
+                        view_channel=True, connect=False,
+                    ),
+                }
+                if owner:
+                    wait_overwrites[owner] = discord.PermissionOverwrite(
                         view_channel=True, connect=False,
                     )
+                for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
+                    role = guild.get_role(int(rid))
+                    if role:
+                        wait_overwrites[role] = discord.PermissionOverwrite(
+                            view_channel=True, connect=False,
+                        )
 
-            try:
-                wait_ch = await guild.create_voice_channel(
-                    name=f"⏳ Warteraum – {owner_display}",
-                    category=main_ch.category,
-                    overwrites=wait_overwrites,
-                    reason="Voice Creator – Kanal auf privat gestellt",
+                try:
+                    wait_ch = await guild.create_voice_channel(
+                        name=f"⏳ Warteraum – {owner_display}",
+                        category=main_ch.category,
+                        overwrites=wait_overwrites,
+                        reason="Voice Creator – Kanal auf privat gestellt",
+                    )
+                except discord.Forbidden:
+                    await _delete_access_role(guild, str(access_role.id))
+                    _update_vc(vc_row["id"], {"is_open": True})
+                    await interaction.followup.send(
+                        "❌ Konnte Warteraum nicht erstellen.\n"
+                        "Stelle sicher dass der Bot **Manage Channels** hat.",
+                        ephemeral=True,
+                    )
+                    return
+
+                _update_vc(vc_row["id"], {
+                    "is_open": False,
+                    "wait_channel_id": str(wait_ch.id),
+                    "access_role_id": str(access_role.id),
+                    "user_limit": 0,
+                })
+                msg = (
+                    "🔒 Kanal ist jetzt privat. Aktuelle Mitglieder behalten Zugang. "
+                    "Neue Mitglieder müssen über den Warteraum anfragen."
                 )
-            except discord.Forbidden:
-                await _delete_access_role(guild, str(access_role.id))
-                await interaction.followup.send(
-                    "❌ Konnte Warteraum nicht erstellen.\n"
-                    "Stelle sicher dass der Bot **Manage Channels** hat.",
-                    ephemeral=True,
-                )
-                return
 
-            _update_vc(vc_row["id"], {
-                "is_open": False,
-                "wait_channel_id": str(wait_ch.id),
-                "access_role_id": str(access_role.id),
-                "user_limit": 0,
-            })
-            msg = (
-                "🔒 Kanal ist jetzt privat. Aktuelle Mitglieder behalten Zugang. "
-                "Neue Mitglieder müssen über den Warteraum anfragen."
-            )
-
-        vc_row = _get_vc_by_main(str(interaction.channel_id))
-        await self._refresh_panel(interaction, vc_row)
-        await interaction.followup.send(msg, ephemeral=True)
+            vc_row = _get_vc_by_main(channel_key)
+            await self._refresh_panel(interaction, vc_row)
+            await interaction.followup.send(msg, ephemeral=True)
 
     # ── 👟 Kick ───────────────────────────────────────────────────────────────
 
@@ -611,14 +643,12 @@ class _KickSelectView(discord.ui.View):
             member = interaction.guild.get_member(int(uid))
             if not member:
                 continue
-            # Aus Voice-Kanal entfernen
             if member.voice and member.voice.channel == self.channel:
                 try:
                     await member.move_to(None, reason="Voice-Kick durch Kanalbesitzer")
                 except Exception as e:
                     logger.error(f"[kick] move_to: {e}")
             kicked.append(member.display_name)
-            # Im privaten Modus: Zugangs-Rolle entziehen
             if self.is_private and access_role_id:
                 await _revoke_access(interaction.guild, member, access_role_id)
 
@@ -782,7 +812,6 @@ class WaitingRoomRequestView(discord.ui.View):
         self._done = True
         self.stop()
 
-        # Aus Warteraum entfernen – KEINE Rolle → bleibt gesperrt
         if self._still_waiting():
             try:
                 await self.requester.move_to(None)
@@ -821,10 +850,6 @@ async def _create_voice_channels(
     cfg: dict,
     bot: discord.Client,
 ) -> None:
-    """
-    Erstellt einen öffentlichen Hauptkanal für den Member.
-    Braucht: Manage Channels, Connect, Move Members – KEIN Admin.
-    """
     existing = _get_vc_by_owner(str(guild.id), str(member.id))
     if existing:
         main_ch = guild.get_channel(int(existing["main_channel_id"]))
@@ -926,6 +951,9 @@ async def _delete_vc_channels(guild: discord.Guild, vc_row: dict) -> None:
                 pass
             except Exception as e:
                 logger.warning(f"[cleanup] Kanal {ch_id}: {e}")
+
+    # Auch den Lock für diesen Kanal aufräumen
+    _toggle_locks.pop(str(vc_row.get("main_channel_id", "")), None)
 
     _delete_vc(vc_row["id"])
     logger.info(f"[voice] Cleanup: owner={vc_row['owner_id']}")
@@ -1054,7 +1082,6 @@ class VoiceSetupView(discord.ui.View):
             guild    = interaction.guild
             category = guild.get_channel(int(self.category_id)) if self.category_id else None
 
-            # Permissions-Check vor dem Setup
             me_perms = guild.me.guild_permissions
             missing = []
             if not me_perms.manage_roles:    missing.append("Manage Roles")
@@ -1069,7 +1096,6 @@ class VoiceSetupView(discord.ui.View):
                 )
                 return
 
-            # Alten Erstell-Kanal löschen
             cfg = _get_config(str(guild.id))
             if cfg and cfg.get("channel_id"):
                 old_ch = guild.get_channel(int(cfg["channel_id"]))
@@ -1079,7 +1105,6 @@ class VoiceSetupView(discord.ui.View):
                     except Exception:
                         pass
 
-            # Neuen Erstell-Kanal anlegen
             ow = {
                 guild.default_role: discord.PermissionOverwrite(
                     view_channel=True, connect=True, speak=False,
@@ -1197,7 +1222,6 @@ class VoiceCog(commands.Cog):
             ephemeral=True,
         )
 
-
     @commands.Cog.listener()
     async def on_voice_state_update(
         self,
@@ -1259,7 +1283,6 @@ class VoiceCog(commands.Cog):
         if not main_ch or not wait_ch:
             return
 
-        # Besitzer / Panel-Rollen → direkt verschieben
         if _can_manage(member, vc_row, cfg):
             try:
                 await member.move_to(main_ch)
@@ -1267,7 +1290,6 @@ class VoiceCog(commands.Cog):
                 logger.error(f"[waitroom auto-join] {e}")
             return
 
-        # Hat der User bereits die Zugangs-Rolle (früher angenommen)?
         if _has_access_role(member, vc_row):
             try:
                 await member.move_to(main_ch)
@@ -1275,7 +1297,6 @@ class VoiceCog(commands.Cog):
                 logger.error(f"[waitroom re-join] {e}")
             return
 
-        # Anfrage-Nachricht
         embed = discord.Embed(
             title="🔔 Beitrittsanfrage",
             description=(
