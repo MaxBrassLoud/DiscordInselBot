@@ -1,4 +1,4 @@
-"""applications/cog.py – Discord Cog for the application system."""
+"""applications/cog.py – Discord Cog for the application system (EXTENDED)."""
 
 import discord
 from discord.ext import commands
@@ -7,7 +7,11 @@ from discord import app_commands
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
 from .views import ApplicationSetupView, ApplicationEditView, ApplicationPanelView, ApplicationChannelView
-from .manager import ApplicationManager, load_application
+from .manager import (
+    ApplicationManager, load_application,
+    mark_app_message_deleted, append_app_message_edit,
+    append_app_message,
+)
 
 logger = get_logger("applications")
 
@@ -22,8 +26,6 @@ class ApplicationsCog(commands.Cog):
         await self._restore_channel_views()
 
     async def _restore_panel_view(self):
-        # Register exactly ONE persistent panel view – discord.py routes by custom_id,
-        # so a single registration is enough for all servers.
         self.bot.add_view(ApplicationPanelView(bot=self.bot))
         logger.info("✅ ApplicationPanelView wiederhergestellt")
 
@@ -52,7 +54,6 @@ class ApplicationsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Assign newbie role automatically when a user joins the server."""
         from bot.core.supabase_client import get_supabase
         try:
             supabase  = get_supabase()
@@ -67,9 +68,10 @@ class ApplicationsCog(commands.Cog):
             role = member.guild.get_role(int(newbie_role_id))
             if role:
                 await member.add_roles(role, reason="Automatisch beim Beitreten vergeben")
-                logger.info(f"[on_member_join] Neulings-Rolle vergeben an {member}")
         except Exception as e:
             logger.error(f"[on_member_join] {e}")
+
+    # ── Message Logging ───────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -82,16 +84,60 @@ class ApplicationsCog(commands.Cog):
                 return
             app_id    = int(parts[0])
             server_id = str(message.guild.id)
-            from .manager import append_app_message
             append_app_message(
                 server_id=server_id, app_id=app_id,
                 user=message.author.display_name,
                 user_id=str(message.author.id),
                 content=message.content or "",
                 attachments=[a.url for a in message.attachments],
+                discord_message_id=str(message.id),
             )
         except Exception:
             pass
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        """Track message edits in application channels."""
+        if after.author.bot or not after.guild:
+            return
+        if before.content == after.content:
+            return
+        try:
+            parts = after.channel.name.split("-")
+            if len(parts) < 3 or not parts[0].isdigit() or parts[-1] != "bewerbung":
+                return
+            app_id    = int(parts[0])
+            server_id = str(after.guild.id)
+            append_app_message_edit(
+                server_id=server_id,
+                app_id=app_id,
+                discord_message_id=str(after.id),
+                old_content=before.content or "",
+                new_content=after.content or "",
+            )
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message):
+        """Track message deletions in application channels."""
+        if message.author.bot or not message.guild:
+            return
+        try:
+            parts = message.channel.name.split("-")
+            if len(parts) < 3 or not parts[0].isdigit() or parts[-1] != "bewerbung":
+                return
+            app_id    = int(parts[0])
+            server_id = str(message.guild.id)
+            mark_app_message_deleted(
+                server_id=server_id,
+                app_id=app_id,
+                discord_message_id=str(message.id),
+            )
+        except Exception:
+            pass
+
+    # ── Commands ──────────────────────────────────────────────────────────────
 
     @app_commands.command(name="bewerbung_setup", description="Richte das Bewerbungs-System ein")
     async def bewerbung_setup(self, interaction: discord.Interaction):

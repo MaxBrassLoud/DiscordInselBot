@@ -949,8 +949,10 @@ def api_applications():
 @app.route("/api/applications/<int:app_id>")
 @login_required
 def api_application_detail(app_id):
-    from bot.features.applications.manager import load_application, load_app_messages
-    user      = session["user"]
+    from bot.features.applications.manager import (
+        load_application, load_app_messages, load_app_participants
+    )
+    user = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
 
     if not server_id:
@@ -963,30 +965,65 @@ def api_application_detail(app_id):
     if not can_see_application(user, app_data, server_id):
         return jsonify({"error": "Kein Zugriff auf diese Bewerbung"}), 403
 
-    messages = [{
-        "timestamp":   (m.get("timestamp") or "")[:16].replace("T", " "),
-        "content":     m.get("content") or m.get("message", ""),
-        "attachments": m.get("attachments") or [],
-        "user_name":   m.get("user", "?"),
-        "user_id":     m.get("user_id", ""),
-    } for m in load_app_messages(server_id, app_id)]
+    # Nachrichten mit vollständigen Metadaten (edit/delete)
+    messages = []
+    for m in load_app_messages(server_id, app_id):
+        messages.append({
+            "id": m.get("id"),
+            "discord_message_id": m.get("discord_message_id"),
+            "timestamp": (m.get("timestamp") or "")[:16].replace("T", " "),
+            "content": m.get("content") or m.get("message", ""),
+            "attachments": m.get("attachments") or [],
+            "user_name": m.get("user", "?"),
+            "user_id": m.get("user_id", ""),
+            "is_deleted": bool(m.get("is_deleted", False)),
+            "deleted_at": (m.get("deleted_at") or "")[:16].replace("T", " ")
+            if m.get("deleted_at") else None,
+            "edit_history": [
+                {
+                    "content": e.get("content", ""),
+                    "edited_at": (e.get("edited_at") or "")[:16].replace("T", " "),
+                }
+                for e in (m.get("edit_history") or [])
+            ],
+        })
+
+    # Teilnehmer – graceful fallback für ältere Bewerbungen
+    try:
+        participants_raw = load_app_participants(server_id, app_id)
+        participants = [
+            {
+                "user_id": p.get("user_id", ""),
+                "user_name": p.get("user_name", "?"),
+                "avatar_url": p.get("avatar_url"),
+                "action": p.get("action", "message"),
+                "message_count": p.get("message_count", 0),
+                "first_seen": (p.get("first_seen") or "")[:16].replace("T", " "),
+                "last_seen": (p.get("last_seen") or "")[:16].replace("T", " "),
+            }
+            for p in participants_raw
+        ]
+    except Exception as e:
+        log.warning(f"[api_application_detail] Participants-Load fehlgeschlagen: {e}")
+        participants = []
 
     aid = app_data.get("app_id") or app_data.get("id")
     return jsonify({
         "app": {
-            "app_id":           aid,
-            "creator_id":       app_data.get("creator_id", ""),
-            "creator_name":     app_data.get("creator_name") or "Unbekannt",
-            "minecraft_name":   app_data.get("minecraft_name", ""),
-            "status":           app_data.get("status", "open"),
+            "app_id": aid,
+            "creator_id": app_data.get("creator_id", ""),
+            "creator_name": app_data.get("creator_name") or "Unbekannt",
+            "minecraft_name": app_data.get("minecraft_name", ""),
+            "status": app_data.get("status", "open"),
             "rejection_reason": app_data.get("rejection_reason", ""),
-            "answers":          app_data.get("answers") or [],
-            "content":          app_data.get("content", ""),
-            "created_at":       (app_data.get("created_at") or "")[:10],
-            "closed_at":        (app_data.get("closed_at") or "")[:10],
-            "claimed_by":       app_data.get("claimed_by"),
+            "answers": app_data.get("answers") or [],
+            "content": app_data.get("content", ""),
+            "created_at": (app_data.get("created_at") or "")[:10],
+            "closed_at": (app_data.get("closed_at") or "")[:10],
+            "claimed_by": app_data.get("claimed_by"),
         },
-        "messages":  messages,
+        "messages": messages,
+        "participants": participants,
         "server_id": server_id,
     })
 

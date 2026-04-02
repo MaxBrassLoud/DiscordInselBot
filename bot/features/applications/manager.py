@@ -1,26 +1,33 @@
 """
-applications/manager.py
-========================
-Bewerbungs-Lifecycle – Erstellen, Annehmen, Ablehnen.
-Alle Daten werden in Supabase gespeichert; kein lokales Dateisystem mehr.
+applications/manager.py  (EXTENDED VERSION)
+============================================
+Erweitert um:
+  - discord_message_id Tracking für Nachrichten
+  - mark_app_message_deleted() – Lösch-Markierung
+  - append_app_message_edit()  – Bearbeitungs-History
+  - load_app_participants()    – Teilnehmer-Tracking
 
-Supabase-Tabellen:
-  applications         – Bewerbungs-Metadaten (bereits vorhanden)
-  application_messages – Nachrichten / Kommentare
+Neue Supabase-Spalten (einmalig ausführen):
+    ALTER TABLE application_messages ADD COLUMN IF NOT EXISTS is_deleted    BOOLEAN     DEFAULT FALSE;
+    ALTER TABLE application_messages ADD COLUMN IF NOT EXISTS deleted_at    TIMESTAMPTZ;
+    ALTER TABLE application_messages ADD COLUMN IF NOT EXISTS edit_history  JSONB       DEFAULT '[]';
+    ALTER TABLE application_messages ADD COLUMN IF NOT EXISTS discord_message_id TEXT;
 
-SQL für application_messages (einmalig ausführen):
-    CREATE TABLE IF NOT EXISTS application_messages (
-        id          BIGSERIAL PRIMARY KEY,
-        app_id      INTEGER NOT NULL,
-        server_id   TEXT    NOT NULL,
-        user_name   TEXT,
-        user_id     TEXT,
-        content     TEXT,
-        attachments JSONB   DEFAULT '[]',
-        timestamp   TIMESTAMPTZ DEFAULT now()
+    CREATE TABLE IF NOT EXISTS application_participants (
+        id            BIGSERIAL PRIMARY KEY,
+        app_id        INTEGER NOT NULL,
+        server_id     TEXT    NOT NULL,
+        user_id       TEXT    NOT NULL,
+        user_name     TEXT,
+        avatar_url    TEXT,
+        action        TEXT    DEFAULT 'message',
+        first_seen    TIMESTAMPTZ DEFAULT now(),
+        last_seen     TIMESTAMPTZ DEFAULT now(),
+        message_count INTEGER DEFAULT 0,
+        UNIQUE (app_id, server_id, user_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_app_messages_app
-        ON application_messages (server_id, app_id);
+    CREATE INDEX IF NOT EXISTS idx_app_participants
+        ON application_participants (server_id, app_id);
 """
 
 from __future__ import annotations
@@ -45,7 +52,6 @@ WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000")
 # ══════════════════════════════════════════════════════════════════════════════
 
 def save_application(server_id: str, app_id: int, data: dict):
-    """Upsert application metadata into Supabase."""
     supabase = get_supabase()
     row = {
         "app_id":            data.get("app_id", app_id),
@@ -58,7 +64,6 @@ def save_application(server_id: str, app_id: int, data: dict):
         "closed_at":         data.get("closed_at"),
         "channel_id":        data.get("channel_id"),
         "rejection_reason":  data.get("rejection_reason"),
-        # extra fields
         "creator_name":      data.get("creator_name"),
         "closed_by":         data.get("closed_by"),
     }
@@ -78,7 +83,6 @@ def save_application(server_id: str, app_id: int, data: dict):
 
 
 def load_application(server_id: str, app_id: int) -> dict | None:
-    """Load application metadata from Supabase."""
     supabase = get_supabase()
     result = (
         supabase.table("applications")
@@ -95,10 +99,13 @@ def load_application(server_id: str, app_id: int) -> dict | None:
 
 
 def update_application(server_id: str, app_id: int, fields: dict):
-    """Partial update of application columns."""
     supabase = get_supabase()
     supabase.table("applications").update(fields).eq("app_id", app_id).eq("server_id", server_id).execute()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Message helpers (extended)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def load_app_messages(server_id: str, app_id: int) -> list[dict]:
     """Load all messages for an application, ordered by timestamp."""
@@ -115,12 +122,18 @@ def load_app_messages(server_id: str, app_id: int) -> list[dict]:
     out = []
     for r in rows:
         out.append({
-            "timestamp":   r.get("timestamp", ""),
-            "user":        r.get("user_name", "?"),
-            "user_id":     r.get("user_id", ""),
-            "content":     r.get("content", ""),
-            "attachments": r.get("attachments") or [],
+            "id":                 r.get("id"),
+            "discord_message_id": r.get("discord_message_id"),
+            "timestamp":          r.get("timestamp", ""),
+            "user":               r.get("user_name", "?"),
+            "user_id":            r.get("user_id", ""),
+            "content":            r.get("content", ""),
+            "attachments":        r.get("attachments") or [],
+            "is_deleted":         bool(r.get("is_deleted", False)),
+            "deleted_at":         r.get("deleted_at"),
+            "edit_history":       r.get("edit_history") or [],
             # legacy keys
+            "message": r.get("content", ""),
             "author": {
                 "username":    r.get("user_name", "?"),
                 "id":          r.get("user_id", ""),
@@ -135,14 +148,137 @@ def append_app_message(server_id: str, app_id: int, **kwargs):
     """Append a single message to application_messages."""
     supabase = get_supabase()
     supabase.table("application_messages").insert({
-        "app_id":      app_id,
-        "server_id":   server_id,
-        "user_name":   kwargs.get("user", "?"),
-        "user_id":     kwargs.get("user_id", ""),
-        "content":     kwargs.get("content", ""),
-        "attachments": kwargs.get("attachments") or [],
-        "timestamp":   kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+        "app_id":             app_id,
+        "server_id":          server_id,
+        "user_name":          kwargs.get("user", "?"),
+        "user_id":            kwargs.get("user_id", ""),
+        "content":            kwargs.get("content", ""),
+        "attachments":        kwargs.get("attachments") or [],
+        "timestamp":          kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+        "discord_message_id": kwargs.get("discord_message_id"),
+        "is_deleted":         False,
+        "edit_history":       [],
     }).execute()
+
+    # Teilnehmer tracken
+    uid = kwargs.get("user_id", "")
+    uname = kwargs.get("user", "?")
+    if uid:
+        _upsert_app_participant(server_id, app_id, uid, uname, action="message")
+
+
+def mark_app_message_deleted(server_id: str, app_id: int, discord_message_id: str):
+    """Markiert eine Bewerbungs-Nachricht als gelöscht."""
+    supabase = get_supabase()
+    supabase.table("application_messages").update({
+        "is_deleted": True,
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("server_id", server_id)\
+      .eq("app_id", app_id)\
+      .eq("discord_message_id", discord_message_id)\
+      .execute()
+
+
+def append_app_message_edit(
+    server_id: str,
+    app_id: int,
+    discord_message_id: str,
+    old_content: str,
+    new_content: str,
+):
+    """Fügt einen Edit-Eintrag zur edit_history hinzu und aktualisiert content."""
+    supabase = get_supabase()
+    result = supabase.table("application_messages")\
+        .select("id, edit_history, content")\
+        .eq("server_id", server_id)\
+        .eq("app_id", app_id)\
+        .eq("discord_message_id", discord_message_id)\
+        .execute()
+    if not result.data:
+        return
+    row = result.data[0]
+    history = row.get("edit_history") or []
+    history.append({
+        "content":   old_content,
+        "edited_at": datetime.now(timezone.utc).isoformat(),
+    })
+    supabase.table("application_messages").update({
+        "content":      new_content,
+        "edit_history": history,
+    }).eq("id", row["id"]).execute()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Participants
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _upsert_app_participant(
+    server_id: str,
+    app_id: int,
+    user_id: str,
+    user_name: str,
+    action: str = "message",
+    avatar_url: str | None = None,
+):
+    supabase = get_supabase()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        existing = supabase.table("application_participants")\
+            .select("id, message_count")\
+            .eq("app_id", app_id)\
+            .eq("server_id", server_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        if existing.data:
+            row = existing.data[0]
+            upd: dict = {"last_seen": now}
+            if action == "message":
+                upd["message_count"] = (row.get("message_count") or 0) + 1
+            if avatar_url:
+                upd["avatar_url"] = avatar_url
+            if user_name:
+                upd["user_name"] = user_name
+            supabase.table("application_participants").update(upd).eq("id", row["id"]).execute()
+        else:
+            supabase.table("application_participants").insert({
+                "app_id":        app_id,
+                "server_id":     server_id,
+                "user_id":       user_id,
+                "user_name":     user_name,
+                "avatar_url":    avatar_url,
+                "action":        action,
+                "first_seen":    now,
+                "last_seen":     now,
+                "message_count": 1 if action == "message" else 0,
+            }).execute()
+    except Exception as e:
+        logger.warning(f"[_upsert_app_participant] {e}")
+
+
+def load_app_participants(server_id: str, app_id: int) -> list[dict]:
+    supabase = get_supabase()
+    try:
+        result = supabase.table("application_participants")\
+            .select("*")\
+            .eq("app_id", app_id)\
+            .eq("server_id", server_id)\
+            .order("message_count", desc=True)\
+            .execute()
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"[load_app_participants] {e}")
+        return []
+
+
+def add_app_participant_event(
+    server_id: str,
+    app_id: int,
+    user_id: str,
+    user_name: str,
+    action: str,
+    avatar_url: str | None = None,
+):
+    _upsert_app_participant(server_id, app_id, user_id, user_name, action, avatar_url)
 
 
 def app_web_url(server_id: str, app_id: int) -> str:
@@ -194,7 +330,7 @@ async def check_rejection_cooldown(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HTML log builder (in-memory)
+# HTML log builder
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_app_log_html(app: dict, messages: list[dict], actor_name: str) -> bytes:
@@ -209,6 +345,8 @@ def build_app_log_html(app: dict, messages: list[dict], actor_name: str) -> byte
 
     rows = ""
     for msg in messages:
+        if msg.get("is_deleted"):
+            continue  # Gelöschte Nachrichten im HTML-Log weglassen
         user    = escape(str(msg.get("user", "?")))
         content = escape(str(msg.get("content", "")))
         ts      = str(msg.get("timestamp", ""))[:19].replace("T", " ")
@@ -335,20 +473,6 @@ class ApplicationManager:
         category_id = cfg.get("category_id")
         category    = guild.get_channel(int(category_id)) if category_id else None
 
-        # ── Kategorie-Permissions debuggen ───────────────────────────────────
-        if category:
-            cat_overwrite = category.overwrites_for(guild.me)
-            logger.debug(f"[create_application] Kategorie '{category.name}' Overwrite für Bot: "
-                         f"view={cat_overwrite.view_channel}, "
-                         f"manage_channels={cat_overwrite.manage_channels}, "
-                         f"send_messages={cat_overwrite.send_messages}")
-            logger.debug(f"[create_application] Bot-Perms IN Kategorie: "
-                         f"manage_channels={category.permissions_for(guild.me).manage_channels}, "
-                         f"view={category.permissions_for(guild.me).view_channel}")
-        else:
-            logger.debug("[create_application] Keine Kategorie konfiguriert – Channel wird ohne Kategorie erstellt")
-        # ─────────────────────────────────────────────────────────────────────
-
         staff_role_ids = [r.strip() for r in (cfg.get("staff_role_ids") or "").split(",") if r.strip()]
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -360,8 +484,6 @@ class ApplicationManager:
             if role:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        logger.debug(f"[create_application] Erstelle Channel '{channel_name}' in Kategorie {category}")
-        logger.debug(f"[create_application] Bot-Permissions: {guild.me.guild_permissions.value}")
         try:
             channel = await guild.create_text_channel(
                 name=channel_name, category=category, overwrites=overwrites,
@@ -385,6 +507,14 @@ class ApplicationManager:
             "rejection_reason": None,
         }
         save_application(server_id, app_id, app_data)
+
+        # Ersteller als ersten Teilnehmer eintragen
+        _upsert_app_participant(
+            server_id, app_id,
+            str(applicant.id), applicant.display_name,
+            action="created",
+            avatar_url=str(applicant.display_avatar.url) if applicant.display_avatar else None,
+        )
 
         return channel, app_id
 
@@ -424,11 +554,19 @@ class ApplicationManager:
 
         update_application(server_id, app_id, {"status": "accepted", "closed_at": now, "closed_by": str(acceptor.id)})
 
+        # Acceptor als Teilnehmer tracken
+        _upsert_app_participant(
+            server_id, app_id,
+            str(acceptor.id), acceptor.display_name,
+            action="closed",
+            avatar_url=str(acceptor.display_avatar.url) if acceptor.display_avatar else None,
+        )
+
         if applicant:
             try:
                 messages   = load_app_messages(server_id, app_id)
                 html_bytes = build_app_log_html(app, messages, acceptor.display_name)
-                log_file   = discord.File(fp=io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
+                log_file   = discord.File(fp=__import__('io').BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="🎉 Deine Bewerbung wurde angenommen!",
                     description=(
@@ -471,6 +609,14 @@ class ApplicationManager:
             "rejection_reason": reason,
         })
 
+        # Rejector als Teilnehmer tracken
+        _upsert_app_participant(
+            server_id, app_id,
+            str(rejector.id), rejector.display_name,
+            action="closed",
+            avatar_url=str(rejector.display_avatar.url) if rejector.display_avatar else None,
+        )
+
         applicant      = guild.get_member(int(app["creator_id"]))
         cooldown_hours = int(cfg.get("rejection_cooldown_hours") or 0)
         cooldown_text  = ""
@@ -487,7 +633,7 @@ class ApplicationManager:
                 messages           = load_app_messages(server_id, app_id)
                 app["rejection_reason"] = reason
                 html_bytes         = build_app_log_html(app, messages, rejector.display_name)
-                log_file           = discord.File(fp=io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
+                log_file           = discord.File(fp=__import__('io').BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="❌ Deine Bewerbung wurde abgelehnt",
                     description=(
