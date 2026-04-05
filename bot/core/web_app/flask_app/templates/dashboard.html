@@ -6,6 +6,101 @@
   <title>Dashboard – Insel Bot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    /* ── Search Bar ─────────────────────────────────────────── */
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      min-width: 200px;
+      max-width: 380px;
+    }
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text3);
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+    }
+    .search-input {
+      width: 100%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.83rem;
+      padding: 7px 34px 7px 32px;
+      border-radius: var(--r-sm);
+      outline: none;
+      transition: border-color var(--fast), box-shadow var(--fast);
+    }
+    .search-input:focus {
+      border-color: var(--green2);
+      box-shadow: 0 0 0 3px rgba(34,197,94,0.15);
+    }
+    .search-clear {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text3);
+      cursor: pointer;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 0.85rem;
+      line-height: 1;
+      display: none;
+      transition: color var(--fast);
+    }
+    .search-clear:hover { color: var(--text); }
+    .search-clear.visible { display: block; }
+
+    /* ── Search State Indicator ─────────────────────────────── */
+    .search-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--green-g2);
+      border: 1px solid rgba(74,222,128,0.22);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 0.74rem;
+      color: var(--green);
+      font-weight: 600;
+    }
+    .search-badge-close {
+      background: none; border: none;
+      color: var(--green); cursor: pointer;
+      font-size: 0.8rem; padding: 0 2px;
+      line-height: 1;
+      opacity: 0.7;
+      transition: opacity var(--fast);
+    }
+    .search-badge-close:hover { opacity: 1; }
+
+    /* highlight matched text */
+    mark {
+      background: rgba(74,222,128,0.25);
+      color: var(--green);
+      border-radius: 2px;
+      padding: 0 1px;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: -400px 0; }
+      100% { background-position: 400px 0; }
+    }
+    .nav-skeleton {
+      background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-hover) 50%, var(--bg-surface) 75%);
+      background-size: 400px 100%;
+      animation: shimmer 1.4s ease infinite;
+      border-radius: 4px;
+    }
+  </style>
 </head>
 <body class="dash-body">
 
@@ -88,6 +183,7 @@
     <!-- Loading skeleton -->
     <div id="skeleton">
       <div class="filter-bar">
+        <div class="nav-skeleton" style="width:240px; height:34px; border-radius:6px;"></div>
         <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
         <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
         <div class="nav-skeleton" style="width:130px; height:34px; border-radius:6px;"></div>
@@ -112,24 +208,16 @@
 
 </div>
 
-<style>
-@keyframes shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position: 400px 0; }
-}
-.nav-skeleton {
-  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-hover) 50%, var(--bg-surface) 75%);
-  background-size: 400px 100%;
-  animation: shimmer 1.4s ease infinite;
-  border-radius: 4px;
-}
-</style>
-
 <script>
 const SERVER_ID  = {{ server_id | tojson }};
 const ACTIVE_TAB = {{ active_tab | tojson }};
 
-// ── Sidebar server list ────────────────────────────────────────
+// ── Search state ───────────────────────────────────────────────────────────
+let _searchQuery   = "";
+let _searchTimeout = null;
+let _isSearchMode  = false;
+
+// ── Sidebar server list ────────────────────────────────────────────────────
 
 async function loadServers() {
   try {
@@ -156,11 +244,73 @@ async function loadServers() {
   }
 }
 
-// ── Main content ───────────────────────────────────────────────
+// ── Search ─────────────────────────────────────────────────────────────────
+
+function onSearchInput(value) {
+  const clearBtn = document.getElementById('searchClear');
+  if (clearBtn) clearBtn.classList.toggle('visible', value.length > 0);
+
+  clearTimeout(_searchTimeout);
+  if (value.length === 0) {
+    _searchQuery  = "";
+    _isSearchMode = false;
+    loadContent();
+    return;
+  }
+  if (value.length < 2) return;
+
+  _searchTimeout = setTimeout(() => {
+    _searchQuery  = value;
+    _isSearchMode = true;
+    loadSearch(value);
+  }, 350);
+}
+
+function clearSearch() {
+  const inp = document.getElementById('searchInput');
+  if (inp) inp.value = "";
+  const clearBtn = document.getElementById('searchClear');
+  if (clearBtn) clearBtn.classList.remove('visible');
+  _searchQuery  = "";
+  _isSearchMode = false;
+  loadContent();
+}
+
+async function loadSearch(q) {
+  if (!SERVER_ID) return;
+  showSkeleton(false);
+
+  const apiBase = ACTIVE_TAB === 'tickets'
+    ? `/api/tickets/search`
+    : `/api/applications/search`;
+  const url = `${apiBase}?q=${encodeURIComponent(q)}&server_id=${SERVER_ID}`;
+
+  try {
+    const res  = await fetch(url);
+    if (!res.ok) { showError(`HTTP ${res.status}`); return; }
+    const data = await res.json();
+
+    if (ACTIVE_TAB === 'tickets') {
+      renderTickets(data.tickets || [], [], new URLSearchParams(), q);
+    } else {
+      renderApplications(data.applications || [], new URLSearchParams(), q);
+    }
+  } catch(e) {
+    showError('Netzwerkfehler: ' + e.message);
+  }
+}
+
+// ── Main content ───────────────────────────────────────────────────────────
 
 async function loadContent() {
   if (!SERVER_ID) {
     showNoServer();
+    return;
+  }
+
+  // Wenn Suche aktiv, Suchergebnisse laden
+  if (_isSearchMode && _searchQuery.length >= 2) {
+    await loadSearch(_searchQuery);
     return;
   }
 
@@ -174,9 +324,9 @@ async function loadContent() {
     const data = await res.json();
 
     if (ACTIVE_TAB === 'tickets') {
-      renderTickets(data.tickets || [], data.modules || [], params);
+      renderTickets(data.tickets || [], data.modules || [], params, "");
     } else {
-      renderApplications(data.applications || [], params);
+      renderApplications(data.applications || [], params, "");
     }
 
     updateTopbar();
@@ -199,21 +349,63 @@ async function updateTopbar() {
   } catch(_) {}
 }
 
-// ── Ticket rendering ───────────────────────────────────────────
+// ── Highlight helper ───────────────────────────────────────────────────────
 
-function renderTickets(tickets, modules, params) {
+function highlightText(text, query) {
+  if (!query || !text) return escHtml(text || '');
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts   = String(text).split(new RegExp(`(${escaped})`, 'gi'));
+  return parts.map(p =>
+    p.toLowerCase() === query.toLowerCase()
+      ? `<mark>${escHtml(p)}</mark>`
+      : escHtml(p)
+  ).join('');
+}
+
+// ── Search badge ───────────────────────────────────────────────────────────
+
+function renderSearchBadge(q, count) {
+  return `<span class="search-badge">
+    🔍 "${escHtml(q)}" – ${count} Ergebnis${count !== 1 ? 'se' : ''}
+    <button class="search-badge-close" onclick="clearSearch()" title="Suche zurücksetzen">✕</button>
+  </span>`;
+}
+
+// ── Ticket rendering ───────────────────────────────────────────────────────
+
+function renderTickets(tickets, modules, params, searchQuery) {
   showSkeleton(false);
 
-  const statusF = params.get('status') || '';
-  const moduleF = params.get('module') || '';
-  const sortF   = params.get('sort')   || 'newest';
-  const legacyF = params.get('legacy') || '';
+  const isSearch = !!searchQuery;
+  const statusF  = params.get('status') || '';
+  const moduleF  = params.get('module') || '';
+  const sortF    = params.get('sort')   || 'newest';
+  const legacyF  = params.get('legacy') || '';
 
   const moduleOpts = modules.map(m =>
     `<option value="${escHtml(m)}" ${moduleF===m?'selected':''}>${escHtml(m)}</option>`).join('');
 
+  // Suchleiste + Filter
   const filterBar = `
     <div class="filter-bar">
+      <div class="search-wrap">
+        <span class="search-icon">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+        </span>
+        <input
+          type="text"
+          id="searchInput"
+          class="search-input"
+          placeholder="Suche nach Spieler, Titel, Inhalt…"
+          value="${escHtml(searchQuery)}"
+          oninput="onSearchInput(this.value)"
+          autocomplete="off"
+        >
+        <button class="search-clear ${searchQuery ? 'visible' : ''}" id="searchClear" onclick="clearSearch()" title="Suche löschen">✕</button>
+      </div>
+      ${isSearch ? renderSearchBadge(searchQuery, tickets.length) : `
       <form class="filter-form" id="filterForm">
         <input type="hidden" name="server_id" value="${escHtml(SERVER_ID)}">
         <select class="filter-select" name="status" onchange="submitFilter()">
@@ -229,18 +421,21 @@ function renderTickets(tickets, modules, params) {
           <option value="1" ${legacyF==='1' ?'selected':''}>📦 Nur Legacy</option>
         </select>
         <select class="filter-select" name="sort" onchange="submitFilter()">
-          <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
-          <option value="oldest" ${sortF==='oldest'?'selected':''}>Älteste zuerst</option>
+          <option value="newest"    ${sortF==='newest'   ?'selected':''}>Neueste zuerst</option>
+          <option value="oldest"    ${sortF==='oldest'   ?'selected':''}>Älteste zuerst</option>
+          <option value="name_asc"  ${sortF==='name_asc' ?'selected':''}>Name A → Z</option>
+          <option value="name_desc" ${sortF==='name_desc'?'selected':''}>Name Z → A</option>
         </select>
-      </form>
+      </form>`}
       <span class="filter-count">${tickets.length} Ticket${tickets.length!==1?'s':''}</span>
     </div>`;
 
   if (tickets.length === 0) {
     inject(filterBar + `<div class="empty-state">
-      <div class="empty-icon">🎫</div>
-      <div class="empty-title">Keine Tickets gefunden</div>
-      <p>Mit den aktuellen Filtern gibt es keine Ergebnisse.</p></div>`);
+      <div class="empty-icon">${isSearch ? '🔍' : '🎫'}</div>
+      <div class="empty-title">${isSearch ? 'Keine Ergebnisse gefunden' : 'Keine Tickets gefunden'}</div>
+      <p>${isSearch ? `Keine Tickets für "${escHtml(searchQuery)}" gefunden.` : 'Mit den aktuellen Filtern gibt es keine Ergebnisse.'}</p>
+    </div>`);
     return;
   }
 
@@ -251,13 +446,24 @@ function renderTickets(tickets, modules, params) {
       ? `<span class="module-chip">${escHtml(t.module)}</span> ${legacy}`
       : (legacy || '<span class="muted">—</span>');
     const avatar = `<div class="avatar-ph" id="av-${t.creator_id}">${(t.creator_name||'?').slice(0,1)}</div>`;
+
+    const titleText = t.title || `Ticket #${t.ticket_id}`;
+    const nameText  = t.creator_name;
+    const titleHtml = isSearch
+      ? highlightText(titleText, searchQuery)
+      : escHtml(titleText);
+    const nameHtml  = isSearch
+      ? highlightText(nameText, searchQuery)
+      : escHtml(nameText);
+
     const titleLink = t.imported
-      ? `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link muted">${escHtml(t.title)}</a>`
-      : `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link">${escHtml(t.title)}</a>`;
+      ? `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link muted">${titleHtml}</a>`
+      : `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link">${titleHtml}</a>`;
+
     return `<tr class="${t.imported ? 'legacy-row' : ''}">
       <td><span class="mono">#${t.ticket_id}</span></td>
       <td>${titleLink}</td>
-      <td><div class="creator-cell">${avatar}<span id="name-${t.creator_id}">${escHtml(t.creator_name)}</span></div></td>
+      <td><div class="creator-cell">${avatar}<span id="name-${t.creator_id}">${nameHtml}</span></div></td>
       <td>${module}</td>
       <td>${badge}</td>
       <td><span class="mono">${t.created_at||'—'}</span></td>
@@ -272,17 +478,36 @@ function renderTickets(tickets, modules, params) {
   uniqueIds.forEach(uid => loadMemberLazy(uid));
 }
 
-// ── Application rendering ──────────────────────────────────────
+// ── Application rendering ──────────────────────────────────────────────────
 
-function renderApplications(apps, params) {
+function renderApplications(apps, params, searchQuery) {
   showSkeleton(false);
 
-  const statusF = params.get('status') || '';
-  const sortF   = params.get('sort')   || 'newest';
-  const legacyF = params.get('legacy') || '';
+  const isSearch = !!searchQuery;
+  const statusF  = params.get('status') || '';
+  const sortF    = params.get('sort')   || 'newest';
+  const legacyF  = params.get('legacy') || '';
 
   const filterBar = `
     <div class="filter-bar">
+      <div class="search-wrap">
+        <span class="search-icon">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+        </span>
+        <input
+          type="text"
+          id="searchInput"
+          class="search-input"
+          placeholder="Suche nach Spieler, Minecraft-Name, Inhalt…"
+          value="${escHtml(searchQuery)}"
+          oninput="onSearchInput(this.value)"
+          autocomplete="off"
+        >
+        <button class="search-clear ${searchQuery ? 'visible' : ''}" id="searchClear" onclick="clearSearch()" title="Suche löschen">✕</button>
+      </div>
+      ${isSearch ? renderSearchBadge(searchQuery, apps.length) : `
       <form class="filter-form" id="filterForm">
         <input type="hidden" name="server_id" value="${escHtml(SERVER_ID)}">
         <select class="filter-select" name="status" onchange="submitFilter()">
@@ -298,33 +523,45 @@ function renderApplications(apps, params) {
           <option value="1" ${legacyF==='1' ?'selected':''}>📦 Nur Legacy</option>
         </select>
         <select class="filter-select" name="sort" onchange="submitFilter()">
-          <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
-          <option value="oldest" ${sortF==='oldest'?'selected':''}>Älteste zuerst</option>
+          <option value="newest"    ${sortF==='newest'   ?'selected':''}>Neueste zuerst</option>
+          <option value="oldest"    ${sortF==='oldest'   ?'selected':''}>Älteste zuerst</option>
+          <option value="name_asc"  ${sortF==='name_asc' ?'selected':''}>Name A → Z</option>
+          <option value="name_desc" ${sortF==='name_desc'?'selected':''}>Name Z → A</option>
         </select>
-      </form>
+      </form>`}
       <span class="filter-count">${apps.length} Bewerbung${apps.length!==1?'en':''}</span>
     </div>`;
 
   if (apps.length === 0) {
     inject(filterBar + `<div class="empty-state">
-      <div class="empty-icon">📋</div>
-      <div class="empty-title">Keine Bewerbungen gefunden</div>
-      <p>Mit den aktuellen Filtern gibt es keine Ergebnisse.</p></div>`);
+      <div class="empty-icon">${isSearch ? '🔍' : '📋'}</div>
+      <div class="empty-title">${isSearch ? 'Keine Ergebnisse gefunden' : 'Keine Bewerbungen gefunden'}</div>
+      <p>${isSearch ? `Keine Bewerbungen für "${escHtml(searchQuery)}" gefunden.` : 'Mit den aktuellen Filtern gibt es keine Ergebnisse.'}</p>
+    </div>`);
     return;
   }
 
   const rows = apps.map(a => {
     const badge  = statusBadgeApp(a.status);
     const legacy = a.imported ? `<span class="badge-legacy">📦 Legacy</span>` : '';
-    const mc     = a.minecraft_name
-      ? `<span class="mono-green">⛏ ${escHtml(a.minecraft_name)}</span> ${legacy}`
+
+    const nameHtml = isSearch
+      ? highlightText(a.creator_name, searchQuery)
+      : escHtml(a.creator_name);
+    const mcHtml = isSearch && a.minecraft_name
+      ? highlightText(a.minecraft_name, searchQuery)
+      : escHtml(a.minecraft_name || '');
+
+    const mc = a.minecraft_name
+      ? `<span class="mono-green">⛏ ${mcHtml}</span> ${legacy}`
       : (legacy || '<span class="muted">—</span>');
+
     const avatar = `<div class="avatar-ph" id="av-${a.creator_id}">${(a.creator_name||'?').slice(0,1)}</div>`;
     return `<tr class="${a.imported ? 'legacy-row' : ''}">
       <td><span class="mono">#${a.app_id}</span></td>
       <td><a href="/dashboard/applications/${a.app_id}?server_id=${SERVER_ID}"
         class="row-link${a.imported ? ' muted' : ''}">
-        <div class="creator-cell">${avatar}<span id="name-${a.creator_id}">${escHtml(a.creator_name)}</span></div>
+        <div class="creator-cell">${avatar}<span id="name-${a.creator_id}">${nameHtml}</span></div>
       </a></td>
       <td>${mc}</td>
       <td>${badge}</td>
@@ -340,7 +577,7 @@ function renderApplications(apps, params) {
   uniqueIds.forEach(uid => loadMemberLazy(uid));
 }
 
-// ── Lazy member enrichment ─────────────────────────────────────
+// ── Lazy member enrichment ─────────────────────────────────────────────────
 
 const _memberFetched = new Set();
 
@@ -351,7 +588,14 @@ async function loadMemberLazy(uid) {
     const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
     const data = await res.json();
     if (data.name) {
-      document.querySelectorAll(`#name-${uid}`).forEach(el => el.textContent = data.name);
+      document.querySelectorAll(`#name-${uid}`).forEach(el => {
+        // Preserve highlight if in search mode
+        if (_isSearchMode && _searchQuery) {
+          el.innerHTML = highlightText(data.name, _searchQuery);
+        } else {
+          el.textContent = data.name;
+        }
+      });
     }
     if (data.avatar) {
       document.querySelectorAll(`#av-${uid}`).forEach(el => {
@@ -361,7 +605,7 @@ async function loadMemberLazy(uid) {
   } catch(_) {}
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function statusBadge(status) {
   const map = {
@@ -410,6 +654,15 @@ function showSkeleton(show) {
 
 function inject(html) {
   document.getElementById('realContent').innerHTML = html;
+
+  // Nach dem Rendern: Fokus auf Suchfeld wiederherstellen wenn aktiv
+  if (_isSearchMode) {
+    const inp = document.getElementById('searchInput');
+    if (inp && document.activeElement !== inp) {
+      const val = inp.value;
+      inp.setSelectionRange(val.length, val.length);
+    }
+  }
 }
 
 function submitFilter() {
