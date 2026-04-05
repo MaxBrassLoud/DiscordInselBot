@@ -787,6 +787,9 @@ def api_tickets():
     ).eq("server_id", server_id)
     if status_f: q = q.eq("status", status_f)
     if module_f: q = q.eq("module", module_f)
+    legacy_f = request.args.get("legacy", "")
+    if legacy_f == "1": q = q.eq("imported", True)
+    elif legacy_f == "0": q = q.eq("imported", False)
     q = q.order("created_at", desc=(sort_f != "oldest"))
 
     try:
@@ -803,13 +806,15 @@ def api_tickets():
             continue
         tid = t.get("ticket_id")
         out.append({
-            "ticket_id":    tid,
-            "title":        t.get("title") or f"Ticket #{tid}",
-            "module":       t.get("module", ""),
-            "status":       t.get("status", "open"),
-            "creator_id":   t.get("creator_id", ""),
-            "creator_name": t.get("creator_name") or "Unbekannt",
-            "created_at":   (t.get("created_at") or "")[:10],
+            "ticket_id":     tid,
+            "title":         t.get("title") or f"Ticket #{tid}",
+            "module":        t.get("module", ""),
+            "status":        t.get("status", "open"),
+            "creator_id":    t.get("creator_id", ""),
+            "creator_name":  t.get("creator_name") or "Unbekannt",
+            "created_at":    (t.get("created_at") or "")[:10],
+            "imported":      bool(t.get("imported", False)),
+            "import_source": t.get("import_source") or "",
         })
 
     return jsonify({"tickets": out, "modules": sorted(modules)})
@@ -891,6 +896,8 @@ def api_ticket_detail(ticket_id):
             "added_users": ticket.get("added_users") or [],
             "created_at": (ticket.get("created_at") or "")[:16].replace("T", " "),
             "closed_at": (ticket.get("closed_at") or "")[:16].replace("T", " "),
+            "imported": bool(ticket.get("imported", False)),
+            "import_source": ticket.get("import_source") or "",
         },
         "messages": messages,
         "participants": participants,
@@ -919,6 +926,9 @@ def api_applications():
         "app_id,creator_id,creator_name,minecraft_name,status,created_at"
     ).eq("server_id", server_id)
     if status_f: q = q.eq("status", status_f)
+    legacy_f = request.args.get("legacy", "")
+    if legacy_f == "1": q = q.eq("imported", True)
+    elif legacy_f == "0": q = q.eq("imported", False)
     q = q.order("created_at", desc=(sort_f != "oldest"))
 
     try:
@@ -938,8 +948,9 @@ def api_applications():
             "minecraft_name": a.get("minecraft_name", ""),
             "status":         a.get("status", "open"),
             "created_at":     (a.get("created_at") or "")[:10],
+            "imported":       bool(a.get("imported", False)),
+            "import_source":  a.get("import_source") or "",
         })
-
     return jsonify({"applications": out})
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1021,6 +1032,8 @@ def api_application_detail(app_id):
             "created_at": (app_data.get("created_at") or "")[:10],
             "closed_at": (app_data.get("closed_at") or "")[:10],
             "claimed_by": app_data.get("claimed_by"),
+            "imported": bool(app_data.get("imported", False)),
+            "import_source": app_data.get("import_source") or "",
         },
         "messages": messages,
         "participants": participants,

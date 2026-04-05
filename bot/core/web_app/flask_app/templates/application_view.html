@@ -7,31 +7,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
-    /* ── Participants ────────────────────────────────────────────────── */
-    .participants-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      padding: 14px 18px;
-    }
-
+    .participants-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px; }
     .participant-chip {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 7px 11px 7px 8px;
-      cursor: pointer;
-      transition: all var(--mid);
-      position: relative;
+      display: flex; align-items: center; gap: 8px;
+      background: var(--bg-surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 11px 7px 8px;
+      cursor: pointer; transition: all var(--mid); position: relative;
     }
     .participant-chip:hover  { border-color: var(--green2); background: var(--bg-hover); }
     .participant-chip.active { border-color: var(--green);  background: var(--green-glow); }
     .participant-chip.active .pc-name { color: var(--green); }
-
-    .pc-avatar    { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+    .pc-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
     .pc-avatar-ph {
       width: 28px; height: 28px; border-radius: 50%;
       background: linear-gradient(135deg, var(--green-dim), var(--green));
@@ -48,31 +34,21 @@
       padding: 1px 4px; border-radius: 10px; min-width: 16px; text-align: center;
     }
 
-    /* ── Filter bar ──────────────────────────────────────────────────── */
     .msg-filter-bar {
       display: flex; align-items: center; gap: 8px;
-      padding: 8px 18px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg-raised);
-      flex-wrap: wrap;
+      padding: 8px 18px; border-bottom: 1px solid var(--border);
+      background: var(--bg-raised); flex-wrap: wrap;
     }
-    .msg-filter-label {
-      font-size: 0.66rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--text3); flex-shrink: 0;
-    }
+    .msg-filter-label { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text3); flex-shrink: 0; }
     .filter-clear-btn {
-      margin-left: auto;
-      background: none; border: 1px solid var(--border2);
-      color: var(--text3); font-size: 0.75rem;
-      padding: 3px 10px; border-radius: 5px; cursor: pointer;
-      transition: all var(--fast);
+      margin-left: auto; background: none; border: 1px solid var(--border2);
+      color: var(--text3); font-size: 0.75rem; padding: 3px 10px;
+      border-radius: 5px; cursor: pointer; transition: all var(--fast);
     }
     .filter-clear-btn:hover { border-color: var(--green); color: var(--green); }
     .filter-clear-btn.hidden { display: none; }
 
-    /* ── Message states ──────────────────────────────────────────────── */
-    .msg-row.is-deleted     { opacity: 0.55; }
+    .msg-row.is-deleted { opacity: 0.55; }
     .msg-row.is-filtered-out { display: none !important; }
 
     .msg-deleted-tag {
@@ -88,87 +64,44 @@
     }
     .msg-edited-tag:hover { color: var(--green); }
 
-    /* ── Edit History Popup ──────────────────────────────────────────── */
-    .ehp-overlay {
-      position: fixed; inset: 0; z-index: 9998; display: none;
-    }
+    .ehp-overlay { position: fixed; inset: 0; z-index: 9998; display: none; }
     .ehp-overlay.visible { display: block; }
-
     .edit-history-popup {
       position: fixed; z-index: 9999;
-      background: var(--bg-card);
-      border: 1px solid var(--border2);
-      border-radius: var(--r-lg);
-      padding: 16px; max-width: 480px; min-width: 300px;
+      background: var(--bg-card); border: 1px solid var(--border2);
+      border-radius: var(--r-lg); padding: 16px; max-width: 480px; min-width: 300px;
       box-shadow: var(--shadow-xl); display: none;
-      left: 50%; top: 50%;
-      transform: translate(-50%, -50%);
+      left: 50%; top: 50%; transform: translate(-50%, -50%);
     }
     .edit-history-popup.visible { display: block; }
     .ehp-title {
-      font-size: 0.66rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--green); margin-bottom: 12px;
+      font-size: 0.66rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--green); margin-bottom: 12px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .ehp-close {
-      background: none; border: none; color: var(--text3);
-      cursor: pointer; font-size: 1.1rem; line-height: 1;
-      transition: color var(--fast);
-    }
+    .ehp-close { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 1.1rem; line-height: 1; transition: color var(--fast); }
     .ehp-close:hover { color: var(--text); }
-    .ehp-version {
-      padding: 9px 11px; border: 1px solid var(--border);
-      border-radius: var(--r-sm); margin-bottom: 7px;
-      background: var(--bg-surface);
-    }
+    .ehp-version { padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-sm); margin-bottom: 7px; background: var(--bg-surface); }
     .ehp-version:last-child { margin-bottom: 0; }
-    .ehp-ver-label {
-      font-size: 0.60rem; color: var(--text3);
-      font-family: 'JetBrains Mono', monospace; margin-bottom: 5px;
-    }
-    .ehp-ver-content {
-      font-size: 0.83rem; color: var(--text2);
-      white-space: pre-wrap; word-break: break-word; line-height: 1.5;
-    }
+    .ehp-ver-label { font-size: 0.60rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-bottom: 5px; }
+    .ehp-ver-content { font-size: 0.83rem; color: var(--text2); white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
     .ehp-version.current { border-color: var(--green2); }
     .ehp-version.current .ehp-ver-label { color: var(--green); }
 
-    /* ── Stats grid ──────────────────────────────────────────────────── */
-    .app-stats {
-      display: grid; grid-template-columns: 1fr 1fr;
-      gap: 8px; padding: 14px 18px;
-    }
-    .stat-box {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      padding: 8px 10px; text-align: center;
-    }
-    .stat-box-num {
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 1.4rem; font-weight: 700;
-      color: var(--green); line-height: 1;
-    }
-    .stat-box-label {
-      font-size: 0.60rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.07em;
-      color: var(--text3); margin-top: 3px;
-    }
+    .app-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px 18px; }
+    .stat-box { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; text-align: center; }
+    .stat-box-num { font-family: 'Rajdhani', sans-serif; font-size: 1.4rem; font-weight: 700; color: var(--green); line-height: 1; }
+    .stat-box-label { font-size: 0.60rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text3); margin-top: 3px; }
 
-    /* ── Skeleton ────────────────────────────────────────────────────── */
     @keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
     .sk {
       background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
-      background-size: 400px 100%;
-      animation: shimmer 1.4s ease infinite;
-      border-radius: 4px;
+      background-size: 400px 100%; animation: shimmer 1.4s ease infinite; border-radius: 4px;
     }
   </style>
 </head>
 <body class="detail-body">
 
-<!-- Edit History Popup -->
 <div class="ehp-overlay" id="ehpOverlay" onclick="closeEditHistory()"></div>
 <div class="edit-history-popup" id="editHistoryPopup">
   <div class="ehp-title">
@@ -178,7 +111,6 @@
   <div id="editHistoryContent"></div>
 </div>
 
-<!-- Topbar -->
 <div class="detail-topbar">
   <a href="/dashboard/applications?server_id={{ server_id }}" class="back-link">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -239,6 +171,17 @@
 <div id="realContent" style="display:none;" class="detail-layout">
   <div class="detail-main">
 
+    <!-- Legacy-Banner (nur sichtbar wenn imported=true) -->
+    <div id="legacyBanner" style="display:none;" class="legacy-banner">
+      <span class="legacy-banner-icon">📦</span>
+      <div>
+        <strong>Legacy-Import</strong> — Diese Bewerbung wurde aus einem externen
+        System importiert. Teilnehmer-Tracking und Bearbeitungs-Verlauf
+        sind möglicherweise nicht vollständig verfügbar.
+        <span id="legacySourceHint" style="margin-left:4px;"></span>
+      </div>
+    </div>
+
     <!-- Applicant hero + Q&A -->
     <div class="detail-card">
       <div class="applicant-hero">
@@ -285,7 +228,6 @@
         <span class="detail-card-title">Kanal-Verlauf</span>
         <span class="detail-card-count" id="msgCount">—</span>
       </div>
-      <!-- Filter bar -->
       <div class="msg-filter-bar">
         <span class="msg-filter-label">Filter:</span>
         <span id="filterChip" style="font-size:0.78rem;color:var(--text2);">Alle Nachrichten</span>
@@ -296,7 +238,6 @@
   </div>
 
   <div class="detail-sidebar">
-    <!-- Stats -->
     <div class="detail-card">
       <div class="detail-card-header">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -307,7 +248,6 @@
       <div class="app-stats" id="appStats"></div>
     </div>
 
-    <!-- Details -->
     <div class="detail-card">
       <div class="detail-card-header">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -326,12 +266,10 @@
 const APP_ID    = {{ app_id | tojson }};
 const SERVER_ID = {{ server_id | tojson }};
 
-// ── State ─────────────────────────────────────────────────────────────────────
 let _allMessages  = [];
 let _participants = [];
 let _activeFilter = null;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -342,6 +280,7 @@ function statusBadge(st) {
     open:     '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
     accepted: '<span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>',
     rejected: '<span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>',
+    closed:   '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
   };
   return map[st] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(st)}</span>`;
 }
@@ -353,7 +292,6 @@ function infoRow(label, value) {
   </div>`;
 }
 
-// ── Main load ─────────────────────────────────────────────────────────────────
 async function load() {
   try {
     const res = await fetch(`/api/applications/${APP_ID}?server_id=${SERVER_ID}`);
@@ -375,10 +313,8 @@ async function load() {
     renderParticipants(participants);
     renderMessages(messages, app);
 
-    // Lazy member enrichment
     const uids = new Set([
-      app.creator_id,
-      app.claimed_by,
+      app.creator_id, app.claimed_by,
       ...messages.map(m => m.user_id),
     ].filter(Boolean));
     uids.forEach(uid => enrichMember(uid, app.creator_id));
@@ -391,11 +327,23 @@ async function load() {
   }
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
 function renderTopbar(app) {
   document.getElementById('topbarBadges').innerHTML =
     statusBadge(app.status) +
-    (app.minecraft_name ? `<span class="module-chip">⛏ ${escHtml(app.minecraft_name)}</span>` : '');
+    (app.minecraft_name ? `<span class="module-chip">⛏ ${escHtml(app.minecraft_name)}</span>` : '') +
+    (app.imported ? `<span class="badge-legacy" style="margin-left:4px;">📦 Legacy</span>` : '');
+
+  // Legacy-Banner anzeigen
+  if (app.imported) {
+    const banner = document.getElementById('legacyBanner');
+    if (banner) {
+      banner.style.display = '';
+      const hint = document.getElementById('legacySourceHint');
+      if (hint && app.import_source) {
+        hint.textContent = `· Quelle: ${app.import_source}`;
+      }
+    }
+  }
 }
 
 function renderApplicantHero(app) {
@@ -408,6 +356,7 @@ function renderApplicantHero(app) {
   document.getElementById('creatorMeta').innerHTML =
     `Bewerbung #${app.app_id}` +
     (app.minecraft_name ? ` &nbsp;·&nbsp; ⛏ ${escHtml(app.minecraft_name)}` : '') +
+    (app.imported ? ` &nbsp;·&nbsp; <span class="badge-legacy">📦 Legacy</span>` : '') +
     (app.created_at ? ` &nbsp;·&nbsp; ${escHtml(app.created_at)}` : '');
 
   if (app.rejection_reason) {
@@ -440,47 +389,31 @@ function renderStats(messages) {
   const deleted = messages.filter(m => m.is_deleted).length;
   const edited  = messages.filter(m => (m.edit_history||[]).length > 0).length;
   const uniqueU = new Set(messages.map(m => m.user_id).filter(Boolean)).size;
-
   document.getElementById('appStats').innerHTML = `
-    <div class="stat-box">
-      <div class="stat-box-num">${total}</div>
-      <div class="stat-box-label">Nachrichten</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${uniqueU}</div>
-      <div class="stat-box-label">Aktive User</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${edited}</div>
-      <div class="stat-box-label">Bearbeitet</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${deleted}</div>
-      <div class="stat-box-label">Gelöscht</div>
-    </div>
+    <div class="stat-box"><div class="stat-box-num">${total}</div><div class="stat-box-label">Nachrichten</div></div>
+    <div class="stat-box"><div class="stat-box-num">${uniqueU}</div><div class="stat-box-label">Aktive User</div></div>
+    <div class="stat-box"><div class="stat-box-num">${edited}</div><div class="stat-box-label">Bearbeitet</div></div>
+    <div class="stat-box"><div class="stat-box-num">${deleted}</div><div class="stat-box-label">Gelöscht</div></div>
   `;
 }
 
 function renderSidebar(app, messages) {
   const initials = (app.creator_name||'?').slice(0,1).toUpperCase();
   document.getElementById('infoRows').innerHTML = [
-    infoRow('ID',       `<span class="mono">#${app.app_id}</span>`),
-    infoRow('Status',   statusBadge(app.status)),
-    app.minecraft_name
-      ? infoRow('Minecraft', `<span class="mono-green">⛏ ${escHtml(app.minecraft_name)}</span>`)
-      : '',
+    infoRow('ID',        `<span class="mono">#${app.app_id}</span>`),
+    infoRow('Status',    statusBadge(app.status)),
+    app.imported ? infoRow('Herkunft', `<span class="badge-legacy">📦 Legacy · ${escHtml(app.import_source||'TicketTool')}</span>`) : '',
+    app.minecraft_name ? infoRow('Minecraft', `<span class="mono-green">⛏ ${escHtml(app.minecraft_name)}</span>`) : '',
     infoRow('Bewerber',
       `<div class="user-inline">
         <div class="avatar-xs-ph" id="sidebarCreatorAv">${initials}</div>
         <span id="sidebarCreatorName">${escHtml(app.creator_name)}</span>
       </div>`),
-    app.claimed_by
-      ? infoRow('Bearbeiter',
-          `<div class="user-inline">
-            <div class="avatar-xs-ph" id="sidebarClaimerAv">?</div>
-            <span id="sidebarClaimerName">${escHtml(app.claimed_by)}</span>
-          </div>`)
-      : '',
+    app.claimed_by ? infoRow('Bearbeiter',
+      `<div class="user-inline">
+        <div class="avatar-xs-ph" id="sidebarClaimerAv">?</div>
+        <span id="sidebarClaimerName">${escHtml(app.claimed_by)}</span>
+      </div>`) : '',
     app.created_at ? infoRow('Eingereicht', `<span class="mono">${escHtml(app.created_at)}</span>`) : '',
     app.closed_at  ? infoRow('Entschieden', `<span class="mono">${escHtml(app.closed_at)}</span>`)  : '',
     infoRow('Nachrichten', `<span class="mono">${messages.length}</span>`),
@@ -489,8 +422,7 @@ function renderSidebar(app, messages) {
 
 function renderParticipants(participants) {
   const count = participants.length;
-  document.getElementById('participantCount').textContent =
-    `${count} Teilnehmer${count !== 1 ? '' : ''}`;
+  document.getElementById('participantCount').textContent = `${count} Teilnehmer`;
 
   if (count === 0) {
     document.getElementById('participantsGrid').innerHTML =
@@ -498,15 +430,13 @@ function renderParticipants(participants) {
     return;
   }
 
-  const actionIcon = { message: '💬', created: '📋', added: '➕', removed: '➖', claimed: '📥', closed: '🔒' };
-
+  const actionIcon = { message:'💬', created:'📋', added:'➕', removed:'➖', claimed:'📥', closed:'🔒' };
   document.getElementById('participantsGrid').innerHTML = participants.map(p => {
-    const init  = (p.user_name||'?').slice(0,2).toUpperCase();
-    const icon  = actionIcon[p.action] || '👤';
-    const cnt   = p.message_count || 0;
+    const init = (p.user_name||'?').slice(0,2).toUpperCase();
+    const icon = actionIcon[p.action] || '👤';
+    const cnt  = p.message_count || 0;
     const avHtml = p.avatar_url
-      ? `<img class="pc-avatar" src="${escHtml(p.avatar_url)}" alt=""
-             onerror="this.outerHTML='<div class=pc-avatar-ph>${init}</div>'">`
+      ? `<img class="pc-avatar" src="${escHtml(p.avatar_url)}" alt="" onerror="this.outerHTML='<div class=pc-avatar-ph>${init}</div>'">`
       : `<div class="pc-avatar-ph" id="pcav-${p.user_id}">${init}</div>`;
     return `
       <div class="participant-chip" id="pc-${p.user_id}"
@@ -551,8 +481,7 @@ function renderMessages(messages, app) {
       extraTags += `<span class="msg-deleted-tag">🗑️ Gelöscht${delAt}</span>`;
     }
     if (hasEdits) {
-      extraTags += `<span class="msg-edited-tag"
-          onclick="showEditHistory(${idx})"
+      extraTags += `<span class="msg-edited-tag" onclick="showEditHistory(${idx})"
           title="${editHist.length} Bearbeitung${editHist.length!==1?'en':''}">
         ✏️ ${editHist.length}× bearbeitet
       </span>`;
@@ -565,23 +494,17 @@ function renderMessages(messages, app) {
           <span class="msg-author" id="msgname-${uid}">${escHtml(msg.user_name)}</span>
           ${msg.timestamp ? `<span class="msg-time">${escHtml(msg.timestamp)}</span>` : ''}
         </div>
-        ${msg.content
-          ? `<div class="msg-text ${isDeleted ? 'muted' : ''}">${escHtml(msg.content)}</div>`
-          : ''}
+        ${msg.content ? `<div class="msg-text ${isDeleted ? 'muted' : ''}">${escHtml(msg.content)}</div>` : ''}
         ${atts ? `<div class="att-list">${atts}</div>` : ''}
-        ${extraTags
-          ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">${extraTags}</div>`
-          : ''}
+        ${extraTags ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">${extraTags}</div>` : ''}
       </div>
     </div>`;
   }).join('');
 }
 
-// ── Filter ────────────────────────────────────────────────────────────────────
 function toggleFilter(uid, name) {
   if (_activeFilter === uid) { clearFilter(); return; }
   _activeFilter = uid;
-
   document.querySelectorAll('.participant-chip').forEach(el =>
     el.classList.toggle('active', el.id === `pc-${uid}`)
   );
@@ -591,7 +514,6 @@ function toggleFilter(uid, name) {
   document.getElementById('filterChip').innerHTML =
     `Gefiltert nach: <strong style="color:var(--green)">${escHtml(name)}</strong>`;
   document.getElementById('filterClearBtn').classList.remove('hidden');
-
   const visible = document.querySelectorAll('.msg-row:not(.is-filtered-out)').length;
   document.getElementById('msgCount').textContent =
     `${visible} Nachricht${visible !== 1 ? 'en' : ''} (gefiltert)`;
@@ -607,13 +529,11 @@ function clearFilter() {
     `${_allMessages.length} Nachricht${_allMessages.length !== 1 ? 'en' : ''}`;
 }
 
-// ── Edit History Popup ────────────────────────────────────────────────────────
 function showEditHistory(idx) {
   const msg  = _allMessages[idx];
   if (!msg) return;
   const hist = msg.edit_history || [];
-
-  let html = '';
+  let html   = '';
   hist.forEach((entry, i) => {
     html += `<div class="ehp-version">
       <div class="ehp-ver-label">Version ${i + 1} · ${escHtml(entry.edited_at)}</div>
@@ -624,7 +544,6 @@ function showEditHistory(idx) {
     <div class="ehp-ver-label">Aktuelle Version</div>
     <div class="ehp-ver-content">${escHtml(msg.content || '(leer)')}</div>
   </div>`;
-
   document.getElementById('editHistoryContent').innerHTML = html;
   document.getElementById('editHistoryPopup').classList.add('visible');
   document.getElementById('ehpOverlay').classList.add('visible');
@@ -635,7 +554,6 @@ function closeEditHistory() {
   document.getElementById('ehpOverlay').classList.remove('visible');
 }
 
-// ── Member enrichment ─────────────────────────────────────────────────────────
 const _fetched = {};
 
 async function enrichMember(uid, creatorId) {
@@ -648,7 +566,6 @@ async function enrichMember(uid, creatorId) {
     if (data.name) {
       document.querySelectorAll(`#msgname-${uid}`).forEach(el => el.textContent = data.name);
       document.querySelectorAll(`#pcname-${uid}`).forEach(el => el.textContent = data.name);
-
       if (uid === creatorId) {
         const cn = document.getElementById('creatorName');
         if (cn) cn.textContent = data.name;
@@ -658,22 +575,17 @@ async function enrichMember(uid, creatorId) {
     }
 
     if (data.avatar) {
-      // Message avatars
       document.querySelectorAll(`[id^="msgav-${uid}-"]`).forEach(el => {
         el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="">`;
       });
-      // Participant chip avatars
       document.querySelectorAll(`#pcav-${uid}`).forEach(el => {
         el.outerHTML = `<img class="pc-avatar" src="${escHtml(data.avatar)}" alt="">`;
       });
-
       if (uid === creatorId) {
-        // Hero avatar
         const cav = document.getElementById('creatorAvatar');
         if (cav && cav.tagName !== 'IMG') {
           cav.outerHTML = `<img class="applicant-avatar" src="${escHtml(data.avatar)}" alt="" id="creatorAvatar">`;
         }
-        // Sidebar avatar
         const sav = document.getElementById('sidebarCreatorAv');
         if (sav) sav.outerHTML = `<img class="avatar-xs" src="${escHtml(data.avatar)}" alt="">`;
       }

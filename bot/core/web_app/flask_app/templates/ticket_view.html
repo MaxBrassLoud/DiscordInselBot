@@ -27,261 +27,125 @@
       transition: all var(--mid);
       position: relative;
     }
-    .participant-chip:hover {
-      border-color: var(--green2);
-      background: var(--bg-hover);
-    }
-    .participant-chip.active {
-      border-color: var(--green);
-      background: var(--green-glow);
-    }
+    .participant-chip:hover { border-color: var(--green2); background: var(--bg-hover); }
+    .participant-chip.active { border-color: var(--green); background: var(--green-glow); }
     .participant-chip.active .pc-name { color: var(--green); }
 
-    .pc-avatar {
-      width: 28px; height: 28px;
-      border-radius: 50%;
-      object-fit: cover;
-      flex-shrink: 0;
-    }
+    .pc-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
     .pc-avatar-ph {
-      width: 28px; height: 28px;
-      border-radius: 50%;
+      width: 28px; height: 28px; border-radius: 50%;
       background: linear-gradient(135deg, var(--green-dim), var(--green));
       display: flex; align-items: center; justify-content: center;
-      font-size: 0.65rem; font-weight: 700; color: #000;
-      flex-shrink: 0;
+      font-size: 0.65rem; font-weight: 700; color: #000; flex-shrink: 0;
     }
     .pc-info { display: flex; flex-direction: column; gap: 1px; }
     .pc-name { font-size: 0.81rem; font-weight: 600; color: var(--text); }
     .pc-meta { font-size: 0.66rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
     .pc-badge {
-      position: absolute;
-      top: -4px; right: -4px;
-      background: var(--green);
-      color: #000;
-      font-size: 0.55rem;
-      font-weight: 700;
-      padding: 1px 4px;
-      border-radius: 10px;
-      min-width: 16px;
-      text-align: center;
+      position: absolute; top: -4px; right: -4px;
+      background: var(--green); color: #000;
+      font-size: 0.55rem; font-weight: 700;
+      padding: 1px 4px; border-radius: 10px; min-width: 16px; text-align: center;
     }
 
-    /* ── Filter Bar (participants) ─────────────────────────────────── */
     .msg-filter-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 18px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg-raised);
-      flex-wrap: wrap;
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 18px; border-bottom: 1px solid var(--border);
+      background: var(--bg-raised); flex-wrap: wrap;
     }
     .msg-filter-label {
-      font-size: 0.66rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--text3);
-      flex-shrink: 0;
+      font-size: 0.66rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em; color: var(--text3); flex-shrink: 0;
     }
     .filter-clear-btn {
-      margin-left: auto;
-      background: none;
-      border: 1px solid var(--border2);
-      color: var(--text3);
-      font-size: 0.75rem;
-      padding: 3px 10px;
-      border-radius: 5px;
-      cursor: pointer;
-      transition: all var(--fast);
+      margin-left: auto; background: none; border: 1px solid var(--border2);
+      color: var(--text3); font-size: 0.75rem; padding: 3px 10px;
+      border-radius: 5px; cursor: pointer; transition: all var(--fast);
     }
-    .filter-clear-btn:hover {
-      border-color: var(--green);
-      color: var(--green);
-    }
+    .filter-clear-btn:hover { border-color: var(--green); color: var(--green); }
     .filter-clear-btn.hidden { display: none; }
 
-    /* ── Message rows – enhanced ───────────────────────────────────── */
-    .msg-row {
-      position: relative;
-    }
-    .msg-row.is-deleted {
-      opacity: 0.55;
-    }
-    .msg-row.is-filtered-out {
-      display: none !important;
-    }
+    .msg-row { position: relative; }
+    .msg-row.is-deleted { opacity: 0.55; }
+    .msg-row.is-filtered-out { display: none !important; }
 
     .msg-deleted-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 0.63rem;
-      color: var(--red);
-      background: var(--red-bg);
-      border: 1px solid var(--red-border);
-      border-radius: 4px;
-      padding: 1px 6px;
-      margin-top: 3px;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 0.63rem; color: var(--red);
+      background: var(--red-bg); border: 1px solid var(--red-border);
+      border-radius: 4px; padding: 1px 6px; margin-top: 3px;
     }
-
     .msg-edited-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 0.63rem;
-      color: var(--text3);
-      cursor: pointer;
-      transition: color var(--fast);
-      margin-top: 3px;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 0.63rem; color: var(--text3);
+      cursor: pointer; transition: color var(--fast); margin-top: 3px;
     }
     .msg-edited-tag:hover { color: var(--green); }
 
-    /* ── Edit History Popup ────────────────────────────────────────── */
     .edit-history-popup {
-      position: fixed;
-      z-index: 9999;
-      background: var(--bg-card);
-      border: 1px solid var(--border2);
-      border-radius: var(--r-lg);
-      padding: 14px;
-      max-width: 460px;
-      min-width: 280px;
-      box-shadow: var(--shadow-xl);
-      display: none;
+      position: fixed; z-index: 9999;
+      background: var(--bg-card); border: 1px solid var(--border2);
+      border-radius: var(--r-lg); padding: 14px; max-width: 460px; min-width: 280px;
+      box-shadow: var(--shadow-xl); display: none;
     }
     .edit-history-popup.visible { display: block; }
     .ehp-title {
-      font-size: 0.66rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--green);
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      font-size: 0.66rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--green); margin-bottom: 10px;
+      display: flex; align-items: center; justify-content: space-between;
     }
     .ehp-close {
-      background: none;
-      border: none;
-      color: var(--text3);
-      cursor: pointer;
-      font-size: 1rem;
-      line-height: 1;
-      transition: color var(--fast);
+      background: none; border: none; color: var(--text3);
+      cursor: pointer; font-size: 1rem; line-height: 1; transition: color var(--fast);
     }
     .ehp-close:hover { color: var(--text); }
     .ehp-version {
-      padding: 8px 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      margin-bottom: 6px;
-      background: var(--bg-surface);
+      padding: 8px 10px; border: 1px solid var(--border);
+      border-radius: var(--r-sm); margin-bottom: 6px; background: var(--bg-surface);
     }
     .ehp-version:last-child { margin-bottom: 0; }
     .ehp-ver-label {
-      font-size: 0.60rem;
-      color: var(--text3);
-      font-family: 'JetBrains Mono', monospace;
-      margin-bottom: 4px;
+      font-size: 0.60rem; color: var(--text3);
+      font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;
     }
-    .ehp-ver-content {
-      font-size: 0.82rem;
-      color: var(--text2);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .ehp-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 9998;
-      display: none;
-    }
+    .ehp-ver-content { font-size: 0.82rem; color: var(--text2); white-space: pre-wrap; word-break: break-word; }
+    .ehp-overlay { position: fixed; inset: 0; z-index: 9998; display: none; }
     .ehp-overlay.visible { display: block; }
 
-    /* ── Added users info row ──────────────────────────────────────── */
-    .added-users-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 5px;
-    }
+    .added-users-chips { display: flex; flex-wrap: wrap; gap: 5px; }
     .added-user-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: var(--bg-surface);
-      border: 1px solid var(--border2);
-      border-radius: 6px;
-      padding: 2px 8px 2px 5px;
-      font-size: 0.75rem;
-      color: var(--text2);
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg-surface); border: 1px solid var(--border2);
+      border-radius: 6px; padding: 2px 8px 2px 5px;
+      font-size: 0.75rem; color: var(--text2);
     }
-    .added-user-chip img {
-      width: 16px; height: 16px;
-      border-radius: 50%;
-    }
+    .added-user-chip img { width: 16px; height: 16px; border-radius: 50%; }
     .added-user-chip-ph {
-      width: 16px; height: 16px;
-      border-radius: 50%;
-      background: var(--bg-hover);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.52rem;
-      color: var(--text3);
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--bg-hover); display: flex; align-items: center;
+      justify-content: center; font-size: 0.52rem; color: var(--text3);
     }
 
-    /* ── Stats row in sidebar ──────────────────────────────────────── */
     .ticket-stats {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      padding: 14px 18px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px 18px;
     }
     .stat-box {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      padding: 8px 10px;
-      text-align: center;
+      background: var(--bg-surface); border: 1px solid var(--border);
+      border-radius: var(--r-sm); padding: 8px 10px; text-align: center;
     }
     .stat-box-num {
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 1.4rem;
-      font-weight: 700;
-      color: var(--green);
-      line-height: 1;
+      font-family: 'Rajdhani', sans-serif; font-size: 1.4rem;
+      font-weight: 700; color: var(--green); line-height: 1;
     }
     .stat-box-label {
-      font-size: 0.60rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--text3);
-      margin-top: 3px;
+      font-size: 0.60rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: var(--text3); margin-top: 3px;
     }
 
-    /* ── System messages ───────────────────────────────────────────── */
-    .msg-row.system-msg {
-      background: none;
-      padding: 4px 18px;
-    }
-    .system-msg-text {
-      font-size: 0.78rem;
-      color: var(--text3);
-      font-style: italic;
-      padding: 4px 0;
-      border-left: 2px solid var(--border2);
-      padding-left: 10px;
-    }
-
-    /* ── Shimmer skeleton ──────────────────────────────────────────── */
     @keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
     .sk {
       background: linear-gradient(90deg,var(--bg-surface) 25%,var(--bg-hover) 50%,var(--bg-surface) 75%);
-      background-size:400px 100%;
-      animation:shimmer 1.4s ease infinite;
-      border-radius:4px;
+      background-size:400px 100%; animation:shimmer 1.4s ease infinite; border-radius:4px;
     }
   </style>
 </head>
@@ -323,9 +187,7 @@
     <div class="detail-card">
       <div class="detail-card-header"><span class="detail-card-title">Teilnehmer</span></div>
       <div style="padding:14px 18px;display:flex;gap:8px;flex-wrap:wrap;">
-        {% for _ in range(4) %}
-        <div class="sk" style="width:120px;height:44px;border-radius:8px;"></div>
-        {% endfor %}
+        {% for _ in range(4) %}<div class="sk" style="width:120px;height:44px;border-radius:8px;"></div>{% endfor %}
       </div>
     </div>
     <div class="detail-card">
@@ -357,6 +219,17 @@
 <!-- Real content -->
 <div id="realContent" style="display:none;" class="detail-layout">
   <div class="detail-main">
+
+    <!-- Legacy-Banner (nur sichtbar wenn imported=true) -->
+    <div id="legacyBanner" style="display:none;" class="legacy-banner">
+      <span class="legacy-banner-icon">📦</span>
+      <div>
+        <strong>Legacy-Import</strong> — Dieses Ticket wurde aus einem externen
+        System importiert. Einige Informationen wie Teilnehmer-Tracking oder
+        Bearbeitungs-Verlauf sind möglicherweise nicht vollständig verfügbar.
+        <span id="legacySourceHint" style="margin-left:4px;"></span>
+      </div>
+    </div>
 
     <!-- Header card -->
     <div class="detail-card">
@@ -393,7 +266,6 @@
         <span class="detail-card-title">Nachrichten-Verlauf</span>
         <span class="detail-card-count" id="msgCount">—</span>
       </div>
-      <!-- Filter bar -->
       <div class="msg-filter-bar" id="msgFilterBar">
         <span class="msg-filter-label">Filter:</span>
         <span id="filterChip" style="font-size:0.78rem;color:var(--text2);">Alle Nachrichten</span>
@@ -436,13 +308,9 @@
 const TICKET_ID = {{ ticket_id | tojson }};
 const SERVER_ID = {{ server_id | tojson }};
 
-// ── State ────────────────────────────────────────────────────────────────────
-
 let _allMessages  = [];
 let _participants  = [];
-let _activeFilter = null;  // user_id or null
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+let _activeFilter = null;
 
 function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -463,24 +331,12 @@ function infoRow(label, value) {
   </div>`;
 }
 
-function avatarHtml(src, name, cls = 'msg-avatar') {
-  const init = (name||'?').slice(0,2).toUpperCase();
-  if (src) return `<img class="${cls}-img" src="${escHtml(src)}" alt="" onerror="this.outerHTML=fallbackAv('${init}','${cls}')">`;
-  return `<div class="${cls}-ph">${init}</div>`;
-}
-
-function fallbackAv(init, cls) {
-  return `<div class="${cls}-ph">${init}</div>`;
-}
-
-// ── Load ─────────────────────────────────────────────────────────────────────
-
 async function load() {
   try {
     const res = await fetch(`/api/tickets/${TICKET_ID}?server_id=${SERVER_ID}`);
     if (res.status === 403) { window.location.href = '/dashboard'; return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const { ticket, messages, participants, server_id } = await res.json();
+    const { ticket, messages, participants } = await res.json();
 
     _allMessages  = messages || [];
     _participants = participants || [];
@@ -495,10 +351,8 @@ async function load() {
     renderParticipants(participants, ticket);
     renderMessages(_allMessages, ticket);
 
-    // Lazy enrich all unique user IDs
     const uids = new Set([
-      ticket.creator_id,
-      ticket.claimed_by,
+      ticket.creator_id, ticket.claimed_by,
       ...messages.map(m => m.user_id),
       ...(ticket.added_users || []),
     ].filter(Boolean));
@@ -513,13 +367,24 @@ async function load() {
   }
 }
 
-// ── Render functions ──────────────────────────────────────────────────────────
-
 function renderTopbar(ticket) {
   document.getElementById('topbarTitle').textContent = `Ticket #${ticket.ticket_id}`;
   document.getElementById('topbarBadges').innerHTML =
     statusBadge(ticket.status) +
-    (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '');
+    (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '') +
+    (ticket.imported ? `<span class="badge-legacy" style="margin-left:4px;">📦 Legacy</span>` : '');
+
+  // Legacy-Banner anzeigen
+  if (ticket.imported) {
+    const banner = document.getElementById('legacyBanner');
+    if (banner) {
+      banner.style.display = '';
+      const hint = document.getElementById('legacySourceHint');
+      if (hint && ticket.import_source) {
+        hint.textContent = `· Quelle: ${ticket.import_source}`;
+      }
+    }
+  }
 }
 
 function renderHeader(ticket) {
@@ -528,6 +393,7 @@ function renderHeader(ticket) {
   document.getElementById('ticketMeta').innerHTML =
     statusBadge(ticket.status) +
     (ticket.module ? `<span class="module-chip">${escHtml(ticket.module)}</span>` : '') +
+    (ticket.imported ? `<span class="badge-legacy">📦 Legacy</span>` : '') +
     (ticket.created_at ? `<span class="detail-meta-date">${escHtml(ticket.created_at)}</span>` : '');
 
   if (ticket.description) {
@@ -538,34 +404,21 @@ function renderHeader(ticket) {
 }
 
 function renderStats(ticket, messages) {
-  const total    = messages.length;
-  const deleted  = messages.filter(m => m.is_deleted).length;
-  const edited   = messages.filter(m => (m.edit_history||[]).length > 0).length;
-  const uniqueU  = new Set(messages.map(m => m.user_id).filter(Boolean)).size;
+  const total   = messages.length;
+  const deleted = messages.filter(m => m.is_deleted).length;
+  const edited  = messages.filter(m => (m.edit_history||[]).length > 0).length;
+  const uniqueU = new Set(messages.map(m => m.user_id).filter(Boolean)).size;
 
   document.getElementById('ticketStats').innerHTML = `
-    <div class="stat-box">
-      <div class="stat-box-num">${total}</div>
-      <div class="stat-box-label">Nachrichten</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${uniqueU}</div>
-      <div class="stat-box-label">Aktive User</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${edited}</div>
-      <div class="stat-box-label">Bearbeitet</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-num">${deleted}</div>
-      <div class="stat-box-label">Gelöscht</div>
-    </div>
+    <div class="stat-box"><div class="stat-box-num">${total}</div><div class="stat-box-label">Nachrichten</div></div>
+    <div class="stat-box"><div class="stat-box-num">${uniqueU}</div><div class="stat-box-label">Aktive User</div></div>
+    <div class="stat-box"><div class="stat-box-num">${edited}</div><div class="stat-box-label">Bearbeitet</div></div>
+    <div class="stat-box"><div class="stat-box-num">${deleted}</div><div class="stat-box-label">Gelöscht</div></div>
   `;
 }
 
 function renderSidebar(ticket) {
   const addedUsers = ticket.added_users || [];
-
   let addedVal = '<span class="added-users-chips" id="addedUsersChips">';
   if (addedUsers.length === 0) {
     addedVal += '<span style="color:var(--text3);font-size:0.8rem;">Keine</span>';
@@ -582,6 +435,7 @@ function renderSidebar(ticket) {
   document.getElementById('infoRows').innerHTML = [
     infoRow('Ticket-ID', `<span class="mono">#${ticket.ticket_id}</span>`),
     infoRow('Status', statusBadge(ticket.status)),
+    ticket.imported ? infoRow('Herkunft', `<span class="badge-legacy">📦 Legacy · ${escHtml(ticket.import_source||'TicketTool')}</span>`) : '',
     ticket.module ? infoRow('Modul', `<span class="module-chip">${escHtml(ticket.module)}</span>`) : '',
     infoRow('Erstellt von',
       `<div class="user-inline">
@@ -590,7 +444,7 @@ function renderSidebar(ticket) {
       </div>`),
     ticket.claimed_by ? infoRow('Bearbeiter',
       `<div class="user-inline">
-        <div class="avatar-xs-ph" id="claimer-av">${'?'}</div>
+        <div class="avatar-xs-ph" id="claimer-av">?</div>
         <span id="claimer-name">${escHtml(ticket.claimed_by)}</span>
       </div>`) : '',
     infoRow('Hinzugefügt', addedVal),
@@ -601,8 +455,7 @@ function renderSidebar(ticket) {
 
 function renderParticipants(participants, ticket) {
   const count = participants.length;
-  document.getElementById('participantCount').textContent =
-    `${count} Teilnehmer${count !== 1 ? '' : ''}`;
+  document.getElementById('participantCount').textContent = `${count} Teilnehmer`;
 
   if (count === 0) {
     document.getElementById('participantsGrid').innerHTML =
@@ -610,25 +463,25 @@ function renderParticipants(participants, ticket) {
     return;
   }
 
-  const actionIcon = { message: '💬', added: '➕', removed: '➖', claimed: '📥', closed: '🔒', created: '🎫' };
+  const actionIcon = { message:'💬', added:'➕', removed:'➖', claimed:'📥', closed:'🔒', created:'🎫' };
 
   document.getElementById('participantsGrid').innerHTML = participants.map(p => {
     const init  = (p.user_name||'?').slice(0,2).toUpperCase();
     const icon  = actionIcon[p.action] || '👤';
-    const count = p.message_count || 0;
+    const cnt   = p.message_count || 0;
     const avHtml = p.avatar_url
       ? `<img class="pc-avatar" src="${escHtml(p.avatar_url)}" alt="" onerror="this.outerHTML='<div class=pc-avatar-ph>${init}</div>'">`
       : `<div class="pc-avatar-ph" id="pcav-${p.user_id}">${init}</div>`;
     return `
       <div class="participant-chip" id="pc-${p.user_id}"
            onclick="toggleFilter('${p.user_id}','${escHtml(p.user_name)}')"
-           title="${escHtml(p.user_name)} – ${count} Nachricht${count !== 1 ? 'en' : ''}">
+           title="${escHtml(p.user_name)} – ${cnt} Nachricht${cnt !== 1 ? 'en' : ''}">
         ${avHtml}
         <div class="pc-info">
           <span class="pc-name" id="pcname-${p.user_id}">${escHtml(p.user_name)}</span>
-          <span class="pc-meta">${icon} ${count > 0 ? count + ' Msg' : 'Kein Msg'}</span>
+          <span class="pc-meta">${icon} ${cnt > 0 ? cnt + ' Msg' : 'Kein Msg'}</span>
         </div>
-        ${count > 0 ? `<span class="pc-badge">${count}</span>` : ''}
+        ${cnt > 0 ? `<span class="pc-badge">${cnt}</span>` : ''}
       </div>`;
   }).join('');
 }
@@ -679,29 +532,18 @@ function renderMessages(messages, ticket) {
   }).join('');
 }
 
-// ── Filter ────────────────────────────────────────────────────────────────────
-
 function toggleFilter(uid, name) {
-  if (_activeFilter === uid) {
-    clearFilter();
-  } else {
-    _activeFilter = uid;
-    applyFilter(uid, name);
-  }
-}
-
-function applyFilter(uid, name) {
-  document.querySelectorAll('.participant-chip').forEach(el => {
-    el.classList.toggle('active', el.id === `pc-${uid}`);
-  });
-  document.querySelectorAll('.msg-row[data-uid]').forEach(row => {
-    row.classList.toggle('is-filtered-out', row.dataset.uid !== uid);
-  });
+  if (_activeFilter === uid) { clearFilter(); return; }
+  _activeFilter = uid;
+  document.querySelectorAll('.participant-chip').forEach(el =>
+    el.classList.toggle('active', el.id === `pc-${uid}`)
+  );
+  document.querySelectorAll('.msg-row[data-uid]').forEach(row =>
+    row.classList.toggle('is-filtered-out', row.dataset.uid !== uid)
+  );
   document.getElementById('filterChip').innerHTML =
     `Gefiltert nach: <strong style="color:var(--green)">${escHtml(name)}</strong>`;
   document.getElementById('filterClearBtn').classList.remove('hidden');
-
-  // Count visible
   const visible = document.querySelectorAll('.msg-row:not(.is-filtered-out)').length;
   document.getElementById('msgCount').textContent =
     `${visible} Nachricht${visible !== 1 ? 'en' : ''} (gefiltert)`;
@@ -717,18 +559,11 @@ function clearFilter() {
     `${_allMessages.length} Nachricht${_allMessages.length !== 1 ? 'en' : ''}`;
 }
 
-// ── Edit History ──────────────────────────────────────────────────────────────
-
 function showEditHistory(msgIdx) {
-  const msg = _allMessages[msgIdx];
+  const msg  = _allMessages[msgIdx];
   if (!msg) return;
   const hist = msg.edit_history || [];
-
-  const popup = document.getElementById('editHistoryPopup');
-  const overlay = document.getElementById('ehpOverlay');
-
-  // Versions: älteste zuerst (hist), dann aktuelle Version
-  let html = '';
+  let html   = '';
   hist.forEach((entry, i) => {
     html += `<div class="ehp-version">
       <div class="ehp-ver-label">Version ${i + 1} · ${escHtml(entry.edited_at)}</div>
@@ -739,14 +574,11 @@ function showEditHistory(msgIdx) {
     <div class="ehp-ver-label" style="color:var(--green);">Aktuelle Version</div>
     <div class="ehp-ver-content">${escHtml(msg.content || '(leer)')}</div>
   </div>`;
-
   document.getElementById('editHistoryContent').innerHTML = html;
-  popup.classList.add('visible');
-  overlay.classList.add('visible');
-
-  // Position near center
-  popup.style.left = '50%';
-  popup.style.top  = '50%';
+  document.getElementById('editHistoryPopup').classList.add('visible');
+  document.getElementById('ehpOverlay').classList.add('visible');
+  const popup = document.getElementById('editHistoryPopup');
+  popup.style.left = '50%'; popup.style.top = '50%';
   popup.style.transform = 'translate(-50%, -50%)';
 }
 
@@ -754,8 +586,6 @@ function closeEditHistory() {
   document.getElementById('editHistoryPopup').classList.remove('visible');
   document.getElementById('ehpOverlay').classList.remove('visible');
 }
-
-// ── Member enrichment ─────────────────────────────────────────────────────────
 
 const _fetched = {};
 
@@ -765,55 +595,23 @@ async function enrichMember(uid) {
   try {
     const res  = await fetch(`/api/member/${uid}?server_id=${SERVER_ID}`);
     const data = await res.json();
-
     if (data.name) {
-      // Nachricht-Autoren
       document.querySelectorAll(`#msgname-${uid}`).forEach(el => el.textContent = data.name);
-      // Creator Sidebar
-      const cn = document.getElementById('creator-name');
-      // Participant-Chips
       document.querySelectorAll(`#pcname-${uid}`).forEach(el => el.textContent = data.name);
-      // Added-users
       document.querySelectorAll(`#addusr-name-${uid}`).forEach(el => el.textContent = data.name);
     }
-
     if (data.avatar) {
-      // Message avatars
       document.querySelectorAll(`[id^="msgav-${uid}-"]`).forEach(el => {
         el.outerHTML = `<img class="msg-avatar-img" src="${escHtml(data.avatar)}" alt="">`;
       });
-      // Participant chip avatars
       document.querySelectorAll(`#pcav-${uid}`).forEach(el => {
         el.outerHTML = `<img class="pc-avatar" src="${escHtml(data.avatar)}" alt="">`;
       });
-      // Creator sidebar
-      const cav = document.getElementById('creator-av');
-      // Added-user chips
       document.querySelectorAll(`#addusr-ph-${uid}`).forEach(el => {
         el.outerHTML = `<img src="${escHtml(data.avatar)}" style="width:16px;height:16px;border-radius:50%;" alt="">`;
       });
-      // Creator and claimer in sidebar
-      const xav = document.getElementById('creator-av');
-      if (xav && xav.tagName === 'DIV') {
-        // Try to match: only replace if this is the creator
-        // We compare by matching what we know from context
-      }
     }
-
-    // Creator-specific enrichment (avatar + name in sidebar)
-    // We handle this generically for all IDs that match
-    _enrichSidebarRole(uid, data);
-
   } catch(_) {}
-}
-
-function _enrichSidebarRole(uid, data) {
-  // Creator
-  const cname = document.getElementById('creator-name');
-  if (cname && cname.dataset && cname.dataset.uid === uid && data.name) {
-    cname.textContent = data.name;
-  }
-  // For claimer, we track via claimed_by text initially set
 }
 
 load();

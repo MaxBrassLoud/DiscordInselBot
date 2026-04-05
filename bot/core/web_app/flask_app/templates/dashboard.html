@@ -179,7 +179,6 @@ async function loadContent() {
       renderApplications(data.applications || [], params);
     }
 
-    // Update topbar title via guild API
     updateTopbar();
 
   } catch(e) {
@@ -208,6 +207,7 @@ function renderTickets(tickets, modules, params) {
   const statusF = params.get('status') || '';
   const moduleF = params.get('module') || '';
   const sortF   = params.get('sort')   || 'newest';
+  const legacyF = params.get('legacy') || '';
 
   const moduleOpts = modules.map(m =>
     `<option value="${escHtml(m)}" ${moduleF===m?'selected':''}>${escHtml(m)}</option>`).join('');
@@ -223,6 +223,11 @@ function renderTickets(tickets, modules, params) {
         </select>
         ${modules.length ? `<select class="filter-select" name="module" onchange="submitFilter()">
           <option value="">Alle Module</option>${moduleOpts}</select>` : ''}
+        <select class="filter-select" name="legacy" onchange="submitFilter()">
+          <option value=""  ${legacyF===''  ?'selected':''}>Alle Einträge</option>
+          <option value="0" ${legacyF==='0' ?'selected':''}>Nur Aktiv</option>
+          <option value="1" ${legacyF==='1' ?'selected':''}>📦 Nur Legacy</option>
+        </select>
         <select class="filter-select" name="sort" onchange="submitFilter()">
           <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
           <option value="oldest" ${sortF==='oldest'?'selected':''}>Älteste zuerst</option>
@@ -241,11 +246,17 @@ function renderTickets(tickets, modules, params) {
 
   const rows = tickets.map(t => {
     const badge  = statusBadge(t.status);
-    const module = t.module ? `<span class="module-chip">${escHtml(t.module)}</span>` : '<span class="muted">—</span>';
+    const legacy = t.imported ? `<span class="badge-legacy">📦 Legacy</span>` : '';
+    const module = t.module
+      ? `<span class="module-chip">${escHtml(t.module)}</span> ${legacy}`
+      : (legacy || '<span class="muted">—</span>');
     const avatar = `<div class="avatar-ph" id="av-${t.creator_id}">${(t.creator_name||'?').slice(0,1)}</div>`;
-    return `<tr>
+    const titleLink = t.imported
+      ? `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link muted">${escHtml(t.title)}</a>`
+      : `<a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link">${escHtml(t.title)}</a>`;
+    return `<tr class="${t.imported ? 'legacy-row' : ''}">
       <td><span class="mono">#${t.ticket_id}</span></td>
-      <td><a href="/dashboard/tickets/${t.ticket_id}?server_id=${SERVER_ID}" class="row-link">${escHtml(t.title)}</a></td>
+      <td>${titleLink}</td>
       <td><div class="creator-cell">${avatar}<span id="name-${t.creator_id}">${escHtml(t.creator_name)}</span></div></td>
       <td>${module}</td>
       <td>${badge}</td>
@@ -257,7 +268,6 @@ function renderTickets(tickets, modules, params) {
     <thead><tr><th>#</th><th>Titel</th><th>Erstellt von</th><th>Modul</th><th>Status</th><th>Datum</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`);
 
-  // Lazy-load avatars in background
   const uniqueIds = [...new Set(tickets.map(t => t.creator_id).filter(Boolean))];
   uniqueIds.forEach(uid => loadMemberLazy(uid));
 }
@@ -269,6 +279,7 @@ function renderApplications(apps, params) {
 
   const statusF = params.get('status') || '';
   const sortF   = params.get('sort')   || 'newest';
+  const legacyF = params.get('legacy') || '';
 
   const filterBar = `
     <div class="filter-bar">
@@ -280,6 +291,11 @@ function renderApplications(apps, params) {
           <option value="open"     ${statusF==='open'?'selected':''}>Offen</option>
           <option value="accepted" ${statusF==='accepted'?'selected':''}>Angenommen</option>
           <option value="rejected" ${statusF==='rejected'?'selected':''}>Abgelehnt</option>
+        </select>
+        <select class="filter-select" name="legacy" onchange="submitFilter()">
+          <option value=""  ${legacyF===''  ?'selected':''}>Alle Einträge</option>
+          <option value="0" ${legacyF==='0' ?'selected':''}>Nur Aktiv</option>
+          <option value="1" ${legacyF==='1' ?'selected':''}>📦 Nur Legacy</option>
         </select>
         <select class="filter-select" name="sort" onchange="submitFilter()">
           <option value="newest" ${sortF!=='oldest'?'selected':''}>Neueste zuerst</option>
@@ -298,12 +314,16 @@ function renderApplications(apps, params) {
   }
 
   const rows = apps.map(a => {
-    const badge = statusBadgeApp(a.status);
-    const mc    = a.minecraft_name ? `<span class="mono-green">⛏ ${escHtml(a.minecraft_name)}</span>` : '<span class="muted">—</span>';
+    const badge  = statusBadgeApp(a.status);
+    const legacy = a.imported ? `<span class="badge-legacy">📦 Legacy</span>` : '';
+    const mc     = a.minecraft_name
+      ? `<span class="mono-green">⛏ ${escHtml(a.minecraft_name)}</span> ${legacy}`
+      : (legacy || '<span class="muted">—</span>');
     const avatar = `<div class="avatar-ph" id="av-${a.creator_id}">${(a.creator_name||'?').slice(0,1)}</div>`;
-    return `<tr>
+    return `<tr class="${a.imported ? 'legacy-row' : ''}">
       <td><span class="mono">#${a.app_id}</span></td>
-      <td><a href="/dashboard/applications/${a.app_id}?server_id=${SERVER_ID}" class="row-link">
+      <td><a href="/dashboard/applications/${a.app_id}?server_id=${SERVER_ID}"
+        class="row-link${a.imported ? ' muted' : ''}">
         <div class="creator-cell">${avatar}<span id="name-${a.creator_id}">${escHtml(a.creator_name)}</span></div>
       </a></td>
       <td>${mc}</td>
@@ -357,6 +377,7 @@ function statusBadgeApp(status) {
     open:     '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
     accepted: '<span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>',
     rejected: '<span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>',
+    closed:   '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
   };
   return map[status] || `<span class="badge badge-pending"><span class="badge-dot"></span>${escHtml(status)}</span>`;
 }
@@ -399,8 +420,6 @@ function submitFilter() {
   }
 }
 
-// ── Sidebar toggle ─────────────────────────────────────────────
-
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
   document.getElementById('sidebarOverlay').classList.toggle('active');
@@ -409,8 +428,6 @@ function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebarOverlay').classList.remove('active');
 }
-
-// ── Boot ───────────────────────────────────────────────────────
 
 loadServers();
 loadContent();
