@@ -1156,3 +1156,7 @@ def not_found(e):
         return jsonify({"error": "Nicht gefunden"}), 404
     return render_template("error.html", code=404, title="Nicht gefunden",
                            icon="🔍", msg="Diese Seite existiert nicht."), 404
+                          
+                          
+from .import_routes import register_import_routes
+register_import_routes(app, login_required, _is_mbl, MBL_ID)
