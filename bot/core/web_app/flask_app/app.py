@@ -1339,7 +1339,7 @@ def not_found(e):
 from .import_routes import register_import_routes
 register_import_routes(app, login_required, _is_mbl, MBL_ID)
 
-from .ticket_setup_routes import register_ticket_setup_routes
+"""from .ticket_setup_routes import register_ticket_setup_routes
 register_ticket_setup_routes(
     app,
     login_required,
@@ -1350,7 +1350,6 @@ register_ticket_setup_routes(
 )
 
 from .application_setup_routes import register_application_setup_routes
-
 register_application_setup_routes(
     app,
     login_required,
@@ -1358,4 +1357,4 @@ register_application_setup_routes(
     _bot_get,
     _cached_guild,
     _guild_icon_url,
-)
+)"""
