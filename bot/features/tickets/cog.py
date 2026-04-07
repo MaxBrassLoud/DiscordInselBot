@@ -26,22 +26,14 @@ class TicketsCog(commands.Cog):
         await self._restore_channel_views()
 
     async def _restore_panel_views(self):
-        from .views import TicketPanelView
-        try:
-            supabase = get_supabase()
-            servers  = supabase.table("ticket_servers").select("*").execute().data or []
-            count    = 0
-            for srv in servers:
-                modules = await TicketManager.get_server_modules(srv["server_id"])
-                if not modules:
-                    continue
-                category_id = int(srv.get("category_id", 0))
-                view = TicketPanelView(modules=modules, category_id=category_id, bot=self.bot)
-                self.bot.add_view(view)
-                count += 1
-            logger.info(f"✅ {count} TicketPanelView(s) wiederhergestellt")
-        except Exception as e:
-            logger.error(f"[_restore_panel_views] {e}")
+        """
+        Registriert die persistente TicketPanelView.
+        Da die View eine statische custom_id hat, reicht eine einzige Instanz.
+        Module werden beim Button-Klick live aus der DB geladen.
+        """
+        from .panel_view import TicketPanelView
+        self.bot.add_view(TicketPanelView(bot=self.bot))
+        logger.info("✅ TicketPanelView (persistent) registriert")
 
     async def _restore_channel_views(self):
         from .views import TicketChannelView
@@ -185,14 +177,24 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_setup ─────────────────────────────────────────────────────────
 
-    @app_commands.command(name="ticket_setup", description="Richte das Ticket-System ein")
+    @app_commands.command(name="ticket_setup", description="Richte das Ticket-System ein (Schritt-für-Schritt)")
     async def ticket_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        view = TicketSetupView(guild_id=interaction.guild_id, bot=self.bot)
-        view._original_interaction = interaction
-        await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
+
+        from .setup_wizard import start_ticket_wizard
+
+        # Lade bestehende Konfiguration falls vorhanden
+        supabase = get_supabase()
+        existing = supabase.table("ticket_servers").select("*").eq("server_id", str(interaction.guild_id)).execute()
+        existing_config = existing.data[0] if existing.data else None
+
+        await start_ticket_wizard(
+            interaction=interaction,
+            bot=self.bot,
+            existing_config=existing_config,
+        )
 
     # ── /ticket_bearbeiten ────────────────────────────────────────────────────
 
@@ -206,10 +208,10 @@ class TicketsCog(commands.Cog):
             return
 
         from .ticket_edit_views import TicketEditMainView
+        import os
 
         supabase = get_supabase()
-        srv = supabase.table("ticket_servers").select("server_id")\
-            .eq("server_id", str(interaction.guild_id)).execute()
+        srv = supabase.table("ticket_servers").select("server_id").eq("server_id", str(interaction.guild_id)).execute()
         if not srv.data:
             await interaction.response.send_message(
                 "❌ Das Ticket-System ist noch nicht eingerichtet. Nutze zuerst `/ticket_setup`.",
@@ -217,10 +219,24 @@ class TicketsCog(commands.Cog):
             )
             return
 
+        web_base = os.getenv("WEB_BASE_URL", "http://localhost:5000")
+
         view = TicketEditMainView(guild_id=interaction.guild_id, bot=self.bot)
         view._original_interaction = interaction
+
+        # Embed erweitert um Web-Link
+        embed = view.build_embed()
+        embed.add_field(
+            name="🌐 Web-Dashboard",
+            value=(
+                f"[→ Ticket-Setup im Browser öffnen]"
+                f"({web_base}/dashboard/setup/tickets?server_id={interaction.guild_id})"
+            ),
+            inline=False,
+        )
+
         await interaction.response.send_message(
-            embed=view.build_embed(), view=view, ephemeral=True
+            embed=embed, view=view, ephemeral=True
         )
 
     # ── /ticket_add ───────────────────────────────────────────────────────────

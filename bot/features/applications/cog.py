@@ -144,9 +144,20 @@ class ApplicationsCog(commands.Cog):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        view = ApplicationSetupView(guild_id=interaction.guild_id, bot=self.bot)
-        view._original_interaction = interaction
-        await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
+
+        from .setup_wizard import start_application_wizard
+
+        # Bestehende Konfiguration laden (falls vorhanden)
+        from bot.core.supabase_client import get_supabase
+        sb = get_supabase()
+        existing = sb.table("application_servers").select("*").eq("server_id", str(interaction.guild_id)).execute()
+        existing_config = existing.data[0] if existing.data else None
+
+        await start_application_wizard(
+            interaction=interaction,
+            bot=self.bot,
+            existing_config=existing_config,
+        )
 
     @app_commands.command(name="bewerbung_bearbeiten", description="Bearbeite das Bewerbungs-System")
     async def bewerbung_bearbeiten(self, interaction: discord.Interaction):
@@ -162,6 +173,7 @@ class ApplicationsCog(commands.Cog):
         view = ApplicationEditView(guild_id=interaction.guild_id, bot=self.bot)
         view._original_interaction = interaction
         await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
+
 
 
 async def setup(bot: commands.Bot):

@@ -340,7 +340,7 @@ class TicketSetupView(discord.ui.View):
             supabase.table("ticket_modules").delete().eq("server_id", guild_id).execute()
 
             # ── Neue Module speichern ─────────────────────────────────────────
-            from .views import TicketPanelView
+            from .panel_view import TicketPanelView, build_ticket_panel_embed
             db_modules = []
             for mod in self.pending_modules:
                 # Per-module category overrides global; fallback to global
@@ -372,24 +372,9 @@ class TicketSetupView(discord.ui.View):
                 await interaction.followup.send("❌ Panel-Kanal nicht gefunden!", ephemeral=True)
                 return
 
-            embed = discord.Embed(
-                title="🎫 Support-Tickets",
-                description="Wähle ein Modul aus den Buttons unten um ein Ticket zu erstellen.",
-                color=discord.Color.blurple()
-            )
-            for mod in db_modules:
-                emoji = mod.get("button_emoji") or "🎫"
-                embed.add_field(
-                    name=f"{emoji} {mod['name']}",
-                    value=mod.get("description", "–"),
-                    inline=False,
-                )
-
-            panel_view = TicketPanelView(
-                modules=db_modules,
-                category_id=int(self.category_id),
-                bot=self.bot,
-            )
+            embed      = build_ticket_panel_embed(db_modules)
+            panel_view = TicketPanelView(bot=self.bot)
+            panel_msg  = await panel_channel.send(embed=embed, view=panel_view)
             panel_msg = await panel_channel.send(embed=embed, view=panel_view)
 
             # Nachrichten-ID für späteres Bearbeiten in DB speichern
