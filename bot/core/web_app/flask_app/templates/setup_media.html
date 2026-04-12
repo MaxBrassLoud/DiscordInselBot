@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medien-Weiterleitung Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <style>
+    .setup-body { max-width: 700px; margin: 0 auto; padding: 24px 22px; }
+    .panel-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 24px 26px; margin-bottom: 18px;
+    }
+    .panel-title { font-family:'Rajdhani',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .panel-sub   { font-size:0.82rem; color:var(--text3); margin-bottom:20px; }
+
+    .field { margin-bottom:16px; }
+    .field label { display:block; font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:5px; }
+    .field select {
+      width:100%; background:var(--bg-surface); border:1px solid var(--border);
+      color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem;
+      padding:9px 12px; border-radius:var(--r-sm); outline:none; transition:border-color var(--fast);
+    }
+    .field select:focus { border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12); }
+    .field select option { background:#1d2128; }
+    .field-hint { font-size:0.70rem; color:var(--text3); margin-top:4px; }
+
+    .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:14px 0; border-bottom:1px solid var(--border); }
+    .toggle-row:last-child { border-bottom:none; }
+    .toggle-info { flex:1; min-width:0; }
+    .toggle-label { font-size:0.85rem; color:var(--text); font-weight:500; display:flex; align-items:center; gap:7px; }
+    .toggle-sub   { font-size:0.72rem; color:var(--text3); margin-top:2px; }
+    .toggle-switch { position:relative; width:44px; height:24px; flex-shrink:0; margin-left:12px; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider {
+      position:absolute; inset:0; cursor:pointer;
+      background:var(--border2); border-radius:24px; transition:all var(--mid);
+    }
+    .toggle-slider:before {
+      content:''; position:absolute; width:18px; height:18px; border-radius:50%;
+      background:#fff; left:3px; top:3px; transition:all var(--mid);
+    }
+    .toggle-switch input:checked + .toggle-slider { background:var(--green2); }
+    .toggle-switch input:checked + .toggle-slider:before { transform:translateX(20px); }
+
+    .btn-group { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+    .btn {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:9px 20px; border-radius:var(--r-sm);
+      font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.88rem;
+      cursor:pointer; border:none; transition:all var(--mid);
+    }
+    .btn-primary { background:var(--green2); color:#000; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+
+    .features-section { margin-top:6px; }
+    .features-title { font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:10px; }
+
+    .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:200px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
+    .toast.ok  { border-left:3px solid var(--green2); }
+    .toast.err { border-left:3px solid var(--red); }
+  </style>
+</head>
+<body class="detail-body">
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    System Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">📷 Medien-Weiterleitung</span>
+  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
+</div>
+
+<div class="setup-body">
+  <div class="panel-card">
+    <div class="panel-title">Medien-Weiterleitung</div>
+    <div class="panel-sub">Bilder, Videos und Links aus anderen Kanälen werden automatisch in einen dedizierten Medienkanal weitergeleitet.</div>
+
+    <div class="field">
+      <label>📺 Ziel-Kanal <span style="color:var(--red)">*</span></label>
+      <select id="cfg_image_channel">
+        <option value="">Lade Kanäle...</option>
+      </select>
+      <div class="field-hint">Hier werden alle weitergeleiteten Medien gepostet.</div>
+    </div>
+
+    <div class="features-section">
+      <div class="features-title">🔧 Features</div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">📷 Bilder weiterleiten</div>
+          <div class="toggle-sub">Bild-Anhänge aus anderen Kanälen</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="cfg_images" checked><span class="toggle-slider"></span></label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">🎥 Videos weiterleiten</div>
+          <div class="toggle-sub">Video-Anhänge (mp4, mov, …)</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="cfg_videos" checked><span class="toggle-slider"></span></label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">▶️ YouTube-Links weiterleiten</div>
+          <div class="toggle-sub">YouTube-URLs mit Thumbnail und Metadaten</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="cfg_youtube" checked><span class="toggle-slider"></span></label>
+      </div>
+
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-label">💜 Twitch-Clips weiterleiten</div>
+          <div class="toggle-sub">Clips von twitch.tv und clips.twitch.tv</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="cfg_twitch" checked><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Einstellungen speichern</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_ID = {{ server_id | tojson }};
+let _channels = [];
+
+async function init() {
+  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
+  const r  = await fetch(`/api/setup/guild/${SERVER_ID}/channels`);
+  const d  = await r.json();
+  _channels = (d.channels || []).filter(c => c.type === 0);
+  document.getElementById('cfg_image_channel').innerHTML =
+    '<option value="">📺 Ziel-Kanal wählen *</option>' +
+    _channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('');
+  await loadConfig();
+}
+
+async function loadConfig() {
+  const r = await fetch(`/api/setup/media/${SERVER_ID}`);
+  const d = await r.json();
+  if (d.guild) {
+    const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+    document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+  }
+  if (d.config) {
+    const c = d.config;
+    setTimeout(() => {
+      if (c.image_channel_id) document.getElementById('cfg_image_channel').value = c.image_channel_id;
+      document.getElementById('cfg_images').checked  = c.forward_images  !== false;
+      document.getElementById('cfg_videos').checked  = c.forward_videos  !== false;
+      document.getElementById('cfg_youtube').checked = c.forward_youtube !== false;
+      document.getElementById('cfg_twitch').checked  = c.forward_twitch  !== false;
+    }, 100);
+  }
+}
+
+async function saveConfig() {
+  const channelId = document.getElementById('cfg_image_channel').value;
+  if (!channelId) { toast('Bitte einen Ziel-Kanal auswählen', 'err'); return; }
+  const body = {
+    image_channel_id: channelId,
+    forward_images:   document.getElementById('cfg_images').checked,
+    forward_videos:   document.getElementById('cfg_videos').checked,
+    forward_youtube:  document.getElementById('cfg_youtube').checked,
+    forward_twitch:   document.getElementById('cfg_twitch').checked,
+  };
+  const r = await fetch(`/api/setup/media/${SERVER_ID}`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+  toast('Einstellungen gespeichert ✓', 'ok');
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type='ok') {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${type==='ok'?'✅':'❌'}</span><span>${esc(msg)}</span>`;
+  document.getElementById('toastContainer').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+init();
+</script>
+</body>
+</html>

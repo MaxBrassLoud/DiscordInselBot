@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Channel Creator Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <style>
+    .setup-body { max-width: 900px; margin: 0 auto; padding: 24px 22px; }
+
+    /* ── Info Banner ─────────────────────────────────── */
+    .perm-banner {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-left: 3px solid var(--blue); border-radius: var(--r-lg);
+      padding: 16px 20px; margin-bottom: 22px;
+    }
+    .perm-banner-title {
+      font-family: 'Rajdhani', sans-serif; font-size: 0.95rem; font-weight: 700;
+      color: var(--blue); margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+    }
+    .perm-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .perm-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg-surface); border: 1px solid var(--border2);
+      border-radius: 6px; padding: 3px 9px; font-size: 0.74rem; color: var(--text2);
+    }
+    .perm-chip.ok   { border-color: rgba(74,222,128,0.3); color: var(--green); background: var(--green-g2); }
+    .perm-chip.warn { border-color: rgba(251,146,60,0.3); color: var(--orange); background: var(--orange-bg); }
+
+    /* ── Grid ────────────────────────────────────────── */
+    .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media(max-width:700px) { .setup-grid { grid-template-columns: 1fr; } }
+
+    /* ── Cards ───────────────────────────────────────── */
+    .panel-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 22px 24px; margin-bottom: 18px;
+    }
+    .panel-card.full { grid-column: 1 / -1; }
+    .panel-title { font-family:'Rajdhani',sans-serif; font-size:1.05rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .panel-sub   { font-size:0.81rem; color:var(--text3); margin-bottom:18px; }
+
+    /* ── Fields ──────────────────────────────────────── */
+    .field { margin-bottom:14px; }
+    .field label { display:block; font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:5px; }
+    .field select, .field input[type=text], .field input[type=number] {
+      width:100%; background:var(--bg-surface); border:1px solid var(--border);
+      color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem;
+      padding:9px 12px; border-radius:var(--r-sm); outline:none; transition:border-color var(--fast);
+    }
+    .field select:focus, .field input:focus {
+      border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12);
+    }
+    .field select option { background:#1d2128; }
+    .field-hint { font-size:0.70rem; color:var(--text3); margin-top:4px; }
+
+    /* ── Role chips ──────────────────────────────────── */
+    .role-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; min-height:28px; }
+    .role-chip {
+      display:inline-flex; align-items:center; gap:4px;
+      background:var(--green-g2); border:1px solid rgba(74,222,128,0.2);
+      color:var(--green); padding:2px 8px; border-radius:12px;
+      font-size:0.73rem; font-weight:600;
+    }
+    .role-chip-del { background:none; border:none; color:rgba(74,222,128,0.6); cursor:pointer; padding:0 1px; line-height:1; font-size:0.85rem; transition:color var(--fast); }
+    .role-chip-del:hover { color:var(--red); }
+    .role-chip.blue {
+      background: rgba(96,165,250,0.08); border-color: rgba(96,165,250,0.25); color: var(--blue);
+    }
+    .role-chip.blue .role-chip-del { color: rgba(96,165,250,0.6); }
+    .role-chip.blue .role-chip-del:hover { color: var(--red); }
+
+    /* ── Buttons ─────────────────────────────────────── */
+    .btn-group { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; border-radius:var(--r-sm); font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.88rem; cursor:pointer; border:none; transition:all var(--mid); }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .btn-primary { background:var(--green2); color:#000; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn-outline { background:transparent; color:var(--text2); border:1px solid var(--border2); }
+    .btn-outline:hover:not(:disabled) { border-color:var(--green2); color:var(--green2); }
+    .btn-danger  { background:var(--red-bg); color:var(--red); border:1px solid var(--red-border); }
+    .btn-danger:hover:not(:disabled) { background:rgba(248,113,113,0.18); }
+
+    /* ── Status Box ──────────────────────────────────── */
+    .status-box {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 14px 16px; margin-bottom: 18px;
+      display: none;
+    }
+    .status-box.show { display: block; }
+    .status-box-title { font-family:'Rajdhani',sans-serif; font-size:0.88rem; font-weight:700; color:var(--text2); margin-bottom:10px; }
+    .status-row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); font-size:0.81rem; }
+    .status-row:last-child { border-bottom:none; }
+    .status-label { color:var(--text3); }
+    .status-value { color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.76rem; }
+    .status-value.ok   { color:var(--green); }
+    .status-value.warn { color:var(--orange); }
+
+    /* ── Success Banner ──────────────────────────────── */
+    .success-banner { background:rgba(74,222,128,0.08); border:1px solid rgba(74,222,128,0.25); border-radius:var(--r); padding:16px 18px; margin-top:16px; display:none; }
+    .success-banner.show { display:block; }
+    .success-banner-title { font-family:'Rajdhani',sans-serif; font-weight:700; color:var(--green); margin-bottom:4px; }
+    .success-banner-sub   { font-size:0.80rem; color:var(--text2); }
+
+    /* ── Toast ───────────────────────────────────────── */
+    .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:220px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
+    .toast.ok  { border-left:3px solid var(--green2); }
+    .toast.err { border-left:3px solid var(--red); }
+    .toast.warn { border-left:3px solid var(--orange); }
+
+    /* ── Info callout ────────────────────────────────── */
+    .info-callout { background:var(--bg-surface); border:1px solid var(--border); border-left:3px solid var(--blue); border-radius:var(--r-sm); padding:10px 14px; font-size:0.80rem; color:var(--text2); line-height:1.6; margin-bottom:16px; }
+    .info-callout code { background:var(--bg-raised); padding:1px 5px; border-radius:3px; font-size:0.76rem; color:var(--green); }
+
+    /* ── Active channels list ────────────────────────── */
+    .vc-list { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+    .vc-item {
+      background:var(--bg-surface); border:1px solid var(--border);
+      border-radius:var(--r); padding:12px 14px;
+      display:flex; align-items:center; gap:12px;
+    }
+    .vc-icon { font-size:1.2rem; flex-shrink:0; }
+    .vc-info { flex:1; min-width:0; }
+    .vc-name { font-size:0.85rem; font-weight:600; color:var(--text); margin-bottom:2px; }
+    .vc-meta { font-size:0.70rem; color:var(--text3); font-family:'JetBrains Mono',monospace; }
+    .vc-badge {
+      display:inline-flex; align-items:center; gap:4px;
+      padding:2px 7px; border-radius:10px;
+      font-size:0.64rem; font-weight:700; flex-shrink:0;
+    }
+    .vc-badge.open   { background:var(--green-g2); color:var(--green); border:1px solid rgba(74,222,128,0.2); }
+    .vc-badge.closed { background:rgba(96,165,250,0.08); color:var(--blue); border:1px solid rgba(96,165,250,0.2); }
+  </style>
+</head>
+<body class="detail-body">
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    System Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">🎙️ Voice Channel Creator</span>
+  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
+</div>
+
+<div class="setup-body">
+
+  <!-- Permissions Banner -->
+  <div class="perm-banner">
+    <div class="perm-banner-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      Benötigte Bot-Berechtigungen (kein Administrator nötig)
+    </div>
+    <div class="perm-list" id="permList">
+      <span class="perm-chip">⏳ Lade...</span>
+    </div>
+  </div>
+
+  <!-- Current Config Status -->
+  <div class="status-box" id="statusBox">
+    <div class="status-box-title">📊 Aktuelle Konfiguration</div>
+    <div id="statusRows"></div>
+  </div>
+
+  <div class="setup-grid">
+
+    <!-- Basis-Konfiguration -->
+    <div class="panel-card">
+      <div class="panel-title">📁 Kategorie & Erstell-Kanal</div>
+      <div class="panel-sub">Wo sollen automatisch erstellte Voice-Kanäle erscheinen?</div>
+
+      <div class="field">
+        <label>📁 Kategorie (optional)</label>
+        <select id="cfg_category">
+          <option value="">(Server-Root – keine Kategorie)</option>
+        </select>
+        <div class="field-hint">Neue Kanäle werden in dieser Kategorie erstellt.</div>
+      </div>
+
+      <div class="field">
+        <label>🎙️ Name des Erstell-Kanals</label>
+        <input type="text" id="cfg_channel_name" value="➕  Kanal erstellen" maxlength="100" placeholder="➕  Kanal erstellen">
+        <div class="field-hint">Dieser Voice-Kanal triggert die automatische Erstellung.</div>
+      </div>
+
+      <div class="field">
+        <label>⏱️ Leerlauf-Timeout (Sekunden)</label>
+        <input type="number" id="cfg_timeout" value="30" min="10" max="3600">
+        <div class="field-hint">Leere Kanäle werden nach dieser Zeit automatisch gelöscht (min. 10s).</div>
+      </div>
+    </div>
+
+    <!-- Rollen -->
+    <div class="panel-card">
+      <div class="panel-title">👥 Rollen & Berechtigungen</div>
+      <div class="panel-sub">Wer darf Kanäle erstellen und wer hat immer Zugang?</div>
+
+      <div class="field">
+        <label>🎙️ Erstell-Rollen (leer = jeder)</label>
+        <div class="role-chips" id="creatorRoleChips"><span style="font-size:.73rem;color:var(--text3)">Jeder darf einen Kanal erstellen</span></div>
+        <select id="creatorRoleAdd" onchange="addRole('creator', this)" style="margin-top:8px;width:100%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;padding:8px 10px;border-radius:var(--r-sm);outline:none;">
+          <option value="">+ Erstell-Rolle hinzufügen...</option>
+        </select>
+        <div class="field-hint">Nur diese Rollen können einen eigenen Kanal erstellen.</div>
+      </div>
+
+      <div class="field">
+        <label>🔑 Panel-Rollen (immer Zugang + Panel nutzen)</label>
+        <div class="role-chips" id="allowedRoleChips"><span style="font-size:.73rem;color:var(--text3)">Keine gesetzt</span></div>
+        <select id="allowedRoleAdd" onchange="addRole('allowed', this)" style="margin-top:8px;width:100%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;padding:8px 10px;border-radius:var(--r-sm);outline:none;">
+          <option value="">+ Panel-Rolle hinzufügen...</option>
+        </select>
+        <div class="field-hint">Diese Rollen können immer beitreten und haben Zugang zum Steuerungs-Panel.</div>
+      </div>
+    </div>
+
+    <!-- Funktionsweise Erklärung -->
+    <div class="panel-card full">
+      <div class="panel-title">ℹ️ Wie funktioniert das?</div>
+      <div class="panel-sub">Übersicht über den automatischen Voice-Creator-Flow</div>
+
+      <div class="info-callout">
+        <strong>1. Erstell-Kanal:</strong> Ein spezieller Voice-Kanal (<code>➕ Kanal erstellen</code>) wird in der gewählten Kategorie erstellt.<br><br>
+        <strong>2. Kanalerstellen:</strong> Wenn ein Mitglied diesem Kanal beitritt, wird automatisch ein eigener Voice-Kanal erstellt und das Mitglied dorthin verschoben.<br><br>
+        <strong>3. Panel:</strong> Im neuen Kanal erscheint ein Steuerungs-Panel mit dem der Kanalbesitzer den Kanal auf <strong>Privat</strong> stellen, User kicken, ein Limit setzen oder den Kanal löschen kann.<br><br>
+        <strong>4. Privat-Modus:</strong> Bei privatem Kanal erscheint ein Warteraum. Anfragen werden über Annehmen/Ablehnen-Buttons verwaltet. Eine temporäre Zugangs-Rolle wird automatisch erstellt und nach Kanalende gelöscht.<br><br>
+        <strong>5. Auto-Cleanup:</strong> Leere Kanäle werden nach dem eingestellten Timeout automatisch gelöscht.
+      </div>
+    </div>
+
+  </div><!-- /.setup-grid -->
+
+  <!-- Save Button -->
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+    <button class="btn btn-primary" onclick="saveConfig()" id="saveBtn">
+      🚀 Voice Creator einrichten / aktualisieren
+    </button>
+    <button class="btn btn-danger" onclick="deleteConfig()" id="deleteBtn" style="display:none;">
+      🗑️ Voice Creator deaktivieren
+    </button>
+  </div>
+
+  <!-- Success Banner -->
+  <div class="success-banner" id="successBanner">
+    <div class="success-banner-title">✅ Voice Creator eingerichtet!</div>
+    <div class="success-banner-sub" id="successMsg">Der Erstell-Kanal wurde erstellt. Mitglieder können jetzt eigene Voice-Kanäle erstellen.</div>
+  </div>
+
+  <!-- Active VCs -->
+  <div class="panel-card" id="activeVcCard" style="display:none; margin-top:8px;">
+    <div class="panel-title">🔴 Aktive Kanäle</div>
+    <div class="panel-sub">Aktuell laufende Voice-Kanäle auf diesem Server.</div>
+    <div class="vc-list" id="vcList">
+      <span style="color:var(--text3);font-size:0.83rem;">Keine aktiven Kanäle.</span>
+    </div>
+    <div class="btn-group" style="margin-top:12px;">
+      <button class="btn btn-outline" onclick="loadActiveVcs()" style="font-size:0.82rem;padding:7px 14px;">↺ Aktualisieren</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SERVER_ID = {{ server_id | tojson }};
+let _channels = [];
+let _roles    = [];
+let _creatorRoleIds = [];
+let _allowedRoleIds = [];
+let _hasConfig = false;
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
+  await Promise.all([loadChannelsAndRoles(), loadConfig(), checkPermissions()]);
+  loadActiveVcs();
+}
+
+// ── Permissions ────────────────────────────────────────────────────────────
+async function checkPermissions() {
+  try {
+    const r = await fetch(`/api/setup/voice/${SERVER_ID}/permissions`);
+    const d = await r.json();
+    const perms = d.permissions || {};
+    const required = [
+      { key: 'manage_roles',    label: 'Manage Roles' },
+      { key: 'manage_channels', label: 'Manage Channels' },
+      { key: 'move_members',    label: 'Move Members' },
+      { key: 'view_channel',    label: 'View Channel' },
+      { key: 'connect',         label: 'Connect' },
+      { key: 'send_messages',   label: 'Send Messages' },
+    ];
+    document.getElementById('permList').innerHTML = required.map(p =>
+      `<span class="perm-chip ${perms[p.key] ? 'ok' : 'warn'}">${perms[p.key] ? '✅' : '⚠️'} ${esc(p.label)}</span>`
+    ).join('');
+  } catch(e) {
+    document.getElementById('permList').innerHTML = '<span class="perm-chip warn">⚠️ Konnte Berechtigungen nicht prüfen</span>';
+  }
+}
+
+// ── Channels & Roles ───────────────────────────────────────────────────────
+async function loadChannelsAndRoles() {
+  const [cr, rr] = await Promise.all([
+    fetch(`/api/setup/guild/${SERVER_ID}/channels`),
+    fetch(`/api/setup/guild/${SERVER_ID}/roles`),
+  ]);
+  const cd = await cr.json(); _channels = cd.channels || [];
+  const rd = await rr.json(); _roles    = rd.roles    || [];
+  fillSelects();
+}
+
+function fillSelects() {
+  const cats = _channels.filter(c => c.type === 4);
+  const roleOpts = _roles.map(r => `<option value="${esc(r.id)}">@${esc(r.name)}</option>`).join('');
+
+  document.getElementById('cfg_category').innerHTML =
+    '<option value="">(Server-Root – keine Kategorie)</option>' +
+    cats.map(c => `<option value="${esc(c.id)}">📁 ${esc(c.name)}</option>`).join('');
+
+  document.getElementById('creatorRoleAdd').innerHTML =
+    `<option value="">+ Erstell-Rolle hinzufügen...</option>${roleOpts}`;
+  document.getElementById('allowedRoleAdd').innerHTML =
+    `<option value="">+ Panel-Rolle hinzufügen...</option>${roleOpts}`;
+}
+
+// ── Load Config ────────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const r = await fetch(`/api/setup/voice/${SERVER_ID}`);
+    if (r.status === 404) { return; }
+    const d = await r.json();
+
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+
+    if (d.config) {
+      _hasConfig = true;
+      const c = d.config;
+      setTimeout(() => {
+        if (c.category_id) document.getElementById('cfg_category').value = c.category_id;
+        if (c.channel_name) document.getElementById('cfg_channel_name').value = c.channel_name;
+        if (c.empty_timeout != null) document.getElementById('cfg_timeout').value = c.empty_timeout;
+      }, 150);
+
+      // Creator Rollen
+      _creatorRoleIds = parseCsv(c.creator_role_ids);
+      renderRoleChips('creator');
+      // Allowed Rollen
+      _allowedRoleIds = parseCsv(c.allowed_role_ids);
+      renderRoleChips('allowed');
+
+      // Status Box
+      const statusBox = document.getElementById('statusBox');
+      statusBox.classList.add('show');
+      document.getElementById('statusRows').innerHTML = [
+        ['📁 Kategorie',       c.category_id ? `<span class="status-value ok">#ID ${c.category_id}</span>` : '<span class="status-value warn">Nicht gesetzt</span>'],
+        ['🎙️ Erstell-Kanal',   c.channel_id  ? `<span class="status-value ok">Aktiv (#ID ${c.channel_id})</span>` : '<span class="status-value warn">Noch nicht erstellt</span>'],
+        ['⏱️ Timeout',         `<span class="status-value">${c.empty_timeout || 30}s</span>`],
+        ['🎙️ Erstell-Rollen', `<span class="status-value">${_creatorRoleIds.length ? _creatorRoleIds.length + ' Rolle(n)' : 'Jeder'}</span>`],
+        ['🔑 Panel-Rollen',   `<span class="status-value">${_allowedRoleIds.length ? _allowedRoleIds.length + ' Rolle(n)' : 'Keine'}</span>`],
+      ].map(([label, val]) => `
+        <div class="status-row">
+          <span class="status-label">${esc(label)}</span>
+          ${val}
+        </div>`).join('');
+
+      document.getElementById('deleteBtn').style.display = '';
+      document.getElementById('activeVcCard').style.display = '';
+    }
+  } catch(e) {
+    console.error('loadConfig:', e);
+  }
+}
+
+function parseCsv(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String);
+  return raw.split(',').map(r => r.trim()).filter(Boolean);
+}
+
+// ── Role chips ─────────────────────────────────────────────────────────────
+function addRole(type, sel) {
+  const val = sel.value; if (!val) return;
+  if (type === 'creator' && !_creatorRoleIds.includes(val)) _creatorRoleIds.push(val);
+  if (type === 'allowed' && !_allowedRoleIds.includes(val)) _allowedRoleIds.push(val);
+  sel.value = '';
+  renderRoleChips(type);
+}
+
+function removeRole(type, rid) {
+  if (type === 'creator') _creatorRoleIds = _creatorRoleIds.filter(r => r !== rid);
+  if (type === 'allowed') _allowedRoleIds = _allowedRoleIds.filter(r => r !== rid);
+  renderRoleChips(type);
+}
+
+function renderRoleChips(type) {
+  const ids      = type === 'creator' ? _creatorRoleIds : _allowedRoleIds;
+  const el       = document.getElementById(type === 'creator' ? 'creatorRoleChips' : 'allowedRoleChips');
+  const chipClass = type === 'allowed' ? 'role-chip blue' : 'role-chip';
+  const emptyMsg  = type === 'creator'
+    ? '<span style="font-size:.73rem;color:var(--text3)">Jeder darf einen Kanal erstellen</span>'
+    : '<span style="font-size:.73rem;color:var(--text3)">Keine gesetzt</span>';
+  if (!ids.length) { el.innerHTML = emptyMsg; return; }
+  el.innerHTML = ids.map(rid => {
+    const role = _roles.find(r => r.id === rid);
+    return `<span class="${chipClass}">@${esc(role?.name || rid)}<button class="role-chip-del" onclick="removeRole('${type}','${esc(rid)}')">✕</button></span>`;
+  }).join('');
+}
+
+// ── Save Config ────────────────────────────────────────────────────────────
+async function saveConfig() {
+  const channelName = document.getElementById('cfg_channel_name').value.trim();
+  if (!channelName) { toast('Bitte einen Kanal-Namen eingeben', 'err'); return; }
+
+  const timeout = parseInt(document.getElementById('cfg_timeout').value) || 30;
+  if (timeout < 10) { toast('Timeout muss mindestens 10 Sekunden sein', 'err'); return; }
+
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Wird eingerichtet...';
+
+  const body = {
+    category_id:       document.getElementById('cfg_category').value || null,
+    channel_name:      channelName,
+    empty_timeout:     timeout,
+    creator_role_ids:  _creatorRoleIds,
+    allowed_role_ids:  _allowedRoleIds,
+  };
+
+  try {
+    const r = await fetch(`/api/setup/voice/${SERVER_ID}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+
+    document.getElementById('successBanner').classList.add('show');
+    if (d.channel_name) {
+      document.getElementById('successMsg').textContent =
+        `Der Erstell-Kanal "${d.channel_name}" wurde erstellt. Mitglieder können jetzt eigene Voice-Kanäle erstellen.`;
+    }
+    toast('Voice Creator erfolgreich eingerichtet ✓', 'ok');
+    await loadConfig();
+    loadActiveVcs();
+  } catch(e) {
+    toast('Netzwerkfehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 Voice Creator einrichten / aktualisieren';
+  }
+}
+
+// ── Delete Config ──────────────────────────────────────────────────────────
+async function deleteConfig() {
+  if (!confirm('Voice Creator wirklich deaktivieren?\n\nDer Erstell-Kanal und alle aktiven Voice-Kanäle werden gelöscht.')) return;
+
+  const r = await fetch(`/api/setup/voice/${SERVER_ID}`, { method: 'DELETE' });
+  const d = await r.json();
+  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+  toast('Voice Creator deaktiviert', 'ok');
+  location.reload();
+}
+
+// ── Active VCs ─────────────────────────────────────────────────────────────
+async function loadActiveVcs() {
+  try {
+    const r = await fetch(`/api/setup/voice/${SERVER_ID}/channels`);
+    const d = await r.json();
+    const vcs = d.channels || [];
+    const list = document.getElementById('vcList');
+    if (!vcs.length) {
+      list.innerHTML = '<span style="color:var(--text3);font-size:0.83rem;">Keine aktiven Kanäle.</span>';
+      return;
+    }
+    list.innerHTML = vcs.map(vc => `
+      <div class="vc-item">
+        <div class="vc-icon">${vc.is_open ? '🔓' : '🔒'}</div>
+        <div class="vc-info">
+          <div class="vc-name">${esc(vc.owner_name || 'Unbekannt')}'s Kanal</div>
+          <div class="vc-meta">Owner ID: ${esc(vc.owner_id)} · Timeout: ${esc(String(vc.user_limit || 0))} Limit</div>
+        </div>
+        <span class="vc-badge ${vc.is_open ? 'open' : 'closed'}">${vc.is_open ? '🔓 Öffentlich' : '🔒 Privat'}</span>
+      </div>`).join('');
+  } catch(e) {
+    console.error('loadActiveVcs:', e);
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type='ok') {
+  const icons = { ok:'✅', err:'❌', warn:'⚠️' };
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${icons[type]||''}</span><span>${esc(msg)}</span>`;
+  document.getElementById('toastContainer').appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1358,3 +1358,14 @@ register_application_setup_routes(
     _cached_guild,
     _guild_icon_url,
 )
+
+from .voice_setup_routes import register_voice_setup_routes
+
+register_voice_setup_routes(
+    app,
+    login_required,
+    _is_mbl,
+    _bot_get,
+    _cached_guild,
+    _guild_icon_url,
+)

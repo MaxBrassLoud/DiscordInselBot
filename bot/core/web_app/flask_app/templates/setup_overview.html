@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <style>
+    .setup-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 18px;
+      margin-top: 28px;
+    }
+    .setup-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 24px;
+      transition: all var(--mid);
+      cursor: pointer;
+      text-decoration: none !important;
+      display: block;
+      position: relative;
+      overflow: hidden;
+    }
+    .setup-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--green2);
+      opacity: 0;
+      transition: opacity var(--mid);
+    }
+    .setup-card:hover {
+      border-color: var(--green2);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .setup-card:hover::before { opacity: 1; }
+    .setup-card.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .setup-card-icon {
+      width: 48px; height: 48px;
+      border-radius: var(--r);
+      background: var(--green-g2);
+      border: 1px solid rgba(74,222,128,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem;
+      margin-bottom: 14px;
+    }
+    .setup-card-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 1.05rem; font-weight: 700;
+      color: var(--text); margin-bottom: 6px;
+    }
+    .setup-card-desc { font-size: 0.82rem; color: var(--text2); line-height: 1.6; }
+    .setup-card-status {
+      display: inline-flex; align-items: center; gap: 5px;
+      margin-top: 12px; padding: 3px 9px;
+      border-radius: 20px; font-size: 0.68rem; font-weight: 700;
+    }
+    .status-ok   { background: rgba(74,222,128,0.1); color: var(--green); border: 1px solid rgba(74,222,128,0.2); }
+    .status-none { background: var(--bg-surface); color: var(--text3); border: 1px solid var(--border); }
+
+    .page-content { max-width: 1000px; margin: 0 auto; padding: 28px 22px; }
+    .page-hero { margin-bottom: 8px; }
+    .page-hero-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 1.6rem; font-weight: 700; color: var(--text); margin-bottom: 5px;
+    }
+    .page-hero-sub { font-size: 0.86rem; color: var(--text3); }
+
+    .server-selector {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 24px; padding: 12px 16px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+    }
+    .server-selector label { font-size: 0.80rem; color: var(--text3); font-weight: 600; flex-shrink: 0; }
+    .server-selector select {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text); font-family: 'Outfit', sans-serif;
+      font-size: 0.85rem; padding: 6px 10px; border-radius: var(--r-sm);
+      outline: none; cursor: pointer; flex: 1;
+    }
+    .server-selector select:focus { border-color: var(--green2); }
+    .server-selector select option { background: #1d2128; }
+
+    .no-admin-notice {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-left: 3px solid var(--orange); border-radius: var(--r-lg);
+      padding: 16px 18px; margin-top: 16px;
+      font-size: 0.83rem; color: var(--text2); line-height: 1.6;
+    }
+    .no-admin-notice strong { color: var(--orange); }
+
+    .section-divider {
+      font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--text3); margin: 28px 0 12px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .section-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+  </style>
+</head>
+<body class="detail-body">
+
+<div class="detail-topbar">
+  <a href="/dashboard" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M15 18l-6-6 6-6"/>
+    </svg>
+    Dashboard
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">System Setup</span>
+</div>
+
+<div class="page-content">
+  <div class="page-hero">
+    <div class="page-hero-title">⚙️ System Setup</div>
+    <div class="page-hero-sub">Konfiguriere alle Bot-Systeme direkt im Browser – kein Discord-Command nötig.<br>
+      <span style="color:var(--orange);font-size:0.78rem;">⚠️ Nur Server auf denen du <strong>Administrator-Rechte</strong> hast werden angezeigt.</span>
+    </div>
+  </div>
+
+  <div class="server-selector">
+    <label>🌐 Server:</label>
+    <select id="serverSelect" onchange="onServerChange(this.value)">
+      <option value="">Lade Server...</option>
+    </select>
+  </div>
+
+  <div id="noAdminNotice" style="display:none;" class="no-admin-notice">
+    <strong>⚠️ Kein Server verfügbar</strong><br>
+    Du hast auf keinem der konfigurierten Server Administrator-Rechte.
+    Setup-Optionen sind nur für Server-Administratoren zugänglich.
+  </div>
+
+  <div id="setupContent" style="display:none;">
+    <div class="section-divider">Bot-Systeme</div>
+    <div class="setup-grid" id="setupGrid"></div>
+  </div>
+</div>
+
+<script>
+let _serverId = '';
+
+async function loadServers() {
+  const sel = document.getElementById('serverSelect');
+  sel.innerHTML = '<option value="">Lade Server...</option>';
+
+  try {
+    const r = await fetch('/api/setup/servers');
+    const d = await r.json();
+
+    if (!d.servers || d.servers.length === 0) {
+      sel.innerHTML = '<option value="">Keine Server mit Admin-Rechten gefunden</option>';
+      document.getElementById('noAdminNotice').style.display = '';
+      return;
+    }
+
+    sel.innerHTML = '<option value="">-- Server auswählen --</option>' +
+      d.servers.map(s => `<option value="${esc(s.server_id)}">${esc(s.name)}</option>`).join('');
+
+    if (d.servers.length === 1) {
+      sel.value = d.servers[0].server_id;
+      onServerChange(d.servers[0].server_id);
+    }
+  } catch(e) {
+    sel.innerHTML = '<option value="">Fehler beim Laden</option>';
+    console.error(e);
+  }
+}
+
+function onServerChange(sid) {
+  _serverId = sid;
+  const content = document.getElementById('setupContent');
+  const notice  = document.getElementById('noAdminNotice');
+
+  if (!sid) {
+    content.style.display = 'none';
+    return;
+  }
+
+  notice.style.display  = 'none';
+  content.style.display = '';
+  renderSetupGrid(sid);
+}
+
+function renderSetupGrid(sid) {
+  document.getElementById('setupGrid').innerHTML = `
+    <a href="/dashboard/setup/tickets?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🎫</div>
+      <div class="setup-card-title">Ticket-System</div>
+      <div class="setup-card-desc">
+        Module konfigurieren, Kanäle & Kategorien festlegen,
+        Panel in Channel senden. Schritt-für-Schritt geführt.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/applications?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">📋</div>
+      <div class="setup-card-title">Bewerbungs-System</div>
+      <div class="setup-card-desc">
+        Panel-Kanal, Rollen, Texte und Cooldown konfigurieren.
+        Bewerber-Flow von Einreichung bis Entscheidung einrichten.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/welcomer?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">👋</div>
+      <div class="setup-card-title">Willkommens-Nachrichten</div>
+      <div class="setup-card-desc">
+        Willkommens- und Abschieds-Kanal konfigurieren.
+        Einzeln an- und abschaltbar.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/media?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">📷</div>
+      <div class="setup-card-title">Medien-Weiterleitung</div>
+      <div class="setup-card-desc">
+        Bilder, Videos, YouTube- und Twitch-Links automatisch in
+        einen Medienkanal weiterleiten. Jede Funktion einzeln steuerbar.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/voice?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🎙️</div>
+      <div class="setup-card-title">Voice Channel Creator</div>
+      <div class="setup-card-desc">
+        Automatische Voice-Kanäle on demand. Benutzer erstellen
+        eigene Kanäle, die sich selbst löschen wenn sie leer sind.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <div class="setup-card disabled">
+      <div class="setup-card-icon">🎮</div>
+      <div class="setup-card-title">Spieleabende</div>
+      <div class="setup-card-desc">Spieleabend-Kanal und Rollen konfigurieren.</div>
+      <span class="setup-card-status status-none">Bald verfügbar</span>
+    </div>
+  `;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+loadServers();
+</script>
+</body>
+</html>

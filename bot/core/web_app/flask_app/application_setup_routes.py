@@ -2,13 +2,14 @@
 bot/core/web_app/flask_app/application_setup_routes.py
 =======================================================
 Web-basiertes Bewerbungs-System Setup & Bearbeitung.
+HTML-Templates liegen in templates/ – kein hardcoded HTML mehr in dieser Datei.
 
 In app.py einbinden:
     from .application_setup_routes import register_application_setup_routes
     register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url)
 
 ROUTEN:
-  GET  /dashboard/setup/applications            – Setup-Seite
+  GET  /dashboard/setup/applications            – Setup-Seite (Template)
   GET  /api/setup/applications/<server_id>      – Konfiguration laden
   POST /api/setup/applications/<server_id>      – Konfiguration speichern
   POST /api/setup/applications/<server_id>/panel – Panel senden
@@ -17,7 +18,7 @@ ROUTEN:
 from __future__ import annotations
 
 import os
-from flask import jsonify, request, render_template_string, session
+from flask import jsonify, request, render_template, session
 
 BOT_TOKEN = os.getenv("DISCORD_TOKEN", "")
 MBL_ID    = os.getenv("MBL", "")
@@ -43,7 +44,7 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
     def setup_applications():
         user      = session["user"]
         server_id = request.args.get("server_id", "")
-        return render_template_string(_APP_SETUP_HTML, user=user, server_id=server_id)
+        return render_template("setup_applications.html", user=user, server_id=server_id)
 
     # ── GET /api/setup/applications/<server_id> ───────────────────────────────
     @app.route("/api/setup/applications/<server_id>", methods=["GET"])
@@ -117,7 +118,6 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
     @app.route("/api/setup/applications/<server_id>/panel", methods=["POST"])
     @login_required
     def api_send_app_panel(server_id):
-        """Sendet das Bewerbungs-Panel mit Button via Bot-Token."""
         user = session["user"]
         if not _check_access(user, server_id):
             return jsonify({"error": "Kein Zugriff"}), 403
@@ -141,34 +141,11 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
                 "Klicke auf den Button um deine Bewerbung einzureichen."
             )
 
-            DISCORD_API = "https://discord.com/api/v10"
-            headers = {
-                "Authorization": f"Bot {BOT_TOKEN}",
-                "Content-Type": "application/json",
-            }
+            DISCORD_API_URL = "https://discord.com/api/v10"
+            headers = {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
 
-            embed = {
-                "title":       panel_title,
-                "description": panel_desc,
-                "color":       0x22c55e,
-            }
-
-            # Bewerben-Button – custom_id muss vom Bot-Listener abgefangen werden
-            components = [
-                {
-                    "type": 1,
-                    "components": [
-                        {
-                            "type":      2,
-                            "style":     3,       # SUCCESS (grün)
-                            "label":     "📝 Bewerben",
-                            "custom_id": "app_apply_button",
-                            "emoji":     {"name": "⛏️"},
-                        }
-                    ],
-                }
-            ]
-
+            embed = {"title": panel_title, "description": panel_desc, "color": 0x22c55e}
+            components = [{"type": 1, "components": [{"type": 2, "style": 3, "label": "📝 Bewerben", "custom_id": "app_apply_button", "emoji": {"name": "⛏️"}}]}]
             payload = {"embeds": [embed], "components": components}
 
             existing_msg_id = config.get("panel_message_id")
@@ -177,10 +154,8 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
 
             if existing_msg_id:
                 edit_r = req_lib.patch(
-                    f"{DISCORD_API}/channels/{panel_ch_id}/messages/{existing_msg_id}",
-                    headers=headers,
-                    json=payload,
-                    timeout=8,
+                    f"{DISCORD_API_URL}/channels/{panel_ch_id}/messages/{existing_msg_id}",
+                    headers=headers, json=payload, timeout=8,
                 )
                 if edit_r.status_code in (200, 204):
                     panel_sent = True
@@ -189,18 +164,14 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
 
             if not panel_sent:
                 send_r = req_lib.post(
-                    f"{DISCORD_API}/channels/{panel_ch_id}/messages",
-                    headers=headers,
-                    json=payload,
-                    timeout=8,
+                    f"{DISCORD_API_URL}/channels/{panel_ch_id}/messages",
+                    headers=headers, json=payload, timeout=8,
                 )
                 if send_r.ok:
                     new_msg_id = send_r.json().get("id")
                     panel_sent = True
                 else:
-                    return jsonify({
-                        "error": f"Discord API Fehler {send_r.status_code}: {send_r.text[:300]}"
-                    }), 502
+                    return jsonify({"error": f"Discord API Fehler {send_r.status_code}: {send_r.text[:300]}"}), 502
 
             sb.table("application_servers").update({
                 "panel_message_id": new_msg_id,
@@ -209,611 +180,3 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
             return jsonify({"ok": True, "panel_sent": panel_sent, "message_id": new_msg_id})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# APPLICATION SETUP HTML
-# ══════════════════════════════════════════════════════════════════════════════
-
-_APP_SETUP_HTML = r"""<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bewerbungs-System Setup – Insel Bot</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="/static/css/main.css">
-  <style>
-    /* ── Layout ─────────────────────────────────────── */
-    .setup-body { max-width: 1100px; margin: 0 auto; padding: 24px 22px; }
-    .setup-cols { display: grid; grid-template-columns: 240px 1fr; gap: 22px; margin-top: 22px; }
-    @media(max-width:820px){ .setup-cols { grid-template-columns: 1fr; } }
-
-    /* ── Stepper ────────────────────────────────────── */
-    .stepper { position: sticky; top: 70px; }
-    .step-item {
-      display: flex; align-items: flex-start; gap: 10px;
-      padding: 9px 0; cursor: pointer; transition: opacity var(--mid);
-    }
-    .step-item:not(.done):not(.active) { opacity: 0.45; }
-    .step-num {
-      width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
-      background: var(--bg-surface); border: 2px solid var(--border2);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.7rem; font-weight: 700; color: var(--text3);
-      transition: all var(--mid);
-    }
-    .step-item.active .step-num { background: var(--green2); border-color: var(--green2); color: #000; }
-    .step-item.done   .step-num { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-    .step-item.done   .step-num::before { content: "✓"; font-size: 0.8rem; }
-    .step-item.done   .step-num span { display: none; }
-    .step-label { font-size: 0.83rem; font-weight: 600; color: var(--text2); padding-top: 3px; }
-    .step-item.active .step-label { color: var(--text); }
-    .step-connector { width: 2px; height: 16px; background: var(--border); margin-left: 12px; transition: background var(--mid); }
-    .step-connector.done { background: var(--green-dim); }
-
-    /* ── Cards ───────────────────────────────────────── */
-    .panel-card {
-      background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: var(--r-lg); padding: 24px 26px; margin-bottom: 18px; display: none;
-    }
-    .panel-card.active { display: block; }
-    .panel-title { font-family: 'Rajdhani', sans-serif; font-size: 1.15rem; font-weight: 700; color: var(--text); margin-bottom: 4px; }
-    .panel-sub   { font-size: 0.82rem; color: var(--text3); margin-bottom: 20px; }
-
-    /* ── Fields ──────────────────────────────────────── */
-    .field { margin-bottom: 14px; }
-    .field label {
-      display: block; font-size: 0.63rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.07em; color: var(--text3); margin-bottom: 5px;
-    }
-    .field select, .field input[type=text], .field input[type=number], .field textarea {
-      width: 100%; background: var(--bg-surface); border: 1px solid var(--border);
-      color: var(--text); font-family: 'Outfit', sans-serif; font-size: 0.85rem;
-      padding: 9px 12px; border-radius: var(--r-sm); outline: none; transition: border-color var(--fast);
-    }
-    .field select:focus, .field input:focus, .field textarea:focus {
-      border-color: var(--green2); box-shadow: 0 0 0 3px rgba(34,197,94,0.12);
-    }
-    .field select option { background: #1d2128; }
-    .field textarea { resize: vertical; min-height: 80px; }
-    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    @media(max-width:600px){ .field-row { grid-template-columns: 1fr; } }
-    .field-hint { font-size: 0.70rem; color: var(--text3); margin-top: 4px; }
-
-    /* ── Role chips ──────────────────────────────────── */
-    .role-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; min-height: 28px; }
-    .role-chip {
-      display: inline-flex; align-items: center; gap: 4px;
-      background: var(--green-g2); border: 1px solid rgba(74,222,128,0.2);
-      color: var(--green); padding: 2px 8px; border-radius: 12px;
-      font-size: 0.73rem; font-weight: 600;
-    }
-    .role-chip-del { background: none; border: none; color: rgba(74,222,128,0.6); cursor: pointer; padding: 0 1px; line-height: 1; font-size: 0.85rem; transition: color var(--fast); }
-    .role-chip-del:hover { color: var(--red); }
-
-    /* ── Buttons ─────────────────────────────────────── */
-    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
-    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; border-radius: var(--r-sm); font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 0.88rem; cursor: pointer; border: none; transition: all var(--mid); }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: var(--green2); color: #000; }
-    .btn-primary:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
-    .btn-outline { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
-    .btn-outline:hover:not(:disabled) { border-color: var(--green2); color: var(--green2); }
-    .btn-ghost   { background: var(--bg-surface); color: var(--text2); border: 1px solid var(--border); }
-    .btn-ghost:hover:not(:disabled) { border-color: var(--border3); color: var(--text); }
-
-    /* ── Progress bar ────────────────────────────────── */
-    .progress-bar  { height: 3px; background: var(--border); border-radius: 2px; margin-bottom: 22px; overflow: hidden; }
-    .progress-fill { height: 100%; background: var(--green2); border-radius: 2px; transition: width 0.4s ease; }
-
-    /* ── Panel preview ───────────────────────────────── */
-    .preview-box { background: var(--bg-raised); border: 1px solid var(--border2); border-left: 3px solid var(--green2); border-radius: var(--r); padding: 14px 16px; margin-top: 14px; }
-    .preview-title { font-family: 'Rajdhani', sans-serif; font-weight: 700; color: var(--text); font-size: 0.95rem; margin-bottom: 6px; }
-    .preview-desc  { font-size: 0.82rem; color: var(--text2); margin-bottom: 10px; white-space: pre-wrap; }
-    .preview-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      background: #57f287; color: #000; border-radius: 4px;
-      padding: 6px 14px; font-size: 0.83rem; font-weight: 700;
-    }
-
-    /* ── Summary rows ────────────────────────────────── */
-    .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-    .summary-row {
-      background: var(--bg-surface); border: 1px solid var(--border);
-      border-radius: var(--r-sm); padding: 10px 13px;
-    }
-    .summary-label { font-size: 0.63rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text3); margin-bottom: 3px; }
-    .summary-value { font-size: 0.83rem; color: var(--text); }
-
-    /* ── Toast ───────────────────────────────────────── */
-    .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
-    .toast {
-      background: var(--bg-card); border: 1px solid var(--border2); border-radius: var(--r);
-      padding: 10px 16px; font-size: 0.83rem; color: var(--text);
-      box-shadow: var(--shadow); min-width: 220px; animation: fadeDown 0.2s ease both;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .toast.ok  { border-left: 3px solid var(--green2); }
-    .toast.err { border-left: 3px solid var(--red); }
-
-    /* ── Success banner ──────────────────────────────── */
-    .success-banner { background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.25); border-radius: var(--r); padding: 16px 18px; margin-top: 16px; display: none; }
-    .success-banner.show { display: block; }
-    .success-banner-title { font-family: 'Rajdhani', sans-serif; font-weight: 700; color: var(--green); margin-bottom: 4px; }
-    .success-banner-sub   { font-size: 0.80rem; color: var(--text2); }
-
-    .info-callout { background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: var(--r-sm); padding: 10px 14px; font-size: 0.80rem; color: var(--text2); line-height: 1.6; margin-bottom: 16px; }
-  </style>
-</head>
-<body class="detail-body">
-
-<div class="toast-container" id="toastContainer"></div>
-
-<!-- Topbar -->
-<div class="detail-topbar">
-  <a href="/dashboard/setup" class="back-link">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-      <path d="M15 18l-6-6 6-6"/>
-    </svg>
-    System Setup
-  </a>
-  <span class="topbar-sep">/</span>
-  <span class="topbar-title">📋 Bewerbungs-System</span>
-  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
-</div>
-
-<div class="setup-body">
-  <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:25%"></div></div>
-
-  <div class="setup-cols">
-
-    <!-- ── Stepper ── -->
-    <div class="stepper" id="stepper">
-      <div class="step-item active" id="step-nav-1" onclick="goStep(1)">
-        <div class="step-num"><span>1</span></div>
-        <div class="step-label">Kanäle & Kategorie</div>
-      </div>
-      <div class="step-connector" id="conn-1"></div>
-      <div class="step-item" id="step-nav-2" onclick="goStep(2)">
-        <div class="step-num"><span>2</span></div>
-        <div class="step-label">Rollen</div>
-      </div>
-      <div class="step-connector" id="conn-2"></div>
-      <div class="step-item" id="step-nav-3" onclick="goStep(3)">
-        <div class="step-num"><span>3</span></div>
-        <div class="step-label">Texte & Optionen</div>
-      </div>
-      <div class="step-connector" id="conn-3"></div>
-      <div class="step-item" id="step-nav-4" onclick="goStep(4)">
-        <div class="step-num"><span>4</span></div>
-        <div class="step-label">Panel senden</div>
-      </div>
-    </div>
-
-    <!-- ── Content ── -->
-    <div id="stepContent">
-
-      <!-- STEP 1 – Kanäle -->
-      <div class="panel-card active" id="step-1">
-        <div class="panel-title">Schritt 1 – Kanäle & Kategorie</div>
-        <div class="panel-sub">Wo soll der Bewerben-Button erscheinen und wo werden Bewerbungskanäle erstellt?</div>
-
-        <div class="field">
-          <label>📢 Panel-Kanal <span style="color:var(--red)">*</span></label>
-          <select id="cfg_panel_channel">
-            <option value="">Lade Kanäle...</option>
-          </select>
-          <div class="field-hint">Hier erscheint der „Bewerben"-Button für Mitglieder.</div>
-        </div>
-
-        <div class="field">
-          <label>📁 Bewerbungs-Kategorie <span style="color:var(--red)">*</span></label>
-          <select id="cfg_category">
-            <option value="">Lade Kategorien...</option>
-          </select>
-          <div class="field-hint">Neue Bewerbungskanäle werden in dieser Kategorie erstellt.</div>
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="step1Next()">Speichern & Weiter →</button>
-        </div>
-      </div>
-
-      <!-- STEP 2 – Rollen -->
-      <div class="panel-card" id="step-2">
-        <div class="panel-title">Schritt 2 – Rollen konfigurieren</div>
-        <div class="panel-sub">Lege fest welche Rollen für Neuankömmlinge, angenommene Mitglieder und Staff gelten.</div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>🌱 Neulings-Rolle <span style="color:var(--red)">*</span></label>
-            <select id="cfg_newbie_role">
-              <option value="">Rolle wählen...</option>
-            </select>
-            <div class="field-hint">Automatisch beim Beitreten vergeben. Nur Neulings können sich bewerben.</div>
-          </div>
-          <div class="field">
-            <label>👥 Mitglieds-Rolle <span style="color:var(--red)">*</span></label>
-            <select id="cfg_member_role">
-              <option value="">Rolle wählen...</option>
-            </select>
-            <div class="field-hint">Wird nach erfolgreicher Annahme vergeben.</div>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>👮 Staff-Rollen <span style="color:var(--red)">*</span></label>
-          <div class="role-chips" id="staffRoleChips"><span style="font-size:.73rem;color:var(--text3)">Keine ausgewählt</span></div>
-          <select id="staffRoleAdd" onchange="addRole('staff', this)" style="margin-top:8px;width:100%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;padding:8px 10px;border-radius:var(--r-sm);outline:none;">
-            <option value="">+ Staff-Rolle hinzufügen...</option>
-          </select>
-          <div class="field-hint">Diese Rollen sehen Bewerbungskanäle und können entscheiden.</div>
-        </div>
-
-        <div class="field">
-          <label>🌐 Web-Admin Rollen (optional)</label>
-          <div class="role-chips" id="webAdminRoleChips"><span style="font-size:.73rem;color:var(--text3)">Keine</span></div>
-          <select id="webAdminRoleAdd" onchange="addRole('webAdmin', this)" style="margin-top:8px;width:100%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;padding:8px 10px;border-radius:var(--r-sm);outline:none;">
-            <option value="">+ Web-Admin Rolle hinzufügen...</option>
-          </select>
-          <div class="field-hint">Vollzugriff auf alle Bewerbungen im Web-Dashboard.</div>
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="step2Next()">Weiter →</button>
-          <button class="btn btn-outline" onclick="goStep(1)">← Zurück</button>
-        </div>
-      </div>
-
-      <!-- STEP 3 – Texte & Optionen -->
-      <div class="panel-card" id="step-3">
-        <div class="panel-title">Schritt 3 – Texte & optionale Kanäle</div>
-        <div class="panel-sub">Passe die Nachrichten und Kanäle an. Alle Felder sind optional.</div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>📋 Log-Kanal (optional)</label>
-            <select id="cfg_log_channel">
-              <option value="">(Kein Log-Kanal)</option>
-            </select>
-            <div class="field-hint">Links zu neuen und abgeschlossenen Bewerbungen.</div>
-          </div>
-          <div class="field">
-            <label>⛏️ MC-Namen Log-Kanal (optional)</label>
-            <select id="cfg_mc_log_channel">
-              <option value="">(Kein MC-Log)</option>
-            </select>
-            <div class="field-hint">Minecraft-Namen der Bewerber werden hier gepostet.</div>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>⏳ Cooldown nach Ablehnung (Stunden)</label>
-          <input type="number" id="cfg_cooldown" value="24" min="0" max="8760">
-          <div class="field-hint">0 = kein Cooldown. Nach einer Ablehnung muss der User diese Zeit warten.</div>
-        </div>
-
-        <div class="field">
-          <label>💬 Willkommens-Text im Panel <span style="font-size:.68rem;color:var(--text3);">({player} = Minecraft-Name)</span></label>
-          <textarea id="cfg_welcome" rows="4" placeholder="Willkommen {player}! ..."></textarea>
-        </div>
-
-        <div class="field">
-          <label>📌 Anweisungs-Text im Bewerbungskanal</label>
-          <textarea id="cfg_instruction" rows="3" placeholder="📋 Willkommen! Schreibe hier deine Bewerbung..."></textarea>
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="step3Next()">Weiter → Panel senden</button>
-          <button class="btn btn-outline" onclick="goStep(2)">← Zurück</button>
-        </div>
-      </div>
-
-      <!-- STEP 4 – Panel senden -->
-      <div class="panel-card" id="step-4">
-        <div class="panel-title">Schritt 4 – Panel senden</div>
-        <div class="panel-sub">Sende den Bewerbungs-Button in deinen konfigurierten Kanal.</div>
-
-        <div class="summary-grid" id="summaryGrid"></div>
-
-        <div class="field">
-          <label>📌 Panel-Titel</label>
-          <input type="text" id="panel_title" value="⛏️ Bewerbung einreichen">
-        </div>
-        <div class="field">
-          <label>📝 Panel-Text</label>
-          <textarea id="panel_desc" rows="3"></textarea>
-        </div>
-
-        <div class="preview-box">
-          <div class="preview-title" id="previewTitle">⛏️ Bewerbung einreichen</div>
-          <div class="preview-desc"  id="previewDesc"></div>
-          <div class="preview-btn">⛏️ 📝 Bewerben</div>
-        </div>
-
-        <div class="info-callout" style="margin-top:14px;">
-          ℹ️ Der Button ist sofort nach dem Senden aktiv, da <code>app_apply_button</code>
-          bereits als persistente View im laufenden Bot registriert ist.
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="sendPanel()">📤 Panel jetzt senden</button>
-          <button class="btn btn-outline" onclick="goStep(3)">← Zurück</button>
-        </div>
-
-        <div class="success-banner" id="panelSuccess">
-          <div class="success-banner-title">✅ Panel gesendet!</div>
-          <div class="success-banner-sub" id="panelSuccessMsg">Das Bewerbungs-Panel wurde erfolgreich in den Kanal gesendet. Mitglieder können sich jetzt bewerben.</div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<script>
-const SERVER_ID = {{ server_id | tojson }};
-let _channels   = [];
-let _roles      = [];
-let _staffRoleIds    = [];
-let _webAdminRoleIds = [];
-let _step = 1;
-
-// ── Init ───────────────────────────────────────────────────────────────────
-async function init() {
-  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
-  await Promise.all([loadChannelsAndRoles(), loadConfig()]);
-  updateProgress();
-}
-
-async function loadChannelsAndRoles() {
-  const [cr, rr] = await Promise.all([
-    fetch(`/api/setup/guild/${SERVER_ID}/channels`),
-    fetch(`/api/setup/guild/${SERVER_ID}/roles`),
-  ]);
-  const cd = await cr.json(); _channels = cd.channels || [];
-  const rd = await rr.json(); _roles    = rd.roles    || [];
-  fillSelects();
-}
-
-function fillSelects() {
-  const text = _channels.filter(c => c.type === 0);
-  const cats = _channels.filter(c => c.type === 4);
-
-  function opts(arr, blank) {
-    return `<option value="">${blank}</option>` +
-      arr.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('');
-  }
-  function catOpts(arr) {
-    return `<option value="">(Keine eigene Kategorie)</option>` +
-      arr.map(c => `<option value="${esc(c.id)}">📁 ${esc(c.name)}</option>`).join('');
-  }
-  function roleOpts(blank) {
-    return `<option value="">${blank}</option>` +
-      _roles.map(r => `<option value="${esc(r.id)}">@${esc(r.name)}</option>`).join('');
-  }
-
-  q('cfg_panel_channel').innerHTML  = opts(text, '📢 Panel-Kanal wählen *');
-  q('cfg_category').innerHTML       = catOpts(cats).replace('(Keine eigene Kategorie)', '📁 Kategorie wählen *');
-  q('cfg_log_channel').innerHTML    = opts(text, '(Kein Log-Kanal)');
-  q('cfg_mc_log_channel').innerHTML = opts(text, '(Kein MC-Namen Log)');
-  q('cfg_newbie_role').innerHTML    = roleOpts('🌱 Neulings-Rolle wählen *');
-  q('cfg_member_role').innerHTML    = roleOpts('👥 Mitglieds-Rolle wählen *');
-  q('staffRoleAdd').innerHTML       = roleOpts('+ Staff-Rolle hinzufügen...');
-  q('webAdminRoleAdd').innerHTML    = roleOpts('+ Web-Admin Rolle hinzufügen...');
-}
-
-async function loadConfig() {
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}`);
-  const d = await r.json();
-
-  if (d.guild) {
-    const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
-    q('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
-  }
-
-  if (d.config) {
-    const c = d.config;
-    setTimeout(() => {
-      setVal('cfg_panel_channel',  c.panel_channel_id);
-      setVal('cfg_category',       c.category_id);
-      setVal('cfg_newbie_role',    c.newbie_role_id);
-      setVal('cfg_member_role',    c.member_role_id);
-      setVal('cfg_log_channel',    c.log_channel_id);
-      setVal('cfg_mc_log_channel', c.mc_log_channel_id);
-      if (c.rejection_cooldown_hours != null) q('cfg_cooldown').value = c.rejection_cooldown_hours;
-      if (c.welcome_message)     q('cfg_welcome').value     = c.welcome_message;
-      if (c.instruction_message) q('cfg_instruction').value = c.instruction_message;
-    }, 150);
-
-    // Staff roles
-    const rawStaff = c.staff_role_ids || '';
-    _staffRoleIds = typeof rawStaff === 'string'
-      ? rawStaff.split(',').map(r=>r.trim()).filter(Boolean)
-      : (rawStaff || []);
-    renderRoleChips('staff');
-
-    // Web-admin roles
-    const rawWeb = c.web_admin_role_ids || '';
-    _webAdminRoleIds = typeof rawWeb === 'string'
-      ? rawWeb.split(',').map(r=>r.trim()).filter(Boolean)
-      : (rawWeb || []);
-    renderRoleChips('webAdmin');
-
-    // Jump to step 2 if already configured
-    if (c.panel_channel_id && c.category_id) goStep(2, false);
-  }
-
-  // Pre-fill panel desc with welcome message
-  q('panel_desc').value = d.config?.welcome_message || 'Klicke auf den Button um deine Bewerbung einzureichen.';
-  buildPreview();
-}
-
-function setVal(id, val) {
-  if (val) setTimeout(() => { const el = q(id); if (el) el.value = val; }, 160);
-}
-
-// ── Role chips ─────────────────────────────────────────────────────────────
-function addRole(type, sel) {
-  const val = sel.value; if (!val) return;
-  if (type === 'staff'    && !_staffRoleIds.includes(val))    _staffRoleIds.push(val);
-  if (type === 'webAdmin' && !_webAdminRoleIds.includes(val)) _webAdminRoleIds.push(val);
-  sel.value = '';
-  renderRoleChips(type);
-}
-
-function removeRole(type, rid) {
-  if (type === 'staff')    _staffRoleIds    = _staffRoleIds.filter(r => r !== rid);
-  if (type === 'webAdmin') _webAdminRoleIds = _webAdminRoleIds.filter(r => r !== rid);
-  renderRoleChips(type);
-}
-
-function renderRoleChips(type) {
-  const ids      = type === 'staff' ? _staffRoleIds : _webAdminRoleIds;
-  const chipsEl  = q(type === 'staff' ? 'staffRoleChips' : 'webAdminRoleChips');
-  if (!ids.length) { chipsEl.innerHTML = '<span style="font-size:.73rem;color:var(--text3)">Keine ausgewählt</span>'; return; }
-  chipsEl.innerHTML = ids.map(rid => {
-    const role = _roles.find(r => r.id === rid);
-    return `<span class="role-chip">@${esc(role?.name || rid)}<button class="role-chip-del" onclick="removeRole('${type}','${esc(rid)}')">✕</button></span>`;
-  }).join('');
-}
-
-// ── Step navigation ────────────────────────────────────────────────────────
-function goStep(n, animated=true) {
-  document.querySelectorAll('.panel-card').forEach(el => el.classList.remove('active'));
-  q(`step-${n}`).classList.add('active');
-  for (let i = 1; i <= 4; i++) {
-    const nav = q(`step-nav-${i}`);
-    nav.classList.remove('active','done');
-    if (i < n) nav.classList.add('done');
-    else if (i === n) nav.classList.add('active');
-    const conn = q(`conn-${i}`);
-    if (conn) conn.classList.toggle('done', i < n);
-  }
-  _step = n;
-  updateProgress();
-  if (n === 4) buildSummary();
-}
-
-function updateProgress() {
-  const pct = [25, 50, 75, 100][_step - 1] || 25;
-  q('progressFill').style.width = pct + '%';
-}
-
-// ── Step savers ────────────────────────────────────────────────────────────
-async function step1Next() {
-  const panel = q('cfg_panel_channel').value;
-  const cat   = q('cfg_category').value;
-  if (!panel) { toast('Bitte Panel-Kanal auswählen', 'err'); return; }
-  if (!cat)   { toast('Bitte Kategorie auswählen', 'err');   return; }
-  await saveConfig(); goStep(2);
-}
-
-async function step2Next() {
-  if (!q('cfg_newbie_role').value)  { toast('Bitte Neulings-Rolle wählen', 'err');  return; }
-  if (!q('cfg_member_role').value)  { toast('Bitte Mitglieds-Rolle wählen', 'err'); return; }
-  if (!_staffRoleIds.length)        { toast('Bitte mindestens eine Staff-Rolle wählen', 'err'); return; }
-  await saveConfig(); goStep(3);
-}
-
-async function step3Next() {
-  await saveConfig(); goStep(4);
-}
-
-async function saveConfig() {
-  const body = {
-    panel_channel_id:         q('cfg_panel_channel').value  || null,
-    category_id:              q('cfg_category').value       || null,
-    newbie_role_id:           q('cfg_newbie_role').value    || null,
-    member_role_id:           q('cfg_member_role').value    || null,
-    staff_role_ids:           _staffRoleIds,
-    web_admin_role_ids:       _webAdminRoleIds,
-    log_channel_id:           q('cfg_log_channel').value    || null,
-    mc_log_channel_id:        q('cfg_mc_log_channel').value || null,
-    rejection_cooldown_hours: parseInt(q('cfg_cooldown').value || '24'),
-    welcome_message:          q('cfg_welcome').value,
-    instruction_message:      q('cfg_instruction').value,
-  };
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}`, {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  toast('Gespeichert ✓', 'ok');
-}
-
-// ── Step 4: Summary + Panel ────────────────────────────────────────────────
-function buildSummary() {
-  const items = [
-    ['📢 Panel-Kanal',   channelName(q('cfg_panel_channel').value)],
-    ['📁 Kategorie',     channelName(q('cfg_category').value)],
-    ['🌱 Neulings-Rolle', roleName(q('cfg_newbie_role').value)],
-    ['👥 Mitglieds-Rolle', roleName(q('cfg_member_role').value)],
-    ['👮 Staff-Rollen',  _staffRoleIds.map(r => roleName(r)).join(', ') || '–'],
-    ['⏳ Cooldown',      (q('cfg_cooldown').value || '24') + ' Stunden'],
-    ['📋 Log-Kanal',     channelName(q('cfg_log_channel').value) || '–'],
-    ['⛏️ MC-Log',        channelName(q('cfg_mc_log_channel').value) || '–'],
-  ];
-  q('summaryGrid').innerHTML = items.map(([label, value]) =>
-    `<div class="summary-row"><div class="summary-label">${esc(label)}</div><div class="summary-value">${esc(value)}</div></div>`
-  ).join('');
-
-  // Pre-fill panel desc
-  const welcome = q('cfg_welcome').value;
-  if (welcome && !q('panel_desc').value) q('panel_desc').value = welcome;
-  buildPreview();
-}
-
-function channelName(id) {
-  if (!id) return '–';
-  const ch = _channels.find(c => c.id === id);
-  return ch ? `#${ch.name}` : id;
-}
-function roleName(id) {
-  if (!id) return '–';
-  const r = _roles.find(r => r.id === id);
-  return r ? `@${r.name}` : id;
-}
-
-function buildPreview() {
-  const title = q('panel_title')?.value || '⛏️ Bewerbung einreichen';
-  const desc  = q('panel_desc')?.value  || '';
-  const pt = q('previewTitle'); if (pt) pt.textContent = title;
-  const pd = q('previewDesc');  if (pd) pd.textContent = desc;
-}
-
-async function sendPanel() {
-  const body = {
-    panel_title: q('panel_title')?.value || '⛏️ Bewerbung einreichen',
-    panel_desc:  q('panel_desc')?.value  || '',
-  };
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}/panel`, {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  q('panelSuccess').classList.add('show');
-  toast('Panel erfolgreich gesendet ✓', 'ok');
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-function q(id) { return document.getElementById(id); }
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function toast(msg, type='ok') {
-  const icons = { ok:'✅', err:'❌' };
-  const t = document.createElement('div');
-  t.className = `toast ${type}`;
-  t.innerHTML = `<span>${icons[type]||''}</span><span>${esc(msg)}</span>`;
-  q('toastContainer').appendChild(t);
-  setTimeout(() => t.remove(), 3500);
-}
-
-document.addEventListener('input', e => {
-  if (e.target.id === 'panel_title' || e.target.id === 'panel_desc') buildPreview();
-});
-
-init();
-</script>
-</body>
-</html>"""
