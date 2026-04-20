@@ -609,7 +609,6 @@ class ApplicationManager:
             "rejection_reason": reason,
         })
 
-        # Rejector als Teilnehmer tracken
         _upsert_app_participant(
             server_id, app_id,
             str(rejector.id), rejector.display_name,
@@ -630,10 +629,13 @@ class ApplicationManager:
 
         if applicant:
             try:
-                messages           = load_app_messages(server_id, app_id)
-                app["rejection_reason"] = reason
-                html_bytes         = build_app_log_html(app, messages, rejector.display_name)
-                log_file           = discord.File(fp=__import__('io').BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
+                messages = load_app_messages(server_id, app_id)
+                # [FIX MEDIUM] Kopie erstellen statt app-Dict direkt zu mutieren.
+                # Vorher: app["rejection_reason"] = reason  <-- mutierte das Argument
+                app_for_log = {**app, "rejection_reason": reason}
+                html_bytes  = build_app_log_html(app_for_log, messages, rejector.display_name)
+                log_file    = discord.File(fp=__import__('io').BytesIO(html_bytes),
+                                           filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="❌ Deine Bewerbung wurde abgelehnt",
                     description=(
