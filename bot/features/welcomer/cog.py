@@ -170,16 +170,49 @@ class WelcomerCog(commands.Cog):
                 channel = self.bot.get_channel(int(config["goodbye_channel_id"]))
                 if channel:
                     embed = discord.Embed(
-                        title=f"Goodbye {member.display_name}!",
-                        description=f"{member.display_name} hat den Server verlassen",
+                        title=f"👋 Goodbye {member.display_name}!",
+                        description=f"{member.mention} hat den Server verlassen.",
                         color=discord.Color.orange()
+                    )
 
-                    )
                     embed.add_field(
-                        name=f"Mitglied seid:",
-                        value=f"{member.joined_at}"
+                        name="📅 Mitglied seit",
+                        value=discord.utils.format_dt(member.joined_at, style="F") if member.joined_at else "Unbekannt",
+                        inline=False
                     )
+
+                    top_role = member.top_role
+                    if top_role.name != "@everyone":
+                        embed.add_field(
+                            name="🔝 Höchste Rolle",
+                            value=top_role.mention,
+                            inline=True
+                        )
+
+                    roles = [role.mention for role in member.roles if role.name != "@everyone"]
+                    embed.add_field(
+                        name=f"🎭 Rollen ({len(roles)})",
+                        value="\n".join(roles) if roles else "Keine",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="📆 Account erstellt",
+                        value=discord.utils.format_dt(member.created_at, style="F"),
+                        inline=True
+                    )
+                    embed.set_thumbnail(url=member.display_avatar.url)
+
+                    embed.timestamp = discord.utils.utcnow()
+                    embed.set_footer(text=f"User-ID: {member.id}")
+
+
+                    if member.top_role.color.value != 0:  # 0 = Standardfarbe
+                        embed.color = member.top_role.color
+
                     await channel.send(embed=embed)
+
+
         except Exception as e:
             logger.error(f"[on_member_remove] Fehler: {e}")
 
