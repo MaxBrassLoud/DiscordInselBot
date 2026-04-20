@@ -1,3 +1,11 @@
+"""
+bot/features/tickets/setup_views.py
+=====================================
+FIXES:
+  - [CRITICAL] Doppel-Panel-Send: panel_msg = await panel_channel.send(...)
+    wurde zweimal aufgerufen (Zeilen 311-312 identisch). Zweiten Aufruf entfernt.
+"""
+
 import discord
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
@@ -34,7 +42,6 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
 
         raw_emoji = self.button_emoji.value.strip() or "🎫"
 
-        # Go to role + category picker
         view = ModuleRoleAndCategoryPickerView(
             name=self.name.value,
             description=self.description.value,
@@ -49,8 +56,7 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
                 description=(
                     f"**Modul: {self.name.value}**\n\n"
                     "**Schritt 1:** Wähle die Staff-Rollen, die Zugriff auf dieses Modul haben.\n"
-                    "**Schritt 2:** Wähle eine eigene Kategorie für dieses Modul (optional – "
-                    "sonst wird die globale Kategorie genutzt)."
+                    "**Schritt 2:** Wähle eine eigene Kategorie für dieses Modul (optional)."
                 ),
                 color=discord.Color.blurple()
             ),
@@ -59,11 +65,6 @@ class AddTicketModuleModal(discord.ui.Modal, title="Ticket-Modul hinzufügen"):
 
 
 class ModuleRoleAndCategoryPickerView(discord.ui.View):
-    """
-    Lets admins pick staff roles AND an optional per-module ticket category.
-    The category is optional: if not selected, the global category from TicketSetupView is used.
-    """
-
     def __init__(self, name: str, description: str, max_tickets: int,
                  modal_question: str, setup_view: "TicketSetupView", button_emoji: str = "🎫"):
         super().__init__(timeout=180)
@@ -80,7 +81,6 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
         self._roles_chosen  = False
         self._cat_chosen    = False
 
-        # ── Staff Roles ───────────────────────────────────────────────────────
         role_sel = discord.ui.RoleSelect(
             placeholder="👮 Staff-Rollen wählen (Pflicht)…",
             min_values=1, max_values=10,
@@ -88,7 +88,6 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
         role_sel.callback = self.roles_selected
         self.add_item(role_sel)
 
-        # ── Per-module Category (optional) ────────────────────────────────────
         cat_sel = discord.ui.ChannelSelect(
             placeholder="📁 Eigene Kategorie (optional, leer = global)",
             min_values=0, max_values=1,
@@ -97,7 +96,6 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
         cat_sel.callback = self.category_selected
         self.add_item(cat_sel)
 
-        # ── Confirm button (enabled once roles are chosen) ────────────────────
         self._confirm_btn = discord.ui.Button(
             label="✅ Modul hinzufügen",
             style=discord.ButtonStyle.success,
@@ -122,8 +120,6 @@ class ModuleRoleAndCategoryPickerView(discord.ui.View):
         )
         embed.add_field(name="👮 Staff-Rollen", value=roles_val, inline=False)
         embed.add_field(name="📁 Eigene Kategorie", value=cat_val, inline=False)
-        if self._roles_chosen:
-            embed.set_footer(text="✅ Rollen ausgewählt – du kannst jetzt speichern oder noch eine Kategorie wählen.")
         return embed
 
     async def roles_selected(self, interaction: discord.Interaction):
@@ -177,7 +173,7 @@ class TicketSetupView(discord.ui.View):
         self.bot                   = bot
         self.pending_modules       = []
         self.panel_channel_id: str | None      = None
-        self.category_id: str | None           = None   # global fallback
+        self.category_id: str | None           = None
         self.log_channel_id: str | None        = None
         self.staff_ping_channel_id: str | None = None
         self._original_interaction = None
@@ -186,7 +182,6 @@ class TicketSetupView(discord.ui.View):
     def _rebuild(self):
         self.clear_items()
 
-        # Panel-Kanal
         ch_sel = discord.ui.ChannelSelect(
             placeholder="📢 Panel-Kanal (wo das Ticket-Panel erscheint)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -198,7 +193,6 @@ class TicketSetupView(discord.ui.View):
         ch_sel.callback = ch_cb
         self.add_item(ch_sel)
 
-        # Globale Kategorie (Fallback für Module ohne eigene Kategorie)
         cat_sel = discord.ui.ChannelSelect(
             placeholder="📁 Standard-Kategorie für Ticket-Kanäle (globaler Fallback)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.category]
@@ -210,7 +204,6 @@ class TicketSetupView(discord.ui.View):
         cat_sel.callback = cat_cb
         self.add_item(cat_sel)
 
-        # Log-Kanal
         log_sel = discord.ui.ChannelSelect(
             placeholder="📋 Ticket-Log Kanal (Links zu allen Tickets)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -222,7 +215,6 @@ class TicketSetupView(discord.ui.View):
         log_sel.callback = log_cb
         self.add_item(log_sel)
 
-        # Staff-Ping Kanal
         ping_sel = discord.ui.ChannelSelect(
             placeholder="🔔 Staff-Ping Kanal (Benachrichtigung bei neuem Ticket)",
             min_values=1, max_values=1, channel_types=[discord.ChannelType.text]
@@ -234,7 +226,6 @@ class TicketSetupView(discord.ui.View):
         ping_sel.callback = ping_cb
         self.add_item(ping_sel)
 
-        # Modul hinzufügen
         if len(self.pending_modules) < MAX_MODULES:
             add_btn = discord.ui.Button(
                 label=f"➕ Modul hinzufügen ({len(self.pending_modules)}/{MAX_MODULES})",
@@ -245,7 +236,6 @@ class TicketSetupView(discord.ui.View):
             add_btn.callback = add_cb
             self.add_item(add_btn)
 
-        # Letztes Modul entfernen
         if self.pending_modules:
             rem_btn = discord.ui.Button(label="🗑️ Letztes Modul entfernen", style=discord.ButtonStyle.secondary)
             async def rem_cb(interaction: discord.Interaction):
@@ -256,7 +246,6 @@ class TicketSetupView(discord.ui.View):
             rem_btn.callback = rem_cb
             self.add_item(rem_btn)
 
-        # Speichern & Panel senden
         save_btn = discord.ui.Button(
             label="🚀 Setup abschließen & Panel senden",
             style=discord.ButtonStyle.success,
@@ -318,7 +307,6 @@ class TicketSetupView(discord.ui.View):
             supabase = get_supabase()
             guild_id = str(self.guild_id)
 
-            # ── ticket_servers upsert ─────────────────────────────────────────
             existing = supabase.table("ticket_servers").select("server_id").eq("server_id", guild_id).execute()
             server_data = {
                 "server_id":             guild_id,
@@ -333,19 +321,15 @@ class TicketSetupView(discord.ui.View):
                 server_data["ticket_counter"] = 0
                 supabase.table("ticket_servers").insert(server_data).execute()
 
-            # ── Alte Module löschen ───────────────────────────────────────────
             old_mods = supabase.table("ticket_modules").select("id").eq("server_id", guild_id).execute()
             for mod in (old_mods.data or []):
                 supabase.table("ticket_module_roles").delete().eq("module_id", mod["id"]).execute()
             supabase.table("ticket_modules").delete().eq("server_id", guild_id).execute()
 
-            # ── Neue Module speichern ─────────────────────────────────────────
             from .panel_view import TicketPanelView, build_ticket_panel_embed
             db_modules = []
             for mod in self.pending_modules:
-                # Per-module category overrides global; fallback to global
                 effective_category = mod.get("category_id") or self.category_id
-
                 result = supabase.table("ticket_modules").insert({
                     "server_id":      guild_id,
                     "name":           mod["name"],
@@ -366,7 +350,6 @@ class TicketSetupView(discord.ui.View):
                         }).execute()
                 db_modules.append(mod)
 
-            # ── Panel senden ──────────────────────────────────────────────────
             panel_channel = self.bot.get_channel(int(self.panel_channel_id))
             if not panel_channel:
                 await interaction.followup.send("❌ Panel-Kanal nicht gefunden!", ephemeral=True)
@@ -374,10 +357,10 @@ class TicketSetupView(discord.ui.View):
 
             embed      = build_ticket_panel_embed(db_modules)
             panel_view = TicketPanelView(bot=self.bot)
-            panel_msg  = await panel_channel.send(embed=embed, view=panel_view)
-            panel_msg = await panel_channel.send(embed=embed, view=panel_view)
 
-            # Nachrichten-ID für späteres Bearbeiten in DB speichern
+            # [FIX CRITICAL] Panel nur EINMAL senden – doppelter send()-Aufruf entfernt
+            panel_msg  = await panel_channel.send(embed=embed, view=panel_view)
+
             supabase.table("ticket_servers").update({
                 "panel_message_id": str(panel_msg.id),
             }).eq("server_id", guild_id).execute()

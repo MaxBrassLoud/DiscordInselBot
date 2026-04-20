@@ -1,3 +1,11 @@
+"""
+bot/core/server.py
+===================
+FIXES:
+  - [CRITICAL] keep_alive() war async – jetzt wird keep_alive_async() genutzt
+    was den sync Thread startet und per await asyncio.sleep() zurückkehrt.
+"""
+
 import discord
 from discord.ext import commands
 import os
@@ -5,12 +13,11 @@ import asyncio
 from dotenv import load_dotenv
 
 from bot.core.supabase_client import init_supabase
-from bot.core.keep_alive import keep_alive
+from bot.core.keep_alive import keep_alive_async  # [FIX] async-Wrapper nutzen
 from bot.utils.logger import get_logger
 
 logger = get_logger("server")
 
-# ── Env & Supabase ────────────────────────────────────────────────────────────
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_base_dir, "../../.env"))
 
@@ -19,13 +26,11 @@ init_supabase(
     key=os.getenv("SUPABASE_KEY"),
 )
 
-# ── Bot Setup ─────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
-# ── Feature Cogs ──────────────────────────────────────────────────────────────
 FEATURE_COGS = [
     "bot.features.spieleabend.cog",
     "bot.features.media.cog",
@@ -48,7 +53,6 @@ async def on_ready():
     logger.info("✅ Commands synchronisiert")
     logger.info("✅ Bot ist bereit!")
 
-    # ── Bot-Permissions pro Server loggen ────────────────────────────────────
     for guild in bot.guilds:
         me = guild.me
         perms = me.guild_permissions
@@ -60,7 +64,6 @@ async def on_ready():
             f"Manage Roles: {perms.manage_roles} | "
             f"Manage Nicknames: {perms.manage_nicknames}"
         )
-    # ─────────────────────────────────────────────────────────────────────────
 
 
 @bot.tree.error
@@ -79,15 +82,15 @@ async def Ping(ctx):
 
 
 async def main():
-    await keep_alive()
+    # [FIX CRITICAL] keep_alive_async() statt keep_alive() nutzen
+    # keep_alive_async startet den Flask-Thread sync und kehrt per await zurück
+    await keep_alive_async()
 
-    # Cogs einmalig laden – vor der Retry-Schleife
     async with bot:
         for cog in FEATURE_COGS:
             await bot.load_extension(cog)
             logger.info(f"✅ Geladen: {cog}")
 
-        # Retry-Schleife nur für den Login
         for attempt in range(5):
             try:
                 await bot.start(os.getenv("DISCORD_TOKEN"))

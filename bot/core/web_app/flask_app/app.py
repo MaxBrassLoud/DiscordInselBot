@@ -1,34 +1,28 @@
 """
-flask_app/app.py – Insel Bot Dashboard (Multi-Server)
-======================================================
-
-KONZEPT:
-  • Es gibt beliebig viele Server in der Datenbank (ticket_servers / application_servers)
-  • Ein User kann auf mehreren dieser Server Mitglied sein
-  • Beim Login: Discord gibt alle Guilds des Users zurück → Schnittmenge mit DB-Servern
-  • Für jeden Schnittmengen-Server werden die Rollen des Users via Bot-Token geladen
-  • Session speichert: {"server_id": ["role_id1", "role_id2"], ...} für alle Server
-  • Jeder API-Request bekommt server_id als Parameter und prüft die Rollen für genau diesen Server
-
-BERECHTIGUNGSMATRIX pro Server:
-  TICKETS
-    ticket_servers.web_admin_role_ids  → alle Tickets des Servers
-    ticket_module_roles.role_id        → nur Tickets dieses Moduls
-    tickets.creator_id == user.id      → nur dieses Ticket
-    tickets.added_users enthält uid    → nur dieses Ticket
-
-  BEWERBUNGEN
-    application_servers.web_admin_role_ids → alle Bewerbungen des Servers
-    application_servers.staff_role_ids     → alle Bewerbungen des Servers
-    applications.creator_id == user.id     → nur eigene Bewerbung
+bot/core/web_app/flask_app/app.py
+===================================
+FIXES:
+  - [CRITICAL] FLASK_SECRET_KEY: App-Start wird abgebrochen wenn Key fehlt
+    oder der unsichere Fallback (token_hex) verwendet wird
+  - [CRITICAL] Open Redirect: session["next"] wird auf same-origin geprüft
+    bevor redirect ausgeführt wird
+  - [CRITICAL] Thread-safe Caches mit threading.RLock
+  - [MEDIUM]   added_users NULL-Check in Supabase-Query
 """
+
 from __future__ import annotations
 
 import os
 import secrets
+import sys
+import threading
 import time
 from functools import wraps
 from urllib.parse import urlencode
+try:
+    from werkzeug.urls import url_parse
+except ImportError:
+    from urllib.parse import urlparse as url_parse
 
 import requests
 from flask import (
@@ -37,11 +31,32 @@ from flask import (
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Konfiguration (nur technische Credentials, keine Server-IDs)
+# Konfiguration
 # ══════════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
+
+# ── [FIX CRITICAL] Secret-Key Pflichtprüfung ─────────────────────────────────
+_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
+if not _SECRET_KEY:
+    print(
+        "[FATAL] FLASK_SECRET_KEY ist nicht gesetzt!\n"
+        "Setze einen sicheren Wert in der .env Datei:\n"
+        "  FLASK_SECRET_KEY=" + secrets.token_hex(32) + "\n"
+        "App wird beendet.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if len(_SECRET_KEY) < 32:
+    print(
+        "[FATAL] FLASK_SECRET_KEY muss mindestens 32 Zeichen lang sein.\n"
+        "App wird beendet.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+app.secret_key = _SECRET_KEY
 
 DISCORD_API   = "https://discord.com/api/v10"
 CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "")
@@ -52,10 +67,10 @@ MBL_ID        = os.getenv("MBL", "")
 SUPABASE_URL  = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY", "")
 
-MEMBER_CACHE_TTL = 300   # Discord Member: 5 min
-GUILD_CACHE_TTL  = 300   # Discord Guild-Info: 5 min
-PERM_CACHE_TTL   = 60    # DB-Berechtigungen: 1 min
-ROLES_REFRESH    = 120   # Session-Rollen: alle 2 min refreshen
+MEMBER_CACHE_TTL = 300
+GUILD_CACHE_TTL  = 300
+PERM_CACHE_TTL   = 60
+ROLES_REFRESH    = 120
 
 import logging
 log = logging.getLogger("insel_web")
@@ -71,34 +86,41 @@ if not log.handlers:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _supabase = None
+_supabase_lock = threading.Lock()
 
 def get_supabase():
     global _supabase
     if _supabase is None:
-        from supabase import create_client
-        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        with _supabase_lock:
+            if _supabase is None:
+                from supabase import create_client
+                _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _supabase
 
 def sb(table: str):
     return get_supabase().table(table)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Caches
+# Thread-safe Caches
 # ══════════════════════════════════════════════════════════════════════════════
 
-_member_cache: dict[str, dict] = {}   # "guild:uid" → {data, ts}
-_guild_cache:  dict[str, dict] = {}   # guild_id    → {data, ts}
-_perm_cache:   dict[str, dict] = {}   # cache-key   → {data, ts}
-_MISS = object()                       # Sentinel für "nicht gecacht"
+# [FIX CRITICAL] RLock um Dict-Corruption bei concurrent writes zu verhindern
+_cache_lock    = threading.RLock()
+_member_cache: dict[str, dict] = {}
+_guild_cache:  dict[str, dict] = {}
+_perm_cache:   dict[str, dict] = {}
+_MISS = object()
 
 def _cget(store: dict, key: str, ttl: int):
-    e = store.get(key)
-    if e is not None and time.time() - e["ts"] < ttl:
-        return e["data"]
+    with _cache_lock:
+        e = store.get(key)
+        if e is not None and time.time() - e["ts"] < ttl:
+            return e["data"]
     return _MISS
 
 def _cset(store: dict, key: str, data):
-    store[key] = {"data": data, "ts": time.time()}
+    with _cache_lock:
+        store[key] = {"data": data, "ts": time.time()}
     return data
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -220,7 +242,6 @@ def _load_all_server_ids() -> list[str]:
     except Exception as e:
         log.error(f"[db] application_servers: {e}")
     result = sorted(ids)
-    log.debug(f"[db] Konfigurierte Server: {result}")
     return _cset(_perm_cache, "all_server_ids", result)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -303,7 +324,6 @@ def _build_server_roles(uid: str) -> dict[str, list[str]]:
         if member and isinstance(member.get("roles"), list):
             roles = [str(r) for r in member["roles"]]
             result[sid] = roles
-            log.debug(f"[auth] User {uid} auf Server {sid}: {len(roles)} Rollen")
         else:
             log.debug(f"[auth] User {uid} nicht auf Server {sid}")
 
@@ -348,7 +368,12 @@ def _user_has_dashboard_access(uid: str, server_roles: dict[str, list[str]]) -> 
         log.error(f"[auth] Application-check: {e}")
 
     try:
-        if sb("tickets").select("ticket_id").contains("added_users", [uid]).limit(1).execute().data:
+        # [FIX MEDIUM] NULL-Check vor .contains() um unerwartete Ergebnisse zu vermeiden
+        if (sb("tickets").select("ticket_id")
+                .not_.is_("added_users", "null")
+                .contains("added_users", [uid])
+                .limit(1)
+                .execute().data):
             return True
     except Exception as e:
         log.error(f"[auth] added_users-check: {e}")
@@ -370,18 +395,14 @@ def can_see_ticket(user: dict, ticket: dict, server_id: str) -> bool:
 
     t_perms       = _load_ticket_server_perms(server_id)
     web_admin_ids = set(t_perms["web_admin_role_ids"])
-    if web_admin_ids:
-        overlap = roles & web_admin_ids
-        if overlap:
-            return True
+    if web_admin_ids and roles & web_admin_ids:
+        return True
 
     module_name  = ticket.get("module", "")
     staff_map    = _load_module_staff_map(server_id)
     module_staff = set(staff_map.get(module_name, []))
-    if module_staff:
-        overlap = roles & module_staff
-        if overlap:
-            return True
+    if module_staff and roles & module_staff:
+        return True
 
     if uid and str(ticket.get("creator_id", "")) == uid:
         return True
@@ -424,7 +445,11 @@ def login_required(f):
         if "user" not in session:
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Unauthorized"}), 401
-            session["next"] = request.url
+            # [FIX CRITICAL] Nur same-origin URLs in session["next"] speichern
+            next_url = request.url
+            parsed = url_parse(next_url)
+            if parsed.netloc == "" or parsed.netloc == url_parse(WEB_BASE_URL).netloc:
+                session["next"] = next_url
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
@@ -449,9 +474,10 @@ def ensure_fresh_roles():
     if not (roles_empty or roles_stale):
         return
 
-    old_server_roles = user.get("server_roles") or {}
-    for sid in old_server_roles:
-        _member_cache.pop(f"{sid}:{uid}", None)
+    with _cache_lock:
+        old_server_roles = user.get("server_roles") or {}
+        for sid in old_server_roles:
+            _member_cache.pop(f"{sid}:{uid}", None)
 
     new_server_roles = _build_server_roles(uid)
 
@@ -548,7 +574,17 @@ def auth_callback():
         "server_roles":     server_roles,
         "_roles_loaded_at": time.time(),
     }
-    return redirect(session.pop("next", url_for("dashboard")))
+
+    # [FIX CRITICAL] Sicher aus session["next"] redirect – nur same-origin
+    next_url = session.pop("next", None)
+    if next_url:
+        parsed = url_parse(next_url)
+        wb_parsed = url_parse(WEB_BASE_URL)
+        if parsed.netloc and parsed.netloc != wb_parsed.netloc:
+            log.warning(f"[auth] Open-Redirect-Versuch blockiert: {next_url}")
+            next_url = None
+
+    return redirect(next_url or url_for("dashboard"))
 
 @app.route("/logout")
 def logout():
@@ -642,7 +678,7 @@ def api_guild():
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: /api/tickets — Ticket-Liste
+# API: /api/tickets
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/tickets")
@@ -670,30 +706,25 @@ def api_tickets():
     if module_f:
         q = q.eq("module", module_f)
 
-    # ── Legacy-Filter (Bug-Fix: graceful fallback wenn imported-Spalte fehlt) ──
     if legacy_f in ("0", "1"):
         try:
-            legacy_bool = legacy_f == "1"
-            q = q.eq("imported", legacy_bool)
+            q = q.eq("imported", legacy_f == "1")
         except Exception as e:
             log.warning(f"[api_tickets] Legacy-Filter fehlgeschlagen: {e}")
-            # Spalte existiert möglicherweise nicht – Filter ignorieren
 
-    # Sortierung
     if sort_f == "oldest":
         q = q.order("created_at", desc=False)
     elif sort_f == "name_asc":
         q = q.order("creator_name", desc=False)
     elif sort_f == "name_desc":
         q = q.order("creator_name", desc=True)
-    else:  # newest (default)
+    else:
         q = q.order("created_at", desc=True)
 
     try:
         rows = q.execute().data or []
     except Exception as e:
         log.error(f"[api_tickets] DB-Fehler: {e}")
-        # Falls der Fehler durch die imported-Spalte kommt, nochmal ohne Filter versuchen
         if legacy_f in ("0", "1"):
             try:
                 q2 = sb("tickets").select(
@@ -712,7 +743,6 @@ def api_tickets():
                 else:
                     q2 = q2.order("created_at", desc=True)
                 rows = q2.execute().data or []
-                log.warning("[api_tickets] Legacy-Filter ignoriert wegen DB-Fehler")
             except Exception as e2:
                 return jsonify({"error": str(e2)}), 500
         else:
@@ -741,33 +771,20 @@ def api_tickets():
     return jsonify({"tickets": out, "modules": sorted(modules)})
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: /api/tickets/search — Volltext-Suche für Tickets
+# API: /api/tickets/search
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/tickets/search")
 @login_required
 def api_tickets_search():
-    """
-    Sucht Tickets nach:
-      - creator_name (Spielername)
-      - title
-      - description
-      - Nachrichteninhalt (ticket_messages.content)
-
-    Query-Parameter:
-      q         – Suchbegriff (min. 2 Zeichen)
-      server_id – Server-ID
-    """
     user      = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
     q_str     = request.args.get("q", "").strip()
 
     if not server_id:
         return jsonify({"tickets": [], "error": "Kein Server ausgewählt"})
-
     if len(q_str) < 2:
         return jsonify({"tickets": []})
-
     if not _is_mbl(user) and server_id not in (user.get("server_roles") or {}):
         return jsonify({"tickets": [], "error": "Kein Zugriff auf diesen Server"})
 
@@ -775,76 +792,43 @@ def api_tickets_search():
     found_ticket_ids: set[int] = set()
     ticket_map: dict[int, dict] = {}
 
-    # ── 1. Suche in Ticket-Metadaten ─────────────────────────────────────────
     try:
-        # creator_name
-        r1 = sb("tickets").select(
-            "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
-        ).eq("server_id", server_id).ilike("creator_name", search_pattern).execute()
-        for t in (r1.data or []):
-            tid = t["ticket_id"]
-            found_ticket_ids.add(tid)
-            ticket_map[tid] = t
-
-        # title
-        r2 = sb("tickets").select(
-            "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
-        ).eq("server_id", server_id).ilike("title", search_pattern).execute()
-        for t in (r2.data or []):
-            tid = t["ticket_id"]
-            found_ticket_ids.add(tid)
-            ticket_map[tid] = t
-
-        # description
-        r3 = sb("tickets").select(
-            "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
-        ).eq("server_id", server_id).ilike("description", search_pattern).execute()
-        for t in (r3.data or []):
-            tid = t["ticket_id"]
-            found_ticket_ids.add(tid)
-            ticket_map[tid] = t
-
+        for field in ["creator_name", "title", "description"]:
+            r = sb("tickets").select(
+                "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
+            ).eq("server_id", server_id).ilike(field, search_pattern).execute()
+            for t in (r.data or []):
+                tid = t["ticket_id"]
+                found_ticket_ids.add(tid)
+                ticket_map[tid] = t
     except Exception as e:
         log.error(f"[tickets_search] Metadaten-Suche: {e}")
         return jsonify({"error": str(e)}), 500
 
-    # ── 2. Suche in Nachrichten ───────────────────────────────────────────────
     try:
-        r4 = sb("ticket_messages").select(
-            "ticket_id"
-        ).eq("server_id", server_id).ilike("content", search_pattern).execute()
-
+        r4 = sb("ticket_messages").select("ticket_id")\
+            .eq("server_id", server_id).ilike("content", search_pattern).execute()
         msg_ticket_ids = list({row["ticket_id"] for row in (r4.data or [])
                                if row["ticket_id"] not in found_ticket_ids})
-
-        if msg_ticket_ids:
-            # Lade die zugehörigen Tickets nach
-            # Supabase unterstützt kein IN direkt, deshalb mehrere Requests
-            # (bei vielen Treffern limitieren wir auf 50)
-            for chunk_start in range(0, min(len(msg_ticket_ids), 50), 10):
-                chunk = msg_ticket_ids[chunk_start:chunk_start + 10]
-                for tid in chunk:
-                    if tid in ticket_map:
-                        continue
-                    try:
-                        tr = sb("tickets").select(
-                            "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
-                        ).eq("server_id", server_id).eq("ticket_id", tid).execute()
-                        if tr.data:
-                            ticket_map[tid] = tr.data[0]
-                            found_ticket_ids.add(tid)
-                    except Exception:
-                        pass
+        for tid in msg_ticket_ids[:50]:
+            if tid in ticket_map:
+                continue
+            try:
+                tr = sb("tickets").select(
+                    "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,imported,import_source"
+                ).eq("server_id", server_id).eq("ticket_id", tid).execute()
+                if tr.data:
+                    ticket_map[tid] = tr.data[0]
+                    found_ticket_ids.add(tid)
+            except Exception:
+                pass
     except Exception as e:
         log.warning(f"[tickets_search] Nachrichten-Suche: {e}")
 
-    # ── 3. Berechtigungen prüfen und formatieren ──────────────────────────────
     out = []
     for tid in sorted(found_ticket_ids, reverse=True):
         t = ticket_map.get(tid)
-        if not t:
-            continue
-        if not can_see_ticket(user, t, server_id):
+        if not t or not can_see_ticket(user, t, server_id):
             continue
         out.append({
             "ticket_id":     tid,
@@ -944,7 +928,7 @@ def api_ticket_detail(ticket_id):
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: /api/applications — Bewerbungs-Liste
+# API: /api/applications
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/applications")
@@ -958,7 +942,6 @@ def api_applications():
 
     if not server_id:
         return jsonify({"applications": []})
-
     if not _is_mbl(user) and server_id not in (user.get("server_roles") or {}):
         return jsonify({"applications": [], "error": "Kein Zugriff auf diesen Server"})
 
@@ -968,29 +951,25 @@ def api_applications():
 
     if status_f:
         q = q.eq("status", status_f)
-
-    # ── Legacy-Filter (graceful fallback) ─────────────────────────────────────
     if legacy_f in ("0", "1"):
         try:
             q = q.eq("imported", legacy_f == "1")
         except Exception as e:
             log.warning(f"[api_applications] Legacy-Filter fehlgeschlagen: {e}")
 
-    # Sortierung
     if sort_f == "oldest":
         q = q.order("created_at", desc=False)
     elif sort_f == "name_asc":
         q = q.order("creator_name", desc=False)
     elif sort_f == "name_desc":
         q = q.order("creator_name", desc=True)
-    else:  # newest
+    else:
         q = q.order("created_at", desc=True)
 
     try:
         rows = q.execute().data or []
     except Exception as e:
         log.error(f"[api_applications] DB-Fehler: {e}")
-        # Fallback ohne Legacy-Filter
         if legacy_f in ("0", "1"):
             try:
                 q2 = sb("applications").select(
@@ -1007,7 +986,6 @@ def api_applications():
                 else:
                     q2 = q2.order("created_at", desc=True)
                 rows = q2.execute().data or []
-                log.warning("[api_applications] Legacy-Filter ignoriert wegen DB-Fehler")
             except Exception as e2:
                 return jsonify({"error": str(e2)}), 500
         else:
@@ -1031,33 +1009,20 @@ def api_applications():
     return jsonify({"applications": out})
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: /api/applications/search — Volltext-Suche für Bewerbungen
+# API: /api/applications/search
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/applications/search")
 @login_required
 def api_applications_search():
-    """
-    Sucht Bewerbungen nach:
-      - creator_name (Discord-Name)
-      - minecraft_name
-      - content (Bewerbungstext)
-      - Nachrichteninhalt (application_messages.content)
-
-    Query-Parameter:
-      q         – Suchbegriff (min. 2 Zeichen)
-      server_id – Server-ID
-    """
     user      = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
     q_str     = request.args.get("q", "").strip()
 
     if not server_id:
         return jsonify({"applications": [], "error": "Kein Server ausgewählt"})
-
     if len(q_str) < 2:
         return jsonify({"applications": []})
-
     if not _is_mbl(user) and server_id not in (user.get("server_roles") or {}):
         return jsonify({"applications": [], "error": "Kein Zugriff auf diesen Server"})
 
@@ -1065,9 +1030,7 @@ def api_applications_search():
     found_app_ids: set[int] = set()
     app_map: dict[int, dict] = {}
 
-    # ── 1. Suche in Bewerbungs-Metadaten ─────────────────────────────────────
-    search_fields = ["creator_name", "minecraft_name", "content"]
-    for field in search_fields:
+    for field in ["creator_name", "minecraft_name", "content"]:
         try:
             r = sb("applications").select(
                 "app_id,creator_id,creator_name,minecraft_name,status,created_at,imported,import_source"
@@ -1079,15 +1042,11 @@ def api_applications_search():
         except Exception as e:
             log.warning(f"[applications_search] Suche in {field}: {e}")
 
-    # ── 2. Suche in Nachrichten ───────────────────────────────────────────────
     try:
-        r_msg = sb("application_messages").select(
-            "app_id"
-        ).eq("server_id", server_id).ilike("content", search_pattern).execute()
-
+        r_msg = sb("application_messages").select("app_id")\
+            .eq("server_id", server_id).ilike("content", search_pattern).execute()
         msg_app_ids = list({row["app_id"] for row in (r_msg.data or [])
                             if row["app_id"] not in found_app_ids})
-
         for aid in msg_app_ids[:50]:
             if aid in app_map:
                 continue
@@ -1103,13 +1062,10 @@ def api_applications_search():
     except Exception as e:
         log.warning(f"[applications_search] Nachrichten-Suche: {e}")
 
-    # ── 3. Berechtigungen prüfen und formatieren ──────────────────────────────
     out = []
     for aid in sorted(found_app_ids, reverse=True):
         a = app_map.get(aid)
-        if not a:
-            continue
-        if not can_see_application(user, a, server_id):
+        if not a or not can_see_application(user, a, server_id):
             continue
         out.append({
             "app_id":         aid,
@@ -1210,7 +1166,7 @@ def api_application_detail(app_id):
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: /api/member/<uid>
+# API: /api/member
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/member/<user_id>")
@@ -1241,7 +1197,7 @@ def api_members_search():
     } for m in data])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API: Debug
+# API: Debug (nur MBL)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/debug/permissions")
@@ -1297,8 +1253,9 @@ def api_refresh_roles():
     user = session["user"]
     uid  = user.get("id", "")
 
-    for sid in (user.get("server_roles") or {}):
-        _member_cache.pop(f"{sid}:{uid}", None)
+    with _cache_lock:
+        for sid in (user.get("server_roles") or {}):
+            _member_cache.pop(f"{sid}:{uid}", None)
     _perm_cache.pop("all_server_ids", None)
 
     new_server_roles = _build_server_roles(uid)
@@ -1341,31 +1298,15 @@ register_import_routes(app, login_required, _is_mbl, MBL_ID)
 
 from .ticket_setup_routes import register_ticket_setup_routes
 register_ticket_setup_routes(
-    app,
-    login_required,
-    _is_mbl,
-    _bot_get,
-    _cached_guild,
-    _guild_icon_url,
+    app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
 )
 
 from .application_setup_routes import register_application_setup_routes
 register_application_setup_routes(
-    app,
-    login_required,
-    _is_mbl,
-    _bot_get,
-    _cached_guild,
-    _guild_icon_url,
+    app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
 )
 
 from .voice_setup_routes import register_voice_setup_routes
-
 register_voice_setup_routes(
-    app,
-    login_required,
-    _is_mbl,
-    _bot_get,
-    _cached_guild,
-    _guild_icon_url,
+    app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
 )

@@ -1,34 +1,13 @@
 """
-keep_alive.py  –  Flask-basiertes Web-Dashboard (ersetzt aiohttp)
-==================================================================
-Flask läuft in einem Daemon-Thread parallel zum asyncio Event-Loop
-von discord.py. Kein SSL-Zertifikat-Overhead, kein aiohttp mehr.
-
-Verzeichnisstruktur nach dieser Migration:
-  bot/core/web_app/flask_app/
-  ├── app.py           – Flask App + alle Routes
-  ├── templates/       – Jinja2 HTML-Templates
-  │   ├── index.html       – Homepage mit Feature-Übersicht
-  │   ├── login.html       – Discord OAuth2 Login
-  │   ├── dashboard.html   – Ticket- und Bewerbungsliste
-  │   ├── ticket_view.html – Ticket-Detailansicht
-  │   ├── application_view.html – Bewerbungs-Detailansicht
-  │   └── error.html       – 403/404 Fehlerseite
-  └── static/
-      └── css/main.css – Design System (Grün-Akzente, Dark Mode, Mobile)
-
-Benötigte .env Variablen:
-    DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_GUILD_ID
-    DISCORD_ALLOWED_ROLE_IDS, DISCORD_TOKEN
-    FLASK_SECRET_KEY
-    WEB_BASE_URL        (z.B. https://meinbot.de)
-    WEB_PORT            (optional, Standard: 5000)
-    SUPABASE_URL, SUPABASE_KEY
-    MBL                 (Discord-User-ID für Superadmin)
+bot/core/keep_alive.py
+========================
+FIXES:
+  - [CRITICAL] keep_alive() war async und nutzte await asyncio.sleep()
+    im falschen Kontext. Der Flask-Thread teilt keinen Event-Loop
+    mit dem Discord-Bot. Jetzt: sync Thread-Start, kein await nötig.
 """
 
 from __future__ import annotations
-import asyncio
 import logging
 import os
 import sys
@@ -40,7 +19,6 @@ log = logging.getLogger("web")
 def _start_flask() -> None:
     """Import + start Flask app in the current thread (blocking)."""
     try:
-        # Ensure project root is in path
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
         if root not in sys.path:
             sys.path.insert(0, root)
@@ -60,10 +38,10 @@ def _start_flask() -> None:
         log.error(f"[web] Flask-Start fehlgeschlagen: {e}")
 
 
-async def keep_alive() -> None:
+def keep_alive() -> None:
     """
     Starte Flask in einem Daemon-Thread.
-    Gibt sofort zurück – blockiert den asyncio-Loop nicht.
+    SYNC – kein async/await nötig oder korrekt hier.
     """
     t = threading.Thread(
         target=_start_flask,
@@ -71,7 +49,16 @@ async def keep_alive() -> None:
         name="flask-dashboard",
     )
     t.start()
-    # Kurz yielden damit der Thread starten kann
+    log.info("[web] Flask-Thread gestartet")
+
+
+async def keep_alive_async() -> None:
+    """
+    Async-Wrapper für server.py (await keep_alive_async()).
+    Startet den sync Thread und kehrt sofort zurück.
+    """
+    import asyncio
+    keep_alive()
     await asyncio.sleep(0.1)
 
 
@@ -81,4 +68,4 @@ async def build_app():
     return app
 
 
-__all__ = ["keep_alive", "build_app"]
+__all__ = ["keep_alive", "keep_alive_async", "build_app"]

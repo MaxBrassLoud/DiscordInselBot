@@ -1,25 +1,17 @@
 """
-bot/core/web_app/flask_app/import_routes.py
-============================================
-TicketTool-Import mit Web-Upload.
-
-In app.py einbinden:
-    from .import_routes import register_import_routes
-    register_import_routes(app, login_required, _is_mbl, MBL_ID)
-
-ROUTEN (alle nur MBL):
-    GET  /dashboard/import               - Dashboard
-    GET  /api/import/servers             - Alle konfigurierten Server aus DB (mit Name)
-    GET  /api/import/modules/<server_id> - Ticket-Module eines Servers
-    GET  /api/import/status              - Ordner-Uebersicht + DB-Statistiken
-    POST /api/import/upload              - Dateien hochladen, Ordner erstellen, importieren, loeschen
-    POST /api/import/run                 - Ordner-Import starten
-    GET  /api/import/progress/<job_id>   - Job-Status pollen
+bot/core/web_app/flask_app/import_routes.py  –  Sicherheits-Patch
+===================================================================
+FIXES:
+  - [CRITICAL] Path-Traversal: Dateinamen werden jetzt auf sichere Zeichen
+    beschränkt [a-zA-Z0-9._-] und der finale Pfad wird via .resolve()
+    gegen das Zielverzeichnis geprüft.
+    Vorher: replace("..", "") reichte nicht (Null-Byte, URL-Encoding etc.)
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -30,9 +22,12 @@ from flask import jsonify, request, render_template_string, session
 
 # ---- Pfade ------------------------------------------------------------------
 _FLASK_DIR  = Path(__file__).resolve().parent
-_ROOT       = _FLASK_DIR.parent.parent.parent.parent   # projekt-root
+_ROOT       = _FLASK_DIR.parent.parent.parent.parent
 IMPORTS_DIR = _ROOT / "imports"
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024   # 50 MB
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Erlaubte Zeichen für Dateinamen – nur diese werden akzeptiert
+_SAFE_FILENAME_RE = re.compile(r'^[a-zA-Z0-9._\-äöüÄÖÜß ]+$')
 
 # ---- Job-Verwaltung ---------------------------------------------------------
 _import_jobs: dict[str, dict] = {}
@@ -46,10 +41,57 @@ def _prune_jobs():
             del _import_jobs[jid]
 
 
-# ---- Logging-Helfer fuer Background-Threads ---------------------------------
+def _sanitize_filename(raw: str) -> str | None:
+    """
+    [FIX CRITICAL] Sichere Dateinamen-Bereinigung.
+
+    - Nur explizit erlaubte Zeichen akzeptieren
+    - Pfad-Komponenten (/, \\, ..) vollständig ablehnen
+    - Null-Bytes und andere Steuerzeichen ablehnen
+    - Gibt None zurück wenn der Name nicht sicher ist
+    """
+    # Null-Bytes und Steuerzeichen ablehnen
+    if any(ord(c) < 32 for c in raw):
+        return None
+
+    # Nur den Dateinamen-Teil nehmen (kein Verzeichnis)
+    name = Path(raw).name
+
+    # Muss mit .html enden
+    if not name.lower().endswith(".html"):
+        return None
+
+    # Nur sichere Zeichen erlauben
+    if not _SAFE_FILENAME_RE.match(name):
+        return None
+
+    # Darf nicht mit Punkt beginnen (versteckte Dateien)
+    if name.startswith("."):
+        return None
+
+    return name
+
+
+def _safe_join(base: Path, filename: str) -> Path | None:
+    """
+    [FIX CRITICAL] Sicheres Path-Join mit Traversal-Schutz.
+
+    Prüft via .resolve() ob der finale Pfad wirklich unter base liegt.
+    Gibt None zurück wenn der Pfad außerhalb von base liegt.
+    """
+    try:
+        target = (base / filename).resolve()
+        base_resolved = base.resolve()
+        # Sicherstellen dass target ein Kind von base ist
+        target.relative_to(base_resolved)
+        return target
+    except (ValueError, RuntimeError):
+        return None
+
+
+# ---- Logging-Helfer ---------------------------------------------------------
 
 class _LogCapture:
-    """Leitet stdout in eine Liste um (fuer Job-Log)."""
     def __init__(self, log_list: list, job: dict):
         self._list = log_list
         self._job  = job
@@ -74,7 +116,6 @@ class _LogCapture:
 
 
 def _ensure_imports():
-    """Stellt sicher, dass bot.tools.import_tickettool geladen ist."""
     if str(_ROOT) not in sys.path:
         sys.path.insert(0, str(_ROOT))
     from dotenv import load_dotenv
@@ -90,7 +131,6 @@ def _ensure_imports():
 # ---- Background-Jobs --------------------------------------------------------
 
 def _run_folder_import(job_id: str, server_id: str | None, all_mode: bool):
-    """Importiert einen ganzen Ordner (keine Datei-Bereinigung)."""
     job = _import_jobs[job_id]
     job["status"] = "running"
     log_lines: list[str] = []
@@ -120,14 +160,6 @@ def _run_upload_import(
     import_type: str,
     module_name: str,
 ):
-    """
-    Importiert hochgeladene Dateien und loescht sie danach.
-    Die Dateien liegen bereits in der richtigen Ordnerstruktur:
-      imports/<server_id>/tickets/<module_name>/  oder
-      imports/<server_id>/applications/
-    Nach dem Import werden die Dateien geloescht.
-    Der Ordner bleibt bestehen (fuer zukuenftige Uploads).
-    """
     job = _import_jobs[job_id]
     job["status"] = "running"
     log_lines: list[str] = []
@@ -149,7 +181,6 @@ def _run_upload_import(
                     print(f"Fehler bei {file_path.name}: {e}")
                     importer.stats["files_error"] += 1
                 finally:
-                    # Datei nach Verarbeitung immer loeschen
                     try:
                         file_path.unlink(missing_ok=True)
                         print(f"Geloescht: {file_path.name}")
@@ -163,7 +194,6 @@ def _run_upload_import(
             job["status"] = "error"
             job["error"]  = str(e)
             print(f"Fehler: {e}")
-            # Cleanup im Fehlerfall
             for fp in file_paths:
                 try:
                     fp.unlink(missing_ok=True)
@@ -178,6 +208,8 @@ def _run_upload_import(
 def register_import_routes(app, login_required, _is_mbl, MBL_ID):
 
     from functools import wraps
+    import logging
+    log = logging.getLogger("import_routes")
 
     def _mbl_only(f):
         @wraps(f)
@@ -189,14 +221,9 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
             return f(*args, **kwargs)
         return decorated
 
-    # -- GET /api/import/servers ----------------------------------------------
     @app.route("/api/import/servers")
     @_mbl_only
     def api_import_servers():
-        """
-        Gibt alle konfigurierten Server zurueck – mit Name aus Discord (via Bot-Token).
-        Kombiniert ticket_servers + application_servers.
-        """
         try:
             from bot.core.supabase_client import get_supabase
             sb  = get_supabase()
@@ -209,11 +236,9 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
                 if row.get("server_id"):
                     ids.add(row["server_id"])
 
-            # Discord-Name via Bot-Token holen (cached in app.py via _cached_guild)
             servers = []
             for sid in sorted(ids):
                 try:
-                    # _cached_guild ist in app.py definiert – wir importieren es direkt
                     from bot.core.web_app.flask_app.app import _cached_guild, _guild_icon_url
                     guild = _cached_guild(sid)
                     name  = guild.get("name", sid) if guild else sid
@@ -227,16 +252,13 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # -- GET /api/import/modules/<server_id> ----------------------------------
     @app.route("/api/import/modules/<server_id>")
     @_mbl_only
     def api_import_modules(server_id):
-        """Gibt Ticket-Module und ob Applications aktiviert sind."""
         try:
             from bot.core.supabase_client import get_supabase
             sb = get_supabase()
 
-            # Ticket-Module
             rows = sb.table("ticket_modules").select("id,name,button_emoji") \
                      .eq("server_id", server_id).execute().data or []
             modules = [
@@ -248,7 +270,6 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
                 for r in rows
             ]
 
-            # Application-System vorhanden?
             app_rows = sb.table("application_servers").select("server_id") \
                          .eq("server_id", server_id).execute().data or []
             has_applications = bool(app_rows)
@@ -260,7 +281,6 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # -- GET /api/import/status -----------------------------------------------
     @app.route("/api/import/status")
     @_mbl_only
     def api_import_status():
@@ -276,10 +296,7 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
                 tickets_dir    = server_dir / "tickets"
                 if tickets_dir.exists():
                     for mod_dir in tickets_dir.iterdir():
-                        if mod_dir.is_dir():
-                            # Temp-Ordner ignorieren
-                            if mod_dir.name.startswith("_"):
-                                continue
+                        if mod_dir.is_dir() and not mod_dir.name.startswith("_"):
                             cnt = len(list(mod_dir.glob("*.html")))
                             ticket_count += cnt
                             if cnt:
@@ -323,23 +340,9 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
             "active_jobs": active,
         })
 
-    # -- POST /api/import/upload ----------------------------------------------
     @app.route("/api/import/upload", methods=["POST"])
     @_mbl_only
     def api_import_upload():
-        """
-        multipart/form-data:
-            files[]     - .html Transcript-Dateien
-            server_id   - Discord Server-ID
-            import_type - "ticket" | "application"
-            module_name - Modul-Name (nur fuer Tickets)
-
-        Ablauf:
-          1. Ordnerstruktur erstellen falls nicht vorhanden
-          2. Dateien in den Ordner speichern
-          3. Background-Import starten
-          4. Nach Import: Dateien automatisch loeschen
-        """
         server_id   = request.form.get("server_id",   "").strip()
         import_type = request.form.get("import_type", "ticket").strip()
         module_name = request.form.get("module_name", "").strip()
@@ -360,49 +363,51 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         if not valid_files:
             return jsonify({"error": "Nur .html Transcript-Dateien werden akzeptiert"}), 400
 
-        # Zielordner bestimmen und erstellen
+        # Zielordner bestimmen
         if import_type == "ticket":
-            # Sanitize module_name fuer Dateisystem
-            safe_module = "".join(
-                c for c in module_name if c.isalnum() or c in " -_äöüÄÖÜß"
-            ).strip() or "Unbekannt"
+            # [FIX CRITICAL] Modul-Namen sicher bereinigen
+            safe_module = re.sub(r'[^a-zA-Z0-9 \-_äöüÄÖÜß]', '', module_name).strip() or "Unbekannt"
             target_dir = IMPORTS_DIR / server_id / "tickets" / safe_module
         else:
             target_dir = IMPORTS_DIR / server_id / "applications"
 
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Dateien speichern
         saved_paths: list[Path] = []
         total_size = 0
 
         for f in valid_files:
-            safe_name = Path(f.filename).name
-            # Pfad-Traversal verhindern
-            safe_name = safe_name.replace("..", "").replace("/", "").replace("\\", "")
-            if not safe_name.lower().endswith(".html"):
-                safe_name += ".html"
+            # [FIX CRITICAL] Sichere Dateinamen-Bereinigung
+            raw_name = f.filename or ""
+            safe_name = _sanitize_filename(raw_name)
+
             if not safe_name:
+                log.warning(f"[upload] Unsicherer Dateiname abgelehnt: {repr(raw_name)}")
                 continue
 
             content = f.read()
             total_size += len(content)
             if total_size > MAX_UPLOAD_BYTES:
-                # Bereits gespeicherte Dateien wieder loeschen
                 for p in saved_paths:
                     p.unlink(missing_ok=True)
                 return jsonify({
                     "error": f"Gesamtgroesse ueberschreitet {MAX_UPLOAD_BYTES // 1024 // 1024} MB"
                 }), 413
 
-            dest = target_dir / safe_name
+            # [FIX CRITICAL] Path-Traversal-Schutz via safe_join
+            dest = _safe_join(target_dir, safe_name)
+            if dest is None:
+                log.warning(f"[upload] Path-Traversal verhindert fuer: {safe_name}")
+                for p in saved_paths:
+                    p.unlink(missing_ok=True)
+                return jsonify({"error": f"Ungültiger Dateiname: {safe_name}"}), 400
+
             dest.write_bytes(content)
             saved_paths.append(dest)
 
         if not saved_paths:
             return jsonify({"error": "Keine gueltigen Dateien gespeichert"}), 400
 
-        # Job starten
         job_id = str(uuid.uuid4())[:8]
         _import_jobs[job_id] = {
             "job_id":      job_id,
@@ -431,7 +436,6 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
             "target_dir": str(target_dir.relative_to(_ROOT)),
         })
 
-    # -- POST /api/import/run -------------------------------------------------
     @app.route("/api/import/run", methods=["POST"])
     @_mbl_only
     def api_import_run():
@@ -465,7 +469,6 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         t.start()
         return jsonify({"job_id": job_id, "status": "queued"})
 
-    # -- GET /api/import/progress/<job_id> ------------------------------------
     @app.route("/api/import/progress/<job_id>")
     @_mbl_only
     def api_import_progress(job_id):
@@ -481,7 +484,6 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
             "mode":    job.get("mode", "folder"),
         })
 
-    # -- GET /dashboard/import ------------------------------------------------
     @app.route("/dashboard/import")
     @login_required
     def import_dashboard():
