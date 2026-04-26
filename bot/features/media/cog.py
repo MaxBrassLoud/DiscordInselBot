@@ -116,7 +116,11 @@ class MediaCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="setup_media", description="Konfiguriere die Medien-Weiterleitung")
+    media = app_commands.Group(
+        name="media",
+        description="Medien Weiterleitungssystem"
+    )
+    @media.command(name="setup_media", description="Konfiguriere die Medien-Weiterleitung")
     async def setup_media(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)

@@ -139,7 +139,12 @@ class ApplicationsCog(commands.Cog):
 
     # ── Commands ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="bewerbung_setup", description="Richte das Bewerbungs-System ein")
+    bewerbung = app_commands.Group(
+        name="bewerbung",
+        description="Bewerbungs System",
+    )
+
+    @bewerbung.command(name="setup", description="Richte das Bewerbungs-System ein")
     async def bewerbung_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -159,20 +164,43 @@ class ApplicationsCog(commands.Cog):
             existing_config=existing_config,
         )
 
-    @app_commands.command(name="bewerbung_bearbeiten", description="Bearbeite das Bewerbungs-System")
+    @bewerbung.command(name="bearbeiten", description="Bearbeite das Bewerbungs-System")
     async def bewerbung_bearbeiten(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
+
         from bot.core.supabase_client import get_supabase
-        if not get_supabase().table("application_servers").select("server_id")\
+        from bot.features.applications.app_edit_views import AppEditMainView
+        import os
+
+        sb = get_supabase()
+        if not sb.table("application_servers").select("server_id") \
                 .eq("server_id", str(interaction.guild_id)).execute().data:
             await interaction.response.send_message(
-                "❌ Noch nicht eingerichtet. Nutze zuerst `/bewerbung_setup`.", ephemeral=True)
+                "❌ Das Bewerbungs-System ist noch nicht eingerichtet.\n"
+                "Nutze zuerst `/bewerbung_setup`.", ephemeral=True
+            )
             return
-        view = ApplicationEditView(guild_id=interaction.guild_id, bot=self.bot)
+
+        web_base = os.getenv("WEB_BASE_URL", "http://localhost:5000")
+
+        view = AppEditMainView(guild_id=interaction.guild_id, bot=self.bot)
         view._original_interaction = interaction
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
+
+        embed = view.build_embed()
+        embed.add_field(
+            name="🌐 Web-Dashboard",
+            value=(
+                f"[→ Bewerbungs-Setup im Browser öffnen]"
+                f"({web_base}/dashboard/setup/applications?server_id={interaction.guild_id})"
+            ),
+            inline=False,
+        )
+
+        await interaction.response.send_message(
+            embed=embed, view=view, ephemeral=True
+        )
 
 
 

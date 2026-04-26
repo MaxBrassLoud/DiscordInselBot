@@ -132,7 +132,12 @@ class WelcomerCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="setup_welcomer", description="Konfiguriere Willkommens- und Abschiedsnachrichten")
+    welcomer = app_commands.Group(
+        name="welcomer",
+        description="Welcomer System",
+    )
+
+    @welcomer.command(name="setup", description="Konfiguriere Willkommens- und Abschiedsnachrichten")
     async def setup_welcomer(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)

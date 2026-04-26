@@ -8,6 +8,7 @@ from bot.core.supabase_client import get_supabase
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
 
+
 from .views import SetupSpielabendView, SpielabendView
 from .modal import SpielabendModal
 
@@ -27,7 +28,12 @@ class SpielabendCog(commands.Cog):
         self.bot.add_view(SpielabendView())
         logger.info("✅ SpielabendView registriert")
 
-    @app_commands.command(name="setup_spieleabend", description="Konfiguriere den Spieleabend Bot")
+    spieleabend_group = app_commands.Group(
+        name="spieleabend",
+        description="Spieleabend System"
+    )
+
+    @spieleabend_group.command(name="setup", description="Konfiguriere den Spieleabend Bot")
     async def setup_spieleabend(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -43,11 +49,11 @@ class SpielabendCog(commands.Cog):
         embed.set_footer(text="Wähle alle Optionen aus und klicke dann auf Speichern")
         await interaction.response.send_message(embed=embed, view=SetupSpielabendView(interaction.guild_id), ephemeral=True)
 
-    @app_commands.command(name="spieleabend", description="Erstelle einen neuen Spieleabend")
+    @spieleabend_group.command(name="erstellen", description="Erstelle einen neuen Spieleabend")
     async def spieleabend(self, interaction: discord.Interaction):
         await interaction.response.send_modal(SpielabendModal(self.bot))
 
-    @app_commands.command(name="spieleabend_loeschen", description="Lösche einen Spieleabend")
+    @spieleabend_group.command(name="loeschen", description="Lösche einen Spieleabend")
     @app_commands.describe(spieleabend_id="Die ID des Spieleabends")
     async def spieleabend_loeschen(self, interaction: discord.Interaction, spieleabend_id: int):
         await interaction.response.defer(ephemeral=True)

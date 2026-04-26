@@ -124,8 +124,13 @@ class WebCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="web_setup",
+    web = app_commands.Group(
+        name= "web",
+        description="Web System"
+    )
+
+    @web.command(
+        name="setup",
         description="Konfiguriere Web-Dashboard Berechtigungen (WebAdmin-Rollen)"
     )
     async def web_setup(self, interaction: discord.Interaction):

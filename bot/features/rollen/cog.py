@@ -212,7 +212,12 @@ class RollenCog(commands.Cog):
         except Exception as e:
             logger.error(f"[register_role_views] Fehler: {e}")
 
-    @app_commands.command(name="setup_rollen", description="Richte die Rollenvergabe ein")
+    rollen = app_commands.Group(
+        name="rollen",
+        description="Rollen System"
+    )
+
+    @rollen.command(name="setup", description="Richte die Rollenvergabe ein")
     async def setup_rollen(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -221,7 +226,7 @@ class RollenCog(commands.Cog):
         view._original_interaction = interaction
         await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
 
-    @app_commands.command(name="rollen_bearbeiten", description="Bearbeite oder lösche ein Rollenvergabe-Modul")
+    @rollen.command(name="bearbeiten", description="Bearbeite oder lösche ein Rollenvergabe-Modul")
     async def rollen_bearbeiten(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)

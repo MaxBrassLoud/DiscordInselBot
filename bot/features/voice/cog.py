@@ -1308,7 +1308,14 @@ class VoiceCog(commands.Cog):
         self.bot.add_view(VoicePanelView())
         logger.info("✅ VoicePanelView registriert")
 
-    @app_commands.command(name="voice_setup", description="Richte den automatischen Voice Channel Creator ein")
+
+    voice = app_commands.Group(
+        name="voice",
+        description="Voicechannel System"
+    )
+
+
+    @voice.command(name="setup", description="Richte den automatischen Voice Channel Creator ein")
     async def voice_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)

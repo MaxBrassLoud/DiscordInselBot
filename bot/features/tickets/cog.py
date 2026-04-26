@@ -177,7 +177,12 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_setup ─────────────────────────────────────────────────────────
 
-    @app_commands.command(name="ticket_setup", description="Richte das Ticket-System ein (Schritt-für-Schritt)")
+    ticket = app_commands.Group(
+        name="ticket",
+        description="Ticket System"
+    )
+
+    @ticket.command(name="setup", description="Richte das Ticket-System ein (Schritt-für-Schritt)")
     async def ticket_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -198,8 +203,8 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_bearbeiten ────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="ticket_bearbeiten",
+    @ticket.command(
+        name="bearbeiten",
         description="Bearbeite das Ticket-System (Module, Kanäle, Kategorie, Panel)",
     )
     async def ticket_bearbeiten(self, interaction: discord.Interaction):
@@ -241,8 +246,8 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_add ───────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="ticket_add",
+    @ticket.command(
+        name="add",
         description="[Staff] Füge ein Mitglied zum aktuellen Ticket hinzu",
     )
     @app_commands.describe(mitglied="Das Mitglied das hinzugefügt werden soll")
@@ -342,8 +347,8 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_remove ────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="ticket_remove",
+    @ticket.command(
+        name="remove",
         description="[Staff] Entferne ein Mitglied aus dem aktuellen Ticket",
     )
     @app_commands.describe(mitglied="Das Mitglied das entfernt werden soll")
@@ -450,8 +455,8 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_fuer ──────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="ticket_fuer",
+    @ticket.command(
+        name="open",
         description="[Staff] Erstelle ein Ticket im Namen eines anderen Mitglieds",
     )
     @app_commands.describe(
@@ -565,7 +570,7 @@ class TicketsCog(commands.Cog):
 
     # ── /ticket_info ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="ticket_info", description="Zeigt Informationen über das Ticket-System")
+    @ticket.command(name="info", description="Zeigt Informationen über das Ticket-System")
     async def ticket_info(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)

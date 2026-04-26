@@ -97,7 +97,12 @@ class EventsCog(commands.Cog):
         self.bot.add_view(EventFollowView())
         logger.info("✅ EventFollowView registriert")
 
-    @app_commands.command(name="setup_event", description="Konfiguriere das Event-System")
+    event = app_commands.Group(
+        name="event",
+        description="Event System",
+    )
+
+    @event.command(name="setup", description="Konfiguriere das Event-System")
     async def setup_event(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Nur Admins.", ephemeral=True)
@@ -106,14 +111,14 @@ class EventsCog(commands.Cog):
         view    = SetupEventView(interaction.guild_id, current)
         await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
 
-    @app_commands.command(name="event_erstellen", description="Erstelle ein neues Event")
+    @event.command(name="erstellen", description="Erstelle ein neues Event")
     async def event_erstellen(self, interaction: discord.Interaction):
         if not await has_event_rights(interaction, self.bot):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
         await interaction.response.send_modal(EventCreateModal(self.bot, get_settings))
 
-    @app_commands.command(name="event_list", description="Zeigt die Follower-Liste aller aktiven Events")
+    @event.command(name="list", description="Zeigt die Follower-Liste aller aktiven Events")
     async def event_list(self, interaction: discord.Interaction):
         if not await has_event_rights(interaction, self.bot):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -135,7 +140,7 @@ class EventsCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-    @app_commands.command(name="event_edit", description="Bearbeite ein bestehendes Event")
+    @event.command(name="edit", description="Bearbeite ein bestehendes Event")
     @app_commands.describe(aktion="Was soll geändert werden?")
     @app_commands.choices(aktion=[
         app_commands.Choice(name="⏰ Startzeit ändern",         value="start_time"),
