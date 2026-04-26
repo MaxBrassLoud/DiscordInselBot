@@ -665,6 +665,23 @@ class ApplicationPanelView(discord.ui.View):
 
 # ── Minecraft Name Modal ──────────────────────────────────────────────────────
 
+# ═══════════════════════════════════════════════════════════════════
+# ÄNDERUNGEN FÜR: bot/features/applications/views.py
+# ═══════════════════════════════════════════════════════════════════
+#
+# Suche die Klasse `MinecraftNameModal` und ersetze die gesamte
+# `on_submit`-Methode durch den folgenden Code.
+#
+# FIXES:
+#   1. Kein doppelter MC-Log wenn /name bereits benutzt wurde
+#      (update_minecraft_name editiert dann nur die bestehende Nachricht)
+#   2. {player} im welcome_message und instruction_message wird durch
+#      das Discord-Mention des Bewerbers ersetzt (statt MC-Name)
+#   3. Log-Kanal-Embed bekommt einen Dashboard-Link
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Minecraft Name Modal ──────────────────────────────────────────────────────
+
 class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
     mc_name = discord.ui.TextInput(
         label="Dein Minecraft Name",
@@ -689,27 +706,43 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
                 minecraft_name=mc, cfg=self.cfg,
             )
 
-            # ── Minecraft-Name über zentrale Logik speichern/aktualisieren ──
-            # Nutzt update_minecraft_name aus dem minecraft_names Cog –
-            # damit wird korrekt edit-vs-post entschieden und Supabase gespeichert.
+            # ── FIX 1: MC-Name via zentraler Logik speichern ────────────────
+            # Prüfen ob der Name schon via /name eingetragen wurde.
+            # Falls ja → update_minecraft_name() editiert nur die bestehende
+            # Nachricht im MC-Log-Kanal (kein neues Embed, kein zweiter Post).
+            # Falls nein → wird eine neue Nachricht gepostet.
+            try:
+                from bot.core.supabase_client import get_supabase as _get_sb
+                _existing = _get_sb().table("minecraft_names") \
+                    .select("message_id") \
+                    .eq("server_id", str(guild.id)) \
+                    .eq("user_id", str(applicant.id)) \
+                    .execute()
+                _already_registered = bool(_existing.data)
+            except Exception:
+                _already_registered = False
+
             try:
                 from bot.features.minecraft_names.cog import update_minecraft_name
                 new_msg_id = await update_minecraft_name(
                     guild=guild,
                     member=applicant,
                     mc_name=mc,
-                    set_nickname=False,  # Nickname wurde bereits in create_application gesetzt
+                    set_nickname=False,  # Nickname bereits in create_application gesetzt
                 )
                 logger.info(
-                    f"[MinecraftNameModal] MC-Name '{mc}' für {applicant} gespeichert, "
-                    f"message_id={new_msg_id}"
+                    f"[MinecraftNameModal] MC-Name '{mc}' für {applicant} gespeichert "
+                    f"(message_id={new_msg_id}, bereits_eingetragen={_already_registered})"
                 )
             except Exception as e:
                 logger.warning(f"[MinecraftNameModal] update_minecraft_name fehlgeschlagen: {e}")
             # ─────────────────────────────────────────────────────────────────
 
-            # Welcome message im neuen Kanal
-            welcome_text = (self.cfg.get("welcome_message") or "").replace("{player}", mc)
+            # ── FIX 2: Welcome message – {player} = Mention, {mc} = MC-Name ──
+            welcome_text = (self.cfg.get("welcome_message") or "") \
+                .replace("{player}", applicant.mention) \
+                .replace("{mc}", mc)
+
             embed = discord.Embed(
                 title=f"⛏️ Bewerbung von {mc}",
                 description=welcome_text,
@@ -723,21 +756,31 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
             )
             await channel.send(embed=embed, view=view)
 
-            instruction = (self.cfg.get("instruction_message") or "").strip()
+            # ── FIX 2: Instruction-Text – {player} = Mention, {mc} = MC-Name ─
+            instruction = (self.cfg.get("instruction_message") or "").strip() \
+                .replace("{player}", applicant.mention) \
+                .replace("{mc}", mc)
             if instruction:
                 await channel.send(instruction)
 
-            # Log channel
+            # ── FIX 3: Log channel mit Dashboard-Link ────────────────────────
             if self.cfg.get("log_channel_id"):
                 log_ch = guild.get_channel(int(self.cfg["log_channel_id"]))
                 if log_ch:
+                    from .manager import app_web_url
+                    web_url = app_web_url(str(guild.id), app_id)
                     log_embed = discord.Embed(
                         title=f"📋 Neue Bewerbung #{app_id}",
                         color=discord.Color.blurple(),
                     )
-                    log_embed.add_field(name="⛏️ Minecraft", value=mc, inline=True)
+                    log_embed.add_field(name="⛏️ Minecraft", value=mc,                inline=True)
                     log_embed.add_field(name="👤 Discord",   value=applicant.mention, inline=True)
                     log_embed.add_field(name="💬 Kanal",     value=channel.mention,   inline=True)
+                    log_embed.add_field(
+                        name="🌐 Dashboard",
+                        value=f"[Bewerbung öffnen]({web_url})",
+                        inline=False,
+                    )
                     try:
                         await log_ch.send(embed=log_embed)
                     except Exception:
