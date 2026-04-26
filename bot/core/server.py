@@ -43,6 +43,7 @@ FEATURE_COGS = [
     "bot.features.minecraft_names.cog",
     "bot.features.voice.cog",
     "bot.features.reminders.cog",
+    "bot.features.birthdays.cog"
 ]
 
 
