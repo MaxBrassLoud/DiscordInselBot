@@ -1,16 +1,10 @@
 """
 app_edit_views.py  –  /bewerbung_bearbeiten Command Views
 ==========================================================
-Vollständige Überarbeitung des Bewerbungs-Bearbeitungs-Systems.
-Orientiert sich am Ticket-Edit-System (ticket_edit_views.py) für
-Konsistenz und Qualität.
-
-Features:
-  • Server-Einstellungen ändern (Kanäle, Kategorie, Cooldown)
-  • Rollen bearbeiten (Neulings-, Mitglieds-, Staff-, Web-Admin-Rollen)
-  • Panel-Nachricht direkt bearbeiten (in-place, kein Neu-Senden)
-  • Echtzeit-Feedback: Speichern → sofortige Änderung sichtbar
-  • Einheitliche UX wie beim Ticket-System
+ÄNDERUNGEN:
+  - Panel-Kanal wechseln: alte Nachricht löschen, neue im neuen Kanal senden
+  - Prominenter "💾 Alle Änderungen speichern"-Button in der Haupt-View
+  - AppChannelSettingsView: Panel-Kanal-Wechsel mit automatischem Umzug
 """
 
 from __future__ import annotations
@@ -41,7 +35,10 @@ def _overview_embed(cfg: dict) -> discord.Embed:
     embed = discord.Embed(
         title="✏️ Bewerbungs-System bearbeiten",
         color=discord.Color.green(),
-        description="Wähle unten, was du bearbeiten möchtest.",
+        description=(
+            "Wähle unten, was du bearbeiten möchtest.\n"
+            "Klicke **💾 Alle Änderungen speichern** um alle Einstellungen auf einmal zu sichern."
+        ),
     )
 
     def _ch(key): return f"<#{cfg[key]}>" if cfg.get(key) else "*nicht gesetzt*"
@@ -65,6 +62,54 @@ def _overview_embed(cfg: dict) -> discord.Embed:
     if welcome:
         embed.add_field(name="💬 Willkommens-Text", value=welcome[:200] + ("…" if len(welcome) > 200 else ""), inline=False)
     return embed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PANEL UMZUG HELPER
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _move_app_panel_to_new_channel(
+    bot: discord.Client,
+    guild: discord.Guild,
+    cfg: dict,
+    new_channel_id: str,
+) -> str | None:
+    """
+    Löscht die alte Panel-Nachricht und sendet eine neue im neuen Kanal.
+    Gibt die neue message_id zurück oder None bei Fehler.
+    """
+    # Alte Nachricht löschen
+    old_channel_id = cfg.get("panel_channel_id")
+    old_message_id = cfg.get("panel_message_id")
+
+    if old_channel_id and old_message_id:
+        try:
+            old_ch = guild.get_channel(int(old_channel_id))
+            if old_ch:
+                old_msg = await old_ch.fetch_message(int(old_message_id))
+                await old_msg.delete()
+                logger.info(f"[app_edit] Alte Panel-Nachricht gelöscht: {old_message_id}")
+        except discord.NotFound:
+            logger.info("[app_edit] Alte Panel-Nachricht nicht gefunden (evtl. bereits gelöscht)")
+        except Exception as e:
+            logger.warning(f"[app_edit] Alte Panel-Nachricht konnte nicht gelöscht werden: {e}")
+
+    # Neue Nachricht senden
+    new_ch = guild.get_channel(int(new_channel_id))
+    if not new_ch:
+        return None
+
+    try:
+        from bot.features.applications.views import ApplicationPanelView, _build_panel_embed
+        welcome_text = cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
+        embed      = _build_panel_embed(welcome_text)
+        panel_view = ApplicationPanelView(bot=bot)
+        new_msg    = await new_ch.send(embed=embed, view=panel_view)
+        logger.info(f"[app_edit] Neue Panel-Nachricht gesendet: {new_msg.id} in #{new_ch.name}")
+        return str(new_msg.id)
+    except Exception as e:
+        logger.error(f"[app_edit] Panel-Nachricht senden fehlgeschlagen: {e}")
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -97,10 +142,10 @@ class AppEditMainView(discord.ui.View):
     def _rebuild(self):
         self.clear_items()
 
+        # Reihe 0
         btn_channels = discord.ui.Button(
             label="⚙️ Kanäle & Cooldown",
             style=discord.ButtonStyle.primary, row=0,
-            emoji="⚙️",
         )
         btn_channels.callback = self._cb_channels
         self.add_item(btn_channels)
@@ -108,7 +153,6 @@ class AppEditMainView(discord.ui.View):
         btn_roles = discord.ui.Button(
             label="👮 Rollen bearbeiten",
             style=discord.ButtonStyle.primary, row=0,
-            emoji="🎭",
         )
         btn_roles.callback = self._cb_roles
         self.add_item(btn_roles)
@@ -116,15 +160,14 @@ class AppEditMainView(discord.ui.View):
         btn_texts = discord.ui.Button(
             label="💬 Texte bearbeiten",
             style=discord.ButtonStyle.secondary, row=0,
-            emoji="✏️",
         )
         btn_texts.callback = self._cb_texts
         self.add_item(btn_texts)
 
+        # Reihe 1
         btn_panel = discord.ui.Button(
             label="📤 Panel bearbeiten",
             style=discord.ButtonStyle.secondary, row=1,
-            emoji="📌",
         )
         btn_panel.callback = self._cb_panel
         self.add_item(btn_panel)
@@ -132,17 +175,28 @@ class AppEditMainView(discord.ui.View):
         btn_web = discord.ui.Button(
             label="🌐 Im Browser öffnen",
             style=discord.ButtonStyle.secondary, row=1,
-            emoji="🌐",
         )
         btn_web.callback = self._cb_web
         self.add_item(btn_web)
+
+        # Reihe 2: Prominenter Speichern-Button
+        btn_save_all = discord.ui.Button(
+            label="💾 Alle Änderungen speichern",
+            style=discord.ButtonStyle.success,
+            row=2,
+            emoji="💾",
+        )
+        btn_save_all.callback = self._cb_save_all
+        self.add_item(btn_save_all)
+
+    # ── Callbacks ─────────────────────────────────────────────────────────────
 
     async def _cb_channels(self, interaction: discord.Interaction):
         cfg = self._load_cfg()
         if not cfg:
             await interaction.response.send_message("❌ Nicht eingerichtet.", ephemeral=True)
             return
-        view = AppChannelSettingsView(cfg=cfg, parent=self)
+        view = AppChannelSettingsView(cfg=cfg, bot=self.bot, parent=self)
         await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
     async def _cb_roles(self, interaction: discord.Interaction):
@@ -159,16 +213,13 @@ class AppEditMainView(discord.ui.View):
             if not cfg:
                 await interaction.response.send_message("❌ Nicht eingerichtet.", ephemeral=True)
                 return
-
             modal = AppTextsModal(cfg, parent=self)
             await interaction.response.send_modal(modal)
-
         except Exception as e:
             logger.error(f"[AppEditMainView._cb_texts] {e}")
             await interaction.response.send_message(
                 f"❌ Texte-Modal konnte nicht geöffnet werden: {e}", ephemeral=True
             )
-
 
     async def _cb_panel(self, interaction: discord.Interaction):
         cfg = self._load_cfg()
@@ -198,8 +249,43 @@ class AppEditMainView(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    async def _cb_save_all(self, interaction: discord.Interaction):
+        """Lädt aktuelle Einstellungen aus der DB und aktualisiert die Panel-Embed."""
+        await interaction.response.defer(ephemeral=True)
+        cfg = self._load_cfg()
+        if not cfg:
+            await interaction.followup.send("❌ Keine Konfiguration gefunden.", ephemeral=True)
+            return
+
+        # Panel-Nachricht aktualisieren falls vorhanden
+        updated_panel = False
+        if cfg.get("panel_channel_id") and cfg.get("panel_message_id"):
+            try:
+                from bot.features.applications.views import ApplicationPanelView, _build_panel_embed
+                ch = interaction.guild.get_channel(int(cfg["panel_channel_id"]))
+                if ch:
+                    msg = await ch.fetch_message(int(cfg["panel_message_id"]))
+                    welcome_text = cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
+                    await msg.edit(
+                        embed=_build_panel_embed(welcome_text),
+                        view=ApplicationPanelView(bot=self.bot),
+                    )
+                    updated_panel = True
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.warning(f"[app_save_all] Panel-Update: {e}")
+
+        await self.refresh()
+
+        panel_hint = " Panel-Nachricht wurde ebenfalls aktualisiert." if updated_panel else ""
+        await interaction.followup.send(
+            f"✅ Alle Änderungen wurden gespeichert.{panel_hint}",
+            ephemeral=True,
+        )
+
     async def refresh(self):
-        """Aktualisiert die Haupt-Übersicht sofort nach einer Änderung."""
+        """Aktualisiert die Haupt-Übersicht."""
         if self._original_interaction:
             try:
                 await self._original_interaction.edit_original_response(
@@ -210,14 +296,16 @@ class AppEditMainView(discord.ui.View):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KANAL & COOLDOWN EINSTELLUNGEN
+# KANAL & COOLDOWN EINSTELLUNGEN (mit Panel-Kanal-Wechsel)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AppChannelSettingsView(discord.ui.View):
-    def __init__(self, cfg: dict, parent: AppEditMainView):
+    def __init__(self, cfg: dict, bot: discord.Client, parent: AppEditMainView):
         super().__init__(timeout=180)
         self.cfg    = dict(cfg)
+        self.bot    = bot
         self.parent = parent
+        self._panel_channel_changed = False
         self._build()
 
     def build_embed(self) -> discord.Embed:
@@ -225,24 +313,46 @@ class AppChannelSettingsView(discord.ui.View):
         e = discord.Embed(
             title="⚙️ Kanäle & Cooldown bearbeiten",
             color=discord.Color.blurple(),
+            description=(
+                "Wähle die Kanäle über die Dropdowns.\n"
+                "⚠️ Bei einem **neuen Panel-Kanal** wird die alte Panel-Nachricht gelöscht "
+                "und im neuen Kanal neu gesendet."
+            ),
         )
         e.add_field(name="📢 Panel-Kanal",     value=_ch("panel_channel_id"),  inline=True)
+        if self._panel_channel_changed:
+            e.add_field(name="⚠️ Panel-Kanal", value="**Wird beim Speichern umgezogen!**", inline=True)
         e.add_field(name="📁 Kategorie",        value=_ch("category_id"),       inline=True)
         e.add_field(name="📋 Log-Kanal",        value=_ch("log_channel_id"),    inline=True)
         e.add_field(name="⛏️ MC-Log-Kanal",    value=_ch("mc_log_channel_id"), inline=True)
         e.add_field(name="⏳ Cooldown",         value=f"{self.cfg.get('rejection_cooldown_hours', 24)} Stunden", inline=True)
-        e.set_footer(text="Wähle Kanäle aus den Dropdowns und klicke Speichern.")
+        e.set_footer(text="Wähle Kanäle aus den Dropdowns und klicke 💾 Speichern.")
         return e
 
     def _build(self):
         self.clear_items()
 
+        panel_sel = discord.ui.ChannelSelect(
+            placeholder="📢 Panel-Kanal ändern",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text], row=0,
+        )
+        async def _panel(i):
+            new_id = i.data["values"][0]
+            if new_id != self.cfg.get("panel_channel_id"):
+                self._panel_channel_changed = True
+                self.cfg["_new_panel_channel_id"] = new_id
+            self.cfg["panel_channel_id"] = new_id
+            self._build()
+            await i.response.edit_message(embed=self.build_embed(), view=self)
+        panel_sel.callback = _panel
+        self.add_item(panel_sel)
+
         for row_idx, (placeholder, key, types) in enumerate([
-            ("📢 Panel-Kanal ändern",      "panel_channel_id",  [discord.ChannelType.text]),
             ("📁 Kategorie ändern",         "category_id",       [discord.ChannelType.category]),
             ("📋 Log-Kanal ändern",         "log_channel_id",    [discord.ChannelType.text]),
             ("⛏️ MC-Log-Kanal ändern",     "mc_log_channel_id", [discord.ChannelType.text]),
-        ]):
+        ], start=1):
             sel = discord.ui.ChannelSelect(
                 placeholder=placeholder, min_values=1, max_values=1,
                 channel_types=types, row=row_idx,
@@ -260,8 +370,9 @@ class AppChannelSettingsView(discord.ui.View):
         btn_cooldown.callback = self._cb_cooldown
         self.add_item(btn_cooldown)
 
+        save_label = "💾 Speichern & Panel umziehen" if self._panel_channel_changed else "💾 Speichern"
         btn_save = discord.ui.Button(
-            label="💾 Speichern & Übernehmen",
+            label=save_label,
             style=discord.ButtonStyle.success, row=4,
         )
         btn_save.callback = self._save
@@ -271,24 +382,58 @@ class AppChannelSettingsView(discord.ui.View):
         await interaction.response.send_modal(CooldownModal(cfg=self.cfg, view=self))
 
     async def _save(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         try:
-            get_supabase().table("application_servers").update({
-                "panel_channel_id":         self.cfg.get("panel_channel_id"),
+            update_data = {
                 "category_id":              self.cfg.get("category_id"),
                 "log_channel_id":           self.cfg.get("log_channel_id"),
                 "mc_log_channel_id":        self.cfg.get("mc_log_channel_id"),
                 "rejection_cooldown_hours": int(self.cfg.get("rejection_cooldown_hours", 24)),
-            }).eq("server_id", self.parent.guild_id).execute()
+            }
+
+            new_panel_msg_id = None
+
+            # Panel-Kanal wechseln
+            if self._panel_channel_changed:
+                new_channel_id = self.cfg["panel_channel_id"]
+                new_panel_msg_id = await _move_app_panel_to_new_channel(
+                    bot=self.bot,
+                    guild=interaction.guild,
+                    cfg=self.cfg,
+                    new_channel_id=new_channel_id,
+                )
+                update_data["panel_channel_id"] = new_channel_id
+                if new_panel_msg_id:
+                    update_data["panel_message_id"] = new_panel_msg_id
+            else:
+                update_data["panel_channel_id"] = self.cfg.get("panel_channel_id")
+
+            get_supabase().table("application_servers").update(update_data)\
+                .eq("server_id", self.parent.guild_id).execute()
 
             embed = self.build_embed()
             embed.title = "✅ Gespeichert!"
             embed.color = discord.Color.green()
+            if self._panel_channel_changed and new_panel_msg_id:
+                embed.add_field(
+                    name="✅ Panel-Nachricht umgezogen",
+                    value=f"Neue Nachricht in <#{self.cfg['panel_channel_id']}>",
+                    inline=False,
+                )
+            elif self._panel_channel_changed and not new_panel_msg_id:
+                embed.add_field(
+                    name="⚠️ Panel-Nachricht",
+                    value="Kanal gespeichert, aber neue Panel-Nachricht konnte nicht gesendet werden. Nutze `/bewerbung_setup`.",
+                    inline=False,
+                )
+
             for item in self.children:
                 item.disabled = True
-            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.edit_original_response(embed=embed, view=self)
             await self.parent.refresh()
         except Exception as e:
-            await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
+            logger.error(f"[AppChannelSettingsView._save] {e}")
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
 class CooldownModal(discord.ui.Modal, title="Cooldown nach Ablehnung"):
@@ -346,7 +491,7 @@ class AppRoleSettingsView(discord.ui.View):
         e.add_field(name="\u200b", value="\u200b", inline=True)
         e.add_field(name="👮 Staff-Rollen",     value=_ro(self._staff_ids),     inline=False)
         e.add_field(name="🌐 Web-Admin Rollen", value=_ro(self._web_admin_ids), inline=False)
-        e.set_footer(text="Wähle Rollen und klicke Speichern – Änderungen werden sofort übernommen.")
+        e.set_footer(text="Wähle Rollen und klicke 💾 Speichern – Änderungen werden sofort übernommen.")
         return e
 
     def _build(self):
@@ -393,7 +538,7 @@ class AppRoleSettingsView(discord.ui.View):
         self.add_item(web_sel)
 
         btn_save = discord.ui.Button(
-            label="💾 Speichern & Übernehmen",
+            label="💾 Alle Änderungen speichern",
             style=discord.ButtonStyle.success, row=4,
         )
         btn_save.callback = self._save
@@ -425,22 +570,21 @@ class AppRoleSettingsView(discord.ui.View):
 
 class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
     welcome_msg = discord.ui.TextInput(
-        label="Willkommens-Text ({player}, {mc})",  # < 45 Zeichen
+        label="Willkommens-Text ({player}, {mc})",
         style=discord.TextStyle.paragraph,
         required=True, max_length=1000,
     )
     instruction_msg = discord.ui.TextInput(
-        label="Anweisungs-Text (im Bewerbungskanal)",  # 36 Zeichen ✅
+        label="Anweisungs-Text (im Bewerbungskanal)",
         style=discord.TextStyle.paragraph,
         required=False, max_length=1000,
         placeholder="📋 Willkommen! Schreibe hier deine Bewerbung…",
     )
 
     def __init__(self, cfg: dict, parent: "AppEditMainView"):
-        super().__init__()  # Keine Parameter an Modal-Basisklasse weitergeben!
+        super().__init__()
         self._cfg    = cfg
         self._parent = parent
-        # Default-Werte auf max_length begrenzen, um Modal-Öffnungsfehler zu vermeiden
         self.welcome_msg.default     = (cfg.get("welcome_message") or "")[:1000]
         self.instruction_msg.default = (cfg.get("instruction_message") or "")[:1000]
 
@@ -468,7 +612,7 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PANEL BEARBEITEN (in-place, kein Neu-Senden)
+# PANEL BEARBEITEN (in-place)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AppPanelEditView(discord.ui.View):
@@ -491,7 +635,7 @@ class AppPanelEditView(discord.ui.View):
             ),
             color=discord.Color.green(),
         )
-        e.set_footer(text="Klicke 'Änderungen übernehmen' um die Panel-Nachricht in-place zu bearbeiten.")
+        e.set_footer(text="Klicke '💾 Änderungen übernehmen' um die Panel-Nachricht zu aktualisieren.")
         return e
 
     def _build(self):
@@ -505,7 +649,7 @@ class AppPanelEditView(discord.ui.View):
         self.add_item(btn_text)
 
         btn_apply = discord.ui.Button(
-            label="✅ Änderungen übernehmen",
+            label="💾 Änderungen übernehmen",
             style=discord.ButtonStyle.success, row=0,
         )
         btn_apply.callback = self._cb_apply
@@ -545,17 +689,14 @@ class AppPanelEditView(discord.ui.View):
                 )
                 return
 
-            # Embed in-place bearbeiten
             embed = discord.Embed(
                 title=self._title,
                 description=self._desc,
                 color=discord.Color.green(),
             )
 
-            # View wiederherstellen (persistente custom_id)
             from bot.features.applications.views import ApplicationPanelView
             panel_view = ApplicationPanelView(bot=self.bot)
-
             await panel_msg.edit(embed=embed, view=panel_view)
 
             # Welcome-Message auch in DB speichern

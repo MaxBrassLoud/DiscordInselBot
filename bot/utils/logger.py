@@ -11,5 +11,6 @@ def get_logger(name: str) -> logging.Logger:
             datefmt="%Y-%m-%d %H:%M:%S"
         ))
         logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG)
+
     return logger

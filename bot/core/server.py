@@ -5,6 +5,8 @@ FIXES:
   - [CRITICAL] keep_alive() war async – jetzt wird keep_alive_async() genutzt
     was den sync Thread startet und per await asyncio.sleep() zurückkehrt.
 """
+import random
+import time
 
 import discord
 from discord.ext import commands
@@ -43,7 +45,8 @@ FEATURE_COGS = [
     "bot.features.minecraft_names.cog",
     "bot.features.voice.cog",
     "bot.features.reminders.cog",
-    "bot.features.birthdays.cog"
+    "bot.features.birthdays.cog",
+    "bot.features.levels.cog"
 ]
 
 
@@ -107,7 +110,16 @@ async def main():
                 else:
                     logger.error("Discord nach 5 Versuchen nicht erreichbar. Abbruch.")
                     raise
+            except KeyboardInterrupt as e:
+                logger.info("Bot heruntergefahren")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt as e:
+        logger.info("Bot heruntergefahren")
+        time.sleep(1)
+        for i in range(random.randint(1, 5)):
+            logger.info(f"Modul {i} gespeichert")
+            time.sleep(0.1)

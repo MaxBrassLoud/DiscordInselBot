@@ -448,7 +448,7 @@ class BirthdaysCog(commands.Cog):
                 color=discord.Color.from_rgb(255, 182, 30),
             )
             embed.set_footer(text=f"{len(rows_sorted)} Einträge gesamt")
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /geburtstag setup (Admin) ─────────────────────────────────────────────
 

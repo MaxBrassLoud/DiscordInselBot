@@ -1,12 +1,10 @@
 """
 ticket_edit_views.py  –  /ticket_bearbeiten Command Views
 ==========================================================
-Ermöglicht das nachträgliche Bearbeiten des Ticket-Systems:
-  • Server-Einstellungen ändern (Kanäle, Kategorie)
-  • Module bearbeiten (Name, Beschreibung, Max-Tickets, Frage, Kategorie, Emoji, Staff-Rollen)
-  • Module löschen
-  • Neue Module hinzufügen
-  • Panel-Nachricht direkt bearbeiten (kein Neu-Senden)
+ÄNDERUNGEN:
+  - Panel-Kanal wechseln: alte Nachricht löschen, neue im neuen Kanal senden
+  - Prominenter "💾 Alle Änderungen speichern"-Button in der Haupt-View
+  - ServerSettingsView: Panel-Kanal-Wechsel mit automatischem Umzug der Panel-Nachricht
 """
 
 from __future__ import annotations
@@ -23,11 +21,6 @@ logger = get_logger("tickets.edit")
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _parse_emoji(value: str) -> discord.PartialEmoji | str | None:
-    """
-    Parse emoji input from a TextInput.
-    Supports unicode emoji (🎫) and custom emoji (<:name:id> / <a:name:id>).
-    Returns None if blank or unparseable.
-    """
     v = value.strip()
     if not v:
         return None
@@ -41,14 +34,17 @@ def _parse_emoji(value: str) -> discord.PartialEmoji | str | None:
             return discord.PartialEmoji(name=name, id=emoji_id, animated=animated)
         except Exception:
             return None
-    return v   # plain unicode string
+    return v
 
 
 def _server_overview_embed(server: dict, modules: list[dict]) -> discord.Embed:
     embed = discord.Embed(
         title="✏️ Ticket-System bearbeiten",
         color=discord.Color.blurple(),
-        description="Wähle unten, was du bearbeiten möchtest.",
+        description=(
+            "Wähle unten, was du bearbeiten möchtest.\n"
+            "Klicke **💾 Alle Änderungen speichern** um alle Einstellungen auf einmal zu sichern."
+        ),
     )
     embed.add_field(
         name="📢 Panel-Kanal",
@@ -95,6 +91,55 @@ def _server_overview_embed(server: dict, modules: list[dict]) -> discord.Embed:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PANEL UMZUG HELPER
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _move_panel_to_new_channel(
+    bot: discord.Client,
+    guild: discord.Guild,
+    server: dict,
+    new_channel_id: str,
+    modules: list[dict],
+) -> str | None:
+    """
+    Löscht die alte Panel-Nachricht und sendet eine neue im neuen Kanal.
+    Gibt die neue message_id zurück oder None bei Fehler.
+    """
+    from .panel_view import TicketPanelView, build_ticket_panel_embed
+
+    # Alte Nachricht löschen
+    old_channel_id  = server.get("panel_channel_id")
+    old_message_id  = server.get("panel_message_id")
+
+    if old_channel_id and old_message_id:
+        try:
+            old_ch = guild.get_channel(int(old_channel_id))
+            if old_ch:
+                old_msg = await old_ch.fetch_message(int(old_message_id))
+                await old_msg.delete()
+                logger.info(f"[ticket_edit] Alte Panel-Nachricht gelöscht: {old_message_id}")
+        except discord.NotFound:
+            logger.info("[ticket_edit] Alte Panel-Nachricht nicht gefunden (evtl. bereits gelöscht)")
+        except Exception as e:
+            logger.warning(f"[ticket_edit] Alte Panel-Nachricht konnte nicht gelöscht werden: {e}")
+
+    # Neue Nachricht im neuen Kanal senden
+    new_ch = guild.get_channel(int(new_channel_id))
+    if not new_ch:
+        return None
+
+    try:
+        embed      = build_ticket_panel_embed(modules)
+        panel_view = TicketPanelView(bot=bot)
+        new_msg    = await new_ch.send(embed=embed, view=panel_view)
+        logger.info(f"[ticket_edit] Neue Panel-Nachricht gesendet: {new_msg.id} in #{new_ch.name}")
+        return str(new_msg.id)
+    except Exception as e:
+        logger.error(f"[ticket_edit] Panel-Nachricht senden fehlgeschlagen: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN EDIT VIEW
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -131,6 +176,7 @@ class TicketEditMainView(discord.ui.View):
     def _rebuild(self):
         self.clear_items()
 
+        # Reihe 0: Einzel-Aktionen
         btn_server = discord.ui.Button(label="⚙️ Server-Einstellungen",
                                        style=discord.ButtonStyle.primary, row=0)
         btn_server.callback = self._cb_server_settings
@@ -146,22 +192,35 @@ class TicketEditMainView(discord.ui.View):
         btn_add.callback = self._cb_add_module
         self.add_item(btn_add)
 
+        # Reihe 1
         btn_del = discord.ui.Button(label="🗑️ Modul löschen",
                                     style=discord.ButtonStyle.danger, row=1)
         btn_del.callback = self._cb_delete_module
         self.add_item(btn_del)
 
-        btn_panel = discord.ui.Button(label="✏️ Panel bearbeiten",
+        btn_panel = discord.ui.Button(label="✏️ Panel-Text bearbeiten",
                                       style=discord.ButtonStyle.secondary, row=1)
         btn_panel.callback = self._cb_edit_panel
         self.add_item(btn_panel)
 
+        # Reihe 2: Prominenter Speichern-Button
+        btn_save_all = discord.ui.Button(
+            label="💾 Alle Änderungen speichern",
+            style=discord.ButtonStyle.success,
+            row=2,
+            emoji="💾",
+        )
+        btn_save_all.callback = self._cb_save_all
+        self.add_item(btn_save_all)
+
+    # ── Callbacks ─────────────────────────────────────────────────────────────
+
     async def _cb_server_settings(self, interaction: discord.Interaction):
-        server, _ = self._load_data()
+        server, modules = self._load_data()
         if not server:
             await interaction.response.send_message("❌ Ticket-System nicht eingerichtet.", ephemeral=True)
             return
-        view = ServerSettingsView(server=server, parent=self)
+        view = ServerSettingsView(server=server, modules=modules, bot=self.bot, parent=self)
         await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
     async def _cb_edit_module(self, interaction: discord.Interaction):
@@ -213,6 +272,40 @@ class TicketEditMainView(discord.ui.View):
         view = PanelEditView(server=server, modules=modules, bot=self.bot, parent=self)
         await interaction.response.send_message(
             embed=view.build_preview_embed(), view=view, ephemeral=True,
+        )
+
+    async def _cb_save_all(self, interaction: discord.Interaction):
+        """Speichert alle aktuellen Einstellungen aus der DB (lädt nochmals) – Bestätigungsbutton."""
+        await interaction.response.defer(ephemeral=True)
+        # Die DB ist die Quelle der Wahrheit – wir laden frisch und aktualisieren die Panel-Embed
+        server, modules = self._load_data()
+        if not server:
+            await interaction.followup.send("❌ Keine Konfiguration gefunden.", ephemeral=True)
+            return
+
+        # Panel-Nachricht aktualisieren falls vorhanden
+        updated_panel = False
+        if server.get("panel_channel_id") and server.get("panel_message_id") and modules:
+            try:
+                from .panel_view import TicketPanelView, build_ticket_panel_embed
+                ch = interaction.guild.get_channel(int(server["panel_channel_id"]))
+                if ch:
+                    msg = await ch.fetch_message(int(server["panel_message_id"]))
+                    embed = build_ticket_panel_embed(modules)
+                    await msg.edit(embed=embed, view=TicketPanelView(bot=self.bot))
+                    updated_panel = True
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.warning(f"[save_all] Panel-Update: {e}")
+
+        # Haupt-Übersicht aktualisieren
+        await self.refresh()
+
+        panel_hint = " Panel-Nachricht wurde ebenfalls aktualisiert." if updated_panel else ""
+        await interaction.followup.send(
+            f"✅ Alle Änderungen wurden gespeichert.{panel_hint}",
+            ephemeral=True,
         )
 
     async def refresh(self):
@@ -269,70 +362,167 @@ class _AddModuleShim:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SERVER SETTINGS
+# SERVER SETTINGS (mit Panel-Kanal-Wechsel)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ServerSettingsView(discord.ui.View):
-    def __init__(self, server: dict, parent: TicketEditMainView):
+    def __init__(self, server: dict, modules: list[dict], bot: discord.Client, parent: TicketEditMainView):
         super().__init__(timeout=180)
-        self.server = dict(server)
-        self.parent = parent
+        self.server  = dict(server)
+        self.modules = modules
+        self.bot     = bot
+        self.parent  = parent
+        self._panel_channel_changed = False
         self._build()
 
     def build_embed(self) -> discord.Embed:
-        e = discord.Embed(title="⚙️ Server-Einstellungen bearbeiten", color=discord.Color.blurple())
-        e.add_field(name="📢 Panel-Kanal",
-                    value=f"<#{self.server.get('panel_channel_id')}>" if self.server.get("panel_channel_id") else "*nicht gesetzt*", inline=True)
-        e.add_field(name="📁 Standard-Kategorie",
-                    value=f"<#{self.server.get('category_id')}>" if self.server.get("category_id") else "*nicht gesetzt*", inline=True)
-        e.add_field(name="📋 Log-Kanal",
-                    value=f"<#{self.server.get('log_channel_id')}>" if self.server.get("log_channel_id") else "*nicht gesetzt*", inline=True)
-        e.add_field(name="🔔 Staff-Ping Kanal",
-                    value=f"<#{self.server.get('staff_ping_channel_id')}>" if self.server.get("staff_ping_channel_id") else "*nicht gesetzt*", inline=True)
+        e = discord.Embed(
+            title="⚙️ Server-Einstellungen bearbeiten",
+            color=discord.Color.blurple(),
+            description=(
+                "Wähle die Kanäle über die Dropdowns.\n"
+                "⚠️ Bei einem **neuen Panel-Kanal** wird die alte Panel-Nachricht gelöscht "
+                "und im neuen Kanal neu gesendet."
+            ),
+        )
+        e.add_field(
+            name="📢 Panel-Kanal",
+            value=f"<#{self.server.get('panel_channel_id')}>" if self.server.get("panel_channel_id") else "*nicht gesetzt*",
+            inline=True,
+        )
+        if self._panel_channel_changed:
+            e.add_field(name="⚠️ Panel-Kanal", value="**Wird beim Speichern umgezogen!**", inline=True)
+        e.add_field(
+            name="📁 Standard-Kategorie",
+            value=f"<#{self.server.get('category_id')}>" if self.server.get("category_id") else "*nicht gesetzt*",
+            inline=True,
+        )
+        e.add_field(
+            name="📋 Log-Kanal",
+            value=f"<#{self.server.get('log_channel_id')}>" if self.server.get("log_channel_id") else "*nicht gesetzt*",
+            inline=True,
+        )
+        e.add_field(
+            name="🔔 Staff-Ping Kanal",
+            value=f"<#{self.server.get('staff_ping_channel_id')}>" if self.server.get("staff_ping_channel_id") else "*nicht gesetzt*",
+            inline=True,
+        )
         return e
 
     def _build(self):
         self.clear_items()
 
-        ch = discord.ui.ChannelSelect(placeholder="📢 Panel-Kanal ändern", min_values=1, max_values=1,
-                                      channel_types=[discord.ChannelType.text], row=0)
-        async def _ch(i): self.server["panel_channel_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
-        ch.callback = _ch; self.add_item(ch)
+        ch = discord.ui.ChannelSelect(
+            placeholder="📢 Panel-Kanal ändern",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text], row=0,
+        )
+        async def _ch(i):
+            new_id = i.data["values"][0]
+            if new_id != self.server.get("panel_channel_id"):
+                self._panel_channel_changed = True
+                self.server["_new_panel_channel_id"] = new_id
+            self.server["panel_channel_id"] = new_id
+            await i.response.edit_message(embed=self.build_embed(), view=self)
+        ch.callback = _ch
+        self.add_item(ch)
 
-        cat = discord.ui.ChannelSelect(placeholder="📁 Standard-Kategorie ändern", min_values=1, max_values=1,
-                                       channel_types=[discord.ChannelType.category], row=1)
-        async def _cat(i): self.server["category_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
-        cat.callback = _cat; self.add_item(cat)
+        cat = discord.ui.ChannelSelect(
+            placeholder="📁 Standard-Kategorie ändern",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.category], row=1,
+        )
+        async def _cat(i):
+            self.server["category_id"] = i.data["values"][0]
+            await i.response.edit_message(embed=self.build_embed(), view=self)
+        cat.callback = _cat
+        self.add_item(cat)
 
-        log = discord.ui.ChannelSelect(placeholder="📋 Log-Kanal ändern", min_values=1, max_values=1,
-                                       channel_types=[discord.ChannelType.text], row=2)
-        async def _log(i): self.server["log_channel_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
-        log.callback = _log; self.add_item(log)
+        log = discord.ui.ChannelSelect(
+            placeholder="📋 Log-Kanal ändern",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text], row=2,
+        )
+        async def _log(i):
+            self.server["log_channel_id"] = i.data["values"][0]
+            await i.response.edit_message(embed=self.build_embed(), view=self)
+        log.callback = _log
+        self.add_item(log)
 
-        ping = discord.ui.ChannelSelect(placeholder="🔔 Staff-Ping Kanal ändern", min_values=1, max_values=1,
-                                        channel_types=[discord.ChannelType.text], row=3)
-        async def _ping(i): self.server["staff_ping_channel_id"] = i.data["values"][0]; await i.response.edit_message(embed=self.build_embed(), view=self)
-        ping.callback = _ping; self.add_item(ping)
+        ping = discord.ui.ChannelSelect(
+            placeholder="🔔 Staff-Ping Kanal ändern",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text], row=3,
+        )
+        async def _ping(i):
+            self.server["staff_ping_channel_id"] = i.data["values"][0]
+            await i.response.edit_message(embed=self.build_embed(), view=self)
+        ping.callback = _ping
+        self.add_item(ping)
 
-        save = discord.ui.Button(label="💾 Speichern", style=discord.ButtonStyle.success, row=4)
-        save.callback = self._save; self.add_item(save)
+        save = discord.ui.Button(
+            label="💾 Speichern & Panel umziehen" if self._panel_channel_changed else "💾 Speichern",
+            style=discord.ButtonStyle.success,
+            row=4,
+        )
+        save.callback = self._save
+        self.add_item(save)
 
     async def _save(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         try:
-            get_supabase().table("ticket_servers").update({
-                "panel_channel_id":      self.server.get("panel_channel_id"),
+            supabase = get_supabase()
+
+            update_data = {
                 "category_id":           self.server.get("category_id"),
                 "log_channel_id":        self.server.get("log_channel_id"),
                 "staff_ping_channel_id": self.server.get("staff_ping_channel_id"),
-            }).eq("server_id", self.parent.guild_id).execute()
+            }
+
+            new_panel_msg_id = None
+
+            # Panel-Kanal wechseln: alte Nachricht löschen, neue senden
+            if self._panel_channel_changed:
+                new_channel_id = self.server["panel_channel_id"]
+                new_panel_msg_id = await _move_panel_to_new_channel(
+                    bot=self.bot,
+                    guild=interaction.guild,
+                    server=self.server,
+                    new_channel_id=new_channel_id,
+                    modules=self.modules,
+                )
+                update_data["panel_channel_id"] = new_channel_id
+                if new_panel_msg_id:
+                    update_data["panel_message_id"] = new_panel_msg_id
+            else:
+                update_data["panel_channel_id"] = self.server.get("panel_channel_id")
+
+            supabase.table("ticket_servers").update(update_data)\
+                .eq("server_id", self.parent.guild_id).execute()
+
             embed = self.build_embed()
             embed.title = "✅ Server-Einstellungen gespeichert!"
             embed.color = discord.Color.green()
-            for item in self.children: item.disabled = True
-            await interaction.response.edit_message(embed=embed, view=self)
+            if self._panel_channel_changed and new_panel_msg_id:
+                embed.add_field(
+                    name="✅ Panel-Nachricht umgezogen",
+                    value=f"Neue Nachricht in <#{self.server['panel_channel_id']}>",
+                    inline=False,
+                )
+            elif self._panel_channel_changed and not new_panel_msg_id:
+                embed.add_field(
+                    name="⚠️ Panel-Nachricht",
+                    value="Kanal gespeichert, aber neue Panel-Nachricht konnte nicht gesendet werden. Nutze `/ticket_setup`.",
+                    inline=False,
+                )
+
+            for item in self.children:
+                item.disabled = True
+            await interaction.edit_original_response(embed=embed, view=self)
             await self.parent.refresh()
         except Exception as e:
-            await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
+            logger.error(f"[ServerSettingsView._save] {e}")
+            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -433,8 +623,10 @@ class ModuleEditView(discord.ui.View):
         role_sel.callback = self._cb_roles
         self.add_item(role_sel)
 
-        btn_save = discord.ui.Button(label="💾 Alle Änderungen speichern",
-                                     style=discord.ButtonStyle.success, row=3)
+        btn_save = discord.ui.Button(
+            label="💾 Alle Änderungen speichern",
+            style=discord.ButtonStyle.success, row=3,
+        )
         btn_save.callback = self._cb_save
         self.add_item(btn_save)
 
@@ -478,7 +670,8 @@ class ModuleEditView(discord.ui.View):
                     }).execute()
                 del self.module["_new_role_ids"]
 
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             embed = self.build_embed()
             embed.title = f"✅ Modul «{self.module['name']}» gespeichert!"
             embed.color = discord.Color.green()
@@ -532,7 +725,6 @@ class ModuleTextEditModal(discord.ui.Modal, title="Modul bearbeiten"):
             max_t = 1
 
         raw_emoji = self.mod_emoji.value.strip() or "🎫"
-        # validate – if custom emoji syntax is broken, fall back
         if raw_emoji.startswith("<"):
             if _parse_emoji(raw_emoji) is None:
                 raw_emoji = "🎫"
@@ -546,16 +738,10 @@ class ModuleTextEditModal(discord.ui.Modal, title="Modul bearbeiten"):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PANEL EDIT VIEW  –  edits existing panel message in place
+# PANEL EDIT VIEW
 # ══════════════════════════════════════════════════════════════════════════════
 
 class PanelEditView(discord.ui.View):
-    """
-    Allows editing the existing panel message directly.
-    Changes title/description via modal, then patches the live Discord message.
-    No new message is sent – the panel stays in its original position.
-    """
-
     def __init__(self, server: dict, modules: list[dict], bot: discord.Client,
                  parent: TicketEditMainView):
         super().__init__(timeout=180)
@@ -563,15 +749,13 @@ class PanelEditView(discord.ui.View):
         self.modules = modules
         self.bot     = bot
         self.parent  = parent
-        # Start with sensible defaults; user can change them
         self._panel_title = "🎫 Support-Tickets"
         self._panel_desc  = "Wähle ein Modul aus den Buttons unten um ein Ticket zu erstellen."
         self._build()
 
     def build_preview_embed(self) -> discord.Embed:
-        """Admin-side preview embed showing how the panel will look."""
         embed = discord.Embed(
-            title="✏️ Panel bearbeiten",
+            title="✏️ Panel-Text bearbeiten",
             description=(
                 "**Vorschau der Panel-Nachricht:**\n\n"
                 f"**{self._panel_title}**\n"
@@ -586,7 +770,7 @@ class PanelEditView(discord.ui.View):
                 value=mod.get("description") or "–",
                 inline=False,
             )
-        embed.set_footer(text="Klicke 'Änderungen übernehmen' um die Panel-Nachricht zu aktualisieren.")
+        embed.set_footer(text="Klicke '💾 Änderungen übernehmen' um die Panel-Nachricht zu aktualisieren.")
         return embed
 
     def _build(self):
@@ -597,8 +781,10 @@ class PanelEditView(discord.ui.View):
         btn_text.callback = self._cb_edit_text
         self.add_item(btn_text)
 
-        btn_apply = discord.ui.Button(label="✅ Änderungen übernehmen",
-                                      style=discord.ButtonStyle.success, row=0)
+        btn_apply = discord.ui.Button(
+            label="💾 Änderungen übernehmen",
+            style=discord.ButtonStyle.success, row=0,
+        )
         btn_apply.callback = self._cb_apply
         self.add_item(btn_apply)
 
@@ -638,7 +824,6 @@ class PanelEditView(discord.ui.View):
                 )
                 return
 
-            # Build the updated panel embed – NO category note, just name + description
             new_embed = discord.Embed(
                 title=self._panel_title,
                 description=self._panel_desc,
@@ -652,7 +837,6 @@ class PanelEditView(discord.ui.View):
                     inline=False,
                 )
 
-            # Rebuild the view so button emojis are up to date
             from .views import TicketPanelView
             panel_view = TicketPanelView(
                 modules=self.modules,
@@ -660,7 +844,6 @@ class PanelEditView(discord.ui.View):
                 bot=self.bot,
             )
 
-            # Edit the existing message IN PLACE
             await panel_msg.edit(embed=new_embed, view=panel_view)
 
             for item in self.children:
