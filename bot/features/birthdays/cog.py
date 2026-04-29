@@ -334,7 +334,7 @@ class BirthdaysCog(commands.Cog):
         else:
             embed.add_field(name="⏳ In", value=f"{days_until} Tagen", inline=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /geburtstag löschen ───────────────────────────────────────────────────
 
@@ -372,7 +372,7 @@ class BirthdaysCog(commands.Cog):
 
     @geburtstag.command(name="liste", description="Zeige alle eingetragenen Geburtstage auf diesem Server")
     async def cmd_liste(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         server_id = str(interaction.guild_id)
 
         try:
