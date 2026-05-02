@@ -1310,3 +1310,5 @@ from .voice_setup_routes import register_voice_setup_routes
 register_voice_setup_routes(
     app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
 )
+from .voting_routes import register_voting_routes
+register_voting_routes(app)

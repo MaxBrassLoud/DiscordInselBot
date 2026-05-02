@@ -46,7 +46,8 @@ FEATURE_COGS = [
     "bot.features.voice.cog",
     "bot.features.reminders.cog",
     "bot.features.birthdays.cog",
-    "bot.features.levels.cog"
+    "bot.features.levels.cog",
+    "bot.features.voting.cog"
 ]
 
 
