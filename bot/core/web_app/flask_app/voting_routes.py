@@ -3,12 +3,21 @@ bot/core/web_app/flask_app/voting_routes.py
 =============================================
 Web-Routen für das Abstimmungssystem.
 
+ÄNDERUNGEN (Login-Pflicht):
+  - Abstimmungs-Seite erfordert Discord OAuth2-Login
+  - voter_hash wird aus der echten Discord-User-ID berechnet → keine Doppelabstimmung möglich
+  - Die User-ID selbst wird NICHT gespeichert – nur der SHA256-Hash
+  - Abgestimmte User können sich ausloggen, die Abstimmung bleibt anonym
+
 In app.py einbinden:
     from .voting_routes import register_voting_routes
     register_voting_routes(app)
 
 ROUTEN:
-  GET  /vote/<voting_id>              – Abstimmungsformular
+  GET  /vote/<voting_id>              – Abstimmungsformular (Login erforderlich)
+  GET  /vote/<voting_id>/login        – Discord OAuth2 Login für Abstimmung
+  GET  /vote/<voting_id>/callback     – OAuth2 Callback
+  GET  /vote/<voting_id>/logout       – Logout nach Abstimmung
   POST /vote/<voting_id>/submit       – Antwort absenden
   GET  /vote/<voting_id>/results      – Ergebnisse (nur MBL oder nach Ablauf)
   GET  /vote/<voting_id>/reconstruct  – Entschlüsselung mit privatem Schlüssel
@@ -22,15 +31,20 @@ import json
 import os
 import secrets
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from flask import (
-    Blueprint, jsonify, render_template_string, request, redirect, url_for
+    jsonify, render_template_string, request, redirect, session, Response
 )
 
 VOTER_SALT   = os.getenv("VOTER_SALT", secrets.token_hex(16))
 MBL_ID       = os.getenv("MBL", "")
 BOT_TOKEN    = os.getenv("DISCORD_TOKEN", "")
 DISCORD_API  = "https://discord.com/api/v10"
+
+CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "")
+CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+WEB_BASE_URL  = os.getenv("WEB_BASE_URL", "http://localhost:5000").rstrip("/")
 
 import requests as req_lib
 import logging
@@ -76,6 +90,51 @@ def _get_guild_members(guild_id: str) -> list[dict]:
     return result
 
 
+def _discord_oauth_url(voting_id: str, random_part: str) -> str:
+    """Erzeugt Discord OAuth2 URL – state enthält voting_id und Zufallswert."""
+    state = f"{voting_id}:{random_part}"
+    params = urlencode({
+        "client_id":     CLIENT_ID,
+        "redirect_uri":  f"{WEB_BASE_URL}/vote/callback",   # feste URL
+        "response_type": "code",
+        "scope":         "identify",
+        "state":         state,
+    })
+    return f"https://discord.com/oauth2/authorize?{params}"
+
+
+def _exchange_code(voting_id: str, code: str) -> dict | None:
+    """Tauscht OAuth-Code gegen Token – verwendet feste callback-URL."""
+    try:
+        r = req_lib.post(
+            f"{DISCORD_API}/oauth2/token",
+            data={
+                "client_id":     CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type":    "authorization_code",
+                "code":          code,
+                "redirect_uri":  f"{WEB_BASE_URL}/vote/callback",   # feste URL
+            },
+            timeout=8,
+        )
+        return r.json() if r.ok else None
+    except Exception:
+        return None
+
+
+def _get_discord_user(access_token: str) -> dict | None:
+    """Holt Discord-Nutzerdaten über den Bearer Token."""
+    try:
+        r = req_lib.get(
+            f"{DISCORD_API}/users/@me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=8,
+        )
+        return r.json() if r.ok else None
+    except Exception:
+        return None
+
+
 def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_fn=None):
     from bot.core.supabase_client import get_supabase
 
@@ -96,12 +155,142 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
                 show_results_link=f"/vote/{voting_id}/results",
             )
 
+        # Login prüfen
+        voter_session = session.get(f"voter_{voting_id}")
+        if not voter_session or not voter_session.get("user_id"):
+            return redirect(f"/vote/{voting_id}/login")
+
+        user_id   = voter_session["user_id"]
+        user_name = voter_session.get("display_name", "?")
+
+        # Bereits abgestimmt?
+        voter_hash = _voter_hash(user_id, voting_id)
+        existing = sb.table("voting_responses")\
+            .select("id")\
+            .eq("voting_id", voting_id)\
+            .eq("voter_hash", voter_hash)\
+            .execute()
+        if existing.data:
+            return _render_already_voted(voting, voting_id, user_name)
+
         return render_template_string(
             _VOTE_TEMPLATE,
             voting=voting,
             voting_id=voting_id,
+            user_name=user_name,
             enumerate=enumerate,
         )
+
+    @app.route("/vote/<voting_id>/login")
+    def vote_login(voting_id):
+        sb = get_supabase()
+        r = sb.table("votings").select("title, is_active").eq("id", voting_id).execute()
+        if not r.data:
+            return _render_error("Abstimmung nicht gefunden", "Diese Abstimmung existiert nicht.", 404)
+        voting = r.data[0]
+
+        if not voting.get("is_active", True):
+            return _render_error(
+                "Abstimmung geschlossen",
+                "Diese Abstimmung ist nicht mehr aktiv.",
+                403,
+            )
+
+        if not CLIENT_ID or not CLIENT_SECRET:
+            return _render_error(
+                "Konfigurationsfehler",
+                "Discord OAuth2 ist nicht konfiguriert.",
+                500,
+            )
+
+        random_part = secrets.token_urlsafe(16)
+        oauth_url = _discord_oauth_url(voting_id, random_part)
+
+        # Speichere den gesamten erwarteten state (voting_id:random) unter einem generischen Key
+        # So können wir später beim Callback die voting_id aus dem state extrahieren.
+        session["vote_oauth_state"] = f"{voting_id}:{random_part}"
+
+        return render_template_string(
+            _LOGIN_TEMPLATE,
+            voting=voting,
+            voting_id=voting_id,
+            oauth_url=oauth_url,
+        )
+
+    # ── GET /vote/<voting_id>/callback ────────────────────────────────────────
+    @app.route("/vote/callback")
+    def vote_callback():
+        sb = get_supabase()
+
+        # State prüfen (CSRF-Schutz)
+        stored_state = session.pop("vote_oauth_state", "")
+        given_state = request.args.get("state", "")
+
+        if not stored_state or stored_state != given_state:
+            return _render_error("Ungültiger State", "Bitte versuche es erneut.", 400,
+                                 show_login_link="/vote")  # Link zur Übersicht (optional)
+
+        if "error" in request.args:
+            return _render_error(
+                "Zugriff verweigert",
+                "Discord-Login wurde abgelehnt.",
+                403,
+                show_login_link="/vote",
+            )
+
+        code = request.args.get("code", "")
+        if not code:
+            return _render_error("Kein Code", "OAuth-Code fehlt.", 400,
+                                 show_login_link="/vote")
+
+        # Extrahiere voting_id aus dem state (Format: "voting_id:random")
+        voting_id = given_state.split(":", 1)[0]
+
+        # Abstimmung existiert?
+        r = sb.table("votings").select("is_active").eq("id", voting_id).execute()
+        if not r.data:
+            return _render_error("Abstimmung nicht gefunden", "Diese Abstimmung existiert nicht.", 404)
+
+        # Token tauschen (benötigt die voting_id für die redirect_uri – aber wir haben eine feste URL,
+        # die muss exakt mit der in Discord eingetragenen übereinstimmen)
+        tok = _exchange_code(voting_id, code)  # diese Funktion muss angepasst werden (siehe unten)
+        if not tok or "access_token" not in tok:
+            return _render_error("Token-Fehler", "Discord-Login fehlgeschlagen.", 500,
+                                 show_login_link=f"/vote/{voting_id}/login")
+
+        # User-Daten laden
+        discord_user = _get_discord_user(tok["access_token"])
+        if not discord_user or "id" not in discord_user:
+            return _render_error("Profil-Fehler", "Nutzerdaten konnten nicht geladen werden.", 500,
+                                 show_login_link=f"/vote/{voting_id}/login")
+
+        user_id = discord_user["id"]
+        display_name = discord_user.get("global_name") or discord_user.get("username") or "?"
+
+        # Session setzen
+        session[f"voter_{voting_id}"] = {
+            "user_id": user_id,
+            "display_name": display_name,
+        }
+
+        # Prüfen, ob bereits abgestimmt
+        voter_hash_val = _voter_hash(user_id, voting_id)
+        existing = sb.table("voting_responses") \
+            .select("id") \
+            .eq("voting_id", voting_id) \
+            .eq("voter_hash", voter_hash_val) \
+            .execute()
+        if existing.data:
+            voting_data = sb.table("votings").select("*").eq("id", voting_id).execute().data[0]
+            return _render_already_voted(voting_data, voting_id, display_name)
+
+        return redirect(f"/vote/{voting_id}")
+
+    # ── GET /vote/<voting_id>/logout ──────────────────────────────────────────
+    @app.route("/vote/<voting_id>/logout")
+    def vote_logout(voting_id):
+        session.pop(f"voter_{voting_id}", None)
+        return redirect(f"/vote/{voting_id}/login")
 
     # ── POST /vote/<voting_id>/submit ─────────────────────────────────────────
     @app.route("/vote/<voting_id>/submit", methods=["POST"])
@@ -115,25 +304,24 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
         if not voting.get("is_active", True):
             return jsonify({"error": "Abstimmung ist geschlossen"}), 403
 
-        body = request.get_json() or {}
+        # Login prüfen
+        voter_session = session.get(f"voter_{voting_id}")
+        if not voter_session or not voter_session.get("user_id"):
+            return jsonify({"error": "Nicht eingeloggt"}), 401
 
-        # Voter-Hash aus Discord OAuth Token (wenn vorhanden) oder anonym
-        # Da kein Login erforderlich, nutzen wir den übermittelten anonymen Token
-        anon_token = body.get("anon_token", "")
-        if not anon_token:
-            return jsonify({"error": "Kein anonymer Token übermittelt"}), 400
-
-        voter_hash = _voter_hash(anon_token, voting_id)
+        user_id = voter_session["user_id"]
+        voter_hash_val = _voter_hash(user_id, voting_id)
 
         # Doppelte Abstimmung prüfen
         existing = sb.table("voting_responses")\
             .select("id")\
             .eq("voting_id", voting_id)\
-            .eq("voter_hash", voter_hash)\
+            .eq("voter_hash", voter_hash_val)\
             .execute()
         if existing.data:
             return jsonify({"error": "Du hast bereits abgestimmt"}), 409
 
+        body = request.get_json() or {}
         answers       = body.get("answers", {})
         encrypted_data = body.get("encrypted_data", None)
         is_encrypted  = bool(encrypted_data)
@@ -143,7 +331,7 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
         try:
             sb.table("voting_responses").insert({
                 "voting_id":     voting_id,
-                "voter_hash":    voter_hash,
+                "voter_hash":    voter_hash_val,
                 "answers":       stored_data,
                 "is_encrypted":  is_encrypted,
                 "submitted_at":  datetime.now(timezone.utc).isoformat(),
@@ -152,20 +340,22 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
             log.error(f"[vote_submit] {e}")
             return jsonify({"error": "Fehler beim Speichern"}), 500
 
+        # Session nach Abstimmung löschen (User ist anonym, kein Grund mehr zum Behalten)
+        session.pop(f"voter_{voting_id}", None)
+
         return jsonify({"ok": True, "message": "Danke für deine Teilnahme!"})
 
     # ── GET /vote/<voting_id>/results ─────────────────────────────────────────
     @app.route("/vote/<voting_id>/results")
     def vote_results(voting_id):
-        from flask import session
+        from flask import session as flask_session
         sb = get_supabase()
         r  = sb.table("votings").select("*").eq("id", voting_id).execute()
         if not r.data:
             return _render_error("Abstimmung nicht gefunden", "Diese Abstimmung existiert nicht.", 404)
         voting = r.data[0]
 
-        # Nur wenn MBL eingeloggt oder Abstimmung beendet
-        user = session.get("user", {})
+        user = flask_session.get("user", {})
         is_mbl = bool(MBL_ID and user.get("id") == MBL_ID)
 
         if voting.get("is_active") and not is_mbl:
@@ -221,6 +411,11 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
     # ── GET /api/vote/<voting_id>/members ──────────────────────────────────────
     @app.route("/api/vote/<voting_id>/members")
     def api_vote_members(voting_id):
+        # Login prüfen
+        voter_session = session.get(f"voter_{voting_id}")
+        if not voter_session or not voter_session.get("user_id"):
+            return jsonify({"error": "Nicht eingeloggt"}), 401
+
         sb = get_supabase()
         r  = sb.table("votings").select("server_id, allowed_users").eq("id", voting_id).execute()
         if not r.data:
@@ -232,13 +427,15 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ERROR HELPER
+# ERROR / ALREADY-VOTED HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_error(title, msg, code=400, show_results_link=None):
+def _render_error(title, msg, code=400, show_results_link=None, show_login_link=None):
     extra = ""
     if show_results_link:
-        extra = f'<a href="{show_results_link}" style="color:var(--accent);margin-top:16px;display:inline-block;">→ Ergebnisse ansehen</a>'
+        extra += f'<a href="{show_results_link}" style="color:var(--accent);margin-top:16px;display:inline-block;">→ Ergebnisse ansehen</a>'
+    if show_login_link:
+        extra += f'<a href="{show_login_link}" style="color:var(--accent);margin-top:16px;display:inline-block;">→ Erneut anmelden</a>'
     html = f"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
 <title>{title}</title>
 <style>
@@ -252,8 +449,100 @@ def _render_error(title, msg, code=400, show_results_link=None):
   <div style="font-size:2.5rem;margin-bottom:16px;">{'⚠️' if code == 403 else '❌'}</div>
   <h1>{title}</h1><p>{msg}</p>{extra}
 </div></body></html>"""
-    from flask import Response
     return Response(html, status=code, mimetype="text/html")
+
+
+def _render_already_voted(voting: dict, voting_id: str, user_name: str) -> Response:
+    html = f"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
+<title>Bereits abgestimmt</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap">
+<style>
+  :root{{--bg:#060708;--card:#161b24;--border:#1f2535;--text:#e2e8f5;--sub:#7a8499;--green:#4ade80;}}
+  *{{box-sizing:border-box;margin:0;padding:0;}}
+  body{{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;
+    display:flex;align-items:center;justify-content:center;padding:24px;}}
+  .card{{background:var(--card);border:1px solid var(--border);border-radius:16px;
+    padding:48px 40px;text-align:center;max-width:420px;width:100%;}}
+  .icon{{font-size:3rem;margin-bottom:20px;}}
+  h1{{font-size:1.5rem;font-weight:700;margin-bottom:10px;}}
+  p{{color:var(--sub);font-size:.9rem;line-height:1.6;margin-bottom:20px;}}
+  .name{{color:var(--green);font-weight:600;}}
+  a{{display:inline-block;color:var(--sub);font-size:.82rem;text-decoration:none;
+    border:1px solid var(--border);border-radius:8px;padding:8px 18px;transition:border-color .2s;}}
+  a:hover{{border-color:var(--green);color:var(--green);}}
+</style></head><body>
+<div class="card">
+  <div class="icon">✅</div>
+  <h1>Bereits abgestimmt</h1>
+  <p>Du hast als <span class="name">{user_name}</span> bereits an dieser Abstimmung teilgenommen.<br><br>
+  Jede Person kann nur einmal abstimmen. Deine Antwort wurde anonym gespeichert.</p>
+  <a href="/vote/{voting_id}/results">→ Ergebnisse ansehen</a>
+</div></body></html>"""
+    return Response(html, status=200, mimetype="text/html")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOGIN TEMPLATE
+# ══════════════════════════════════════════════════════════════════════════════
+
+_LOGIN_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ voting.title }} – Anmelden</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap">
+<style>
+:root{--bg:#060708;--card:#161b24;--border:#1f2535;--border2:#2a3245;--text:#e2e8f5;--sub:#7a8499;--accent:#5b8cff;--green:#4ade80;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  background-image:radial-gradient(ellipse 80% 60% at 10% -10%,rgba(91,140,255,0.07) 0%,transparent 60%);}
+.card{background:var(--card);border:1px solid var(--border);border-radius:20px;
+  padding:52px 44px;text-align:center;max-width:440px;width:100%;
+  box-shadow:0 24px 80px rgba(0,0,0,.7);}
+.badge{display:inline-flex;align-items:center;gap:6px;
+  background:rgba(91,140,255,.1);border:1px solid rgba(91,140,255,.25);
+  border-radius:20px;padding:4px 14px;font-size:.72rem;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:22px;}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+h1{font-size:1.6rem;font-weight:700;margin-bottom:8px;}
+.sub{color:var(--sub);font-size:.9rem;line-height:1.6;margin-bottom:32px;}
+.discord-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  width:100%;padding:14px 20px;background:#5865F2;color:#fff;
+  font-family:'DM Sans',sans-serif;font-size:.95rem;font-weight:600;
+  border-radius:10px;border:none;cursor:pointer;text-decoration:none;
+  transition:all .2s;box-shadow:0 4px 18px rgba(88,101,242,.32);}
+.discord-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(88,101,242,.48);}
+.note{margin-top:20px;font-size:.75rem;color:var(--sub);line-height:1.6;
+  background:rgba(255,255,255,.03);border:1px solid var(--border2);
+  border-radius:8px;padding:12px 16px;}
+.shield{font-size:1.1rem;margin-bottom:6px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="badge"><span class="dot"></span>Abstimmung</div>
+  <h1>{{ voting.title }}</h1>
+  <p class="sub">{{ voting.description or 'Melde dich mit Discord an um an dieser Abstimmung teilzunehmen.' }}</p>
+
+  <a href="{{ oauth_url }}" class="discord-btn">
+    <svg width="20" height="15" viewBox="0 0 71 55" fill="#fff">
+      <path d="M60.1 4.9A58.6 58.6 0 0 0 45.6 0a40 40 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40 40 0 0 0 25.7 0 58.3 58.3 0 0 0 11 4.9C1.6 18.3-.9 31.3.3 44.1a58.9 58.9 0 0 0 18 9.1 44 44 0 0 0 3.8-6.2 38.4 38.4 0 0 1-6-2.9l1.5-1.1a42.2 42.2 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 18-9.1c1.5-15.3-2.6-28.2-10.8-39.1ZM23.7 36.1c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.2 6.4-7.2 6.5 3.2 6.4 7.2c0 3.9-2.8 7.1-6.4 7.1Zm23.6 0c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.2 6.4-7.2 6.5 3.2 6.4 7.2c0 3.9-2.8 7.1-6.4 7.1Z"/>
+    </svg>
+    Mit Discord anmelden
+  </a>
+
+  <div class="note">
+    <div class="shield">🔒</div>
+    Deine Identität bleibt anonym. Es wird nur ein <strong>Hash</strong> deiner Discord-ID gespeichert –
+    kein Name, kein Avatar, keine User-ID. Der Hash verhindert Doppelabstimmungen, ist aber nicht
+    zurückverfolgbar.
+  </div>
+</div>
+</body>
+</html>"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -311,6 +600,27 @@ body {
   max-width: 720px; margin: 0 auto; padding: 48px 22px 80px;
 }
 
+/* ── User bar ── */
+.user-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 10px 16px; margin-bottom: 32px;
+  font-size: .83rem;
+}
+.user-info { display: flex; align-items: center; gap: 8px; color: var(--sub); }
+.user-name { color: var(--text); font-weight: 600; }
+.user-badge {
+  background: rgba(74,222,128,.1); color: var(--green);
+  border: 1px solid rgba(74,222,128,.22); border-radius: 20px;
+  padding: 2px 10px; font-size: .68rem; font-weight: 700;
+}
+.logout-link {
+  color: var(--sub); font-size: .78rem; text-decoration: none;
+  border: 1px solid var(--border2); border-radius: 6px; padding: 4px 10px;
+  transition: all .15s;
+}
+.logout-link:hover { border-color: var(--red); color: var(--red); }
+
 /* ── Header ── */
 .vote-header {
   text-align: center; margin-bottom: 48px;
@@ -324,7 +634,7 @@ body {
   margin-bottom: 20px;
 }
 .vote-badge::before { content: ''; width:6px; height:6px; border-radius:50%; background:var(--green); display:block; animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
+@keyframes pulse { 0%, 100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
 
 .vote-title {
   font-size: clamp(1.6rem, 4vw, 2.4rem);
@@ -343,7 +653,7 @@ body {
 }
 .progress-fill {
   height: 100%; background: var(--accent);
-  border-radius: 4px; transition: width .4s ease;
+  border-radius: 4px; transition: width .4s ease; width: 0;
 }
 .progress-text {
   text-align: right; font-size: .72rem; color: var(--sub);
@@ -490,7 +800,6 @@ body {
   margin-bottom: 24px;
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
@@ -507,6 +816,17 @@ body {
 </div>
 
 <div class="page">
+
+  <!-- User-Bar -->
+  <div class="user-bar">
+    <div class="user-info">
+      <span>Angemeldet als</span>
+      <span class="user-name">{{ user_name }}</span>
+      <span class="user-badge">✓ Verifiziert</span>
+    </div>
+    <a href="/vote/{{ voting_id }}/logout" class="logout-link">Abmelden</a>
+  </div>
+
   <div class="vote-header">
     <div class="vote-badge">Abstimmung läuft</div>
     <h1 class="vote-title">{{ voting.title }}</h1>
@@ -581,23 +901,10 @@ body {
 </div>
 
 <script>
-const VOTING_ID    = {{ voting_id | tojson }};
-const QUESTIONS    = {{ voting.questions | tojson }};
-const PUBLIC_KEY   = {{ (voting.public_key or '') | tojson }};
-const HAS_PERSON   = QUESTIONS.some(q => q.Typ === 'person');
-
-// ── Anon Token ──────────────────────────────────────────────────────────────
-// Einmaliger lokaler Token – anonym, nicht rückverfolgbar
-function getAnonToken() {
-  const key = `anon_${VOTING_ID}`;
-  let tok = sessionStorage.getItem(key);
-  if (!tok) {
-    tok = Array.from(crypto.getRandomValues(new Uint8Array(24)))
-               .map(b => b.toString(16).padStart(2,'0')).join('');
-    sessionStorage.setItem(key, tok);
-  }
-  return tok;
-}
+const VOTING_ID  = {{ voting_id | tojson }};
+const QUESTIONS  = {{ voting.questions | tojson }};
+const PUBLIC_KEY = {{ (voting.public_key or '') | tojson }};
+const HAS_PERSON = QUESTIONS.some(q => q.Typ === 'person');
 
 // ── Answers State ────────────────────────────────────────────────────────────
 const answers = {};
@@ -665,7 +972,6 @@ function updateProgress() {
       answered++;
     }
 
-    // Card styling
     const card = document.getElementById(`qcard-${i}`);
     if (card) {
       card.classList.toggle('answered', answers[i] !== undefined && answers[i] !== null);
@@ -678,19 +984,16 @@ function updateProgress() {
   if (txt)  txt.textContent = `${answered} / ${QUESTIONS.length} beantwortet`;
 }
 
-// ── Encryption (PEM → SubtleCrypto) ─────────────────────────────────────────
-// Wir nutzen RSA-OAEP + AES-GCM (wie im hybrid_encrypt)
+// ── Encryption ────────────────────────────────────────────────────────────────
 async function encryptData(data, pemPublicKey) {
   const encoder   = new TextEncoder();
   const dataBytes = encoder.encode(data);
 
-  // AES-GCM Key
   const aesKey = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 }, true, ['encrypt']
   );
   const iv = crypto.getRandomValues(new Uint8Array(12));
 
-  // AES encrypt
   const aesCipherBuf = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv }, aesKey, dataBytes
   );
@@ -699,7 +1002,6 @@ async function encryptData(data, pemPublicKey) {
   const ciphertext= aesCipher.slice(0, -16);
   const exportedAesKey = new Uint8Array(await crypto.subtle.exportKey('raw', aesKey));
 
-  // Import RSA public key
   const pemBody = pemPublicKey
     .replace(/-----BEGIN PUBLIC KEY-----/, '')
     .replace(/-----END PUBLIC KEY-----/, '')
@@ -712,19 +1014,16 @@ async function encryptData(data, pemPublicKey) {
     false, ['encrypt']
   );
 
-  // RSA encrypt AES key
   const encAesKey = new Uint8Array(await crypto.subtle.encrypt(
     { name: 'RSA-OAEP' }, rsaKey, exportedAesKey
   ));
 
-  // Format: base64(encAesKey)|base64(tag)|base64(iv)|base64(ciphertext)
   const b64 = buf => btoa(String.fromCharCode(...buf));
   return [b64(encAesKey), b64(aesTag), b64(iv), b64(ciphertext)].join('|');
 }
 
 // ── Submit ────────────────────────────────────────────────────────────────────
 async function submitVote() {
-  // Pflichtfelder prüfen
   const missing = [];
   QUESTIONS.forEach((frage, i) => {
     if (!frage.Pflicht) return;
@@ -744,7 +1043,6 @@ async function submitVote() {
   btn.disabled = true;
   btn.textContent = 'Wird abgeschickt...';
 
-  // Text-Inputs in answers eintragen
   QUESTIONS.forEach((frage, i) => {
     if (frage.Typ === 'text') {
       const el = document.getElementById(`text-${i}`);
@@ -752,7 +1050,7 @@ async function submitVote() {
     }
   });
 
-  const payload  = { anon_token: getAnonToken() };
+  const payload  = {};
   const answerObj = {};
   QUESTIONS.forEach((frage, i) => {
     answerObj[frage.Frage] = answers[i] ?? null;
@@ -780,6 +1078,11 @@ async function submitVote() {
     });
     const d = await r.json();
     if (!r.ok) {
+      if (r.status === 401) {
+        // Session abgelaufen → zurück zum Login
+        window.location.href = `/vote/${VOTING_ID}/login`;
+        return;
+      }
       alert(d.error || 'Fehler beim Abschicken');
       btn.disabled = false;
       btn.textContent = 'Abstimmung abschicken →';
@@ -801,6 +1104,10 @@ async function loadPersonQuestions() {
   let members = [];
   try {
     const r = await fetch(`/api/vote/${VOTING_ID}/members`);
+    if (r.status === 401) {
+      // Nicht eingeloggt → Login-Seite
+      return;
+    }
     const d = await r.json();
     members = d.members || [];
   } catch(e) {
@@ -811,7 +1118,6 @@ async function loadPersonQuestions() {
     const list = document.getElementById(`plist-${i}`);
     if (!list) return;
 
-    // Optionen: Entweder --All (alle Members) oder spezifische IDs
     let displayMembers = members;
     if (q.Optionen && q.Optionen !== '--All' && Array.isArray(q.Optionen)) {
       const allowed = new Set(q.Optionen.map(String));
@@ -837,7 +1143,6 @@ async function loadPersonQuestions() {
   });
 }
 
-// Init
 if (HAS_PERSON) loadPersonQuestions();
 updateProgress();
 </script>
@@ -846,7 +1151,7 @@ updateProgress();
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RESULTS TEMPLATE
+# RESULTS TEMPLATE (unverändert aus Original)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _RESULTS_TEMPLATE = r"""<!DOCTYPE html>
@@ -933,7 +1238,6 @@ const QUESTIONS = {{ voting.questions | tojson }};
 const IS_ENCRYPTED = {{ ('true' if voting.public_key else 'false') }};
 
 if (!IS_ENCRYPTED && RESPONSES.length) {
-  // Parse and aggregate answers
   const parsed = RESPONSES.map(r => {
     try { return JSON.parse(r.answers); } catch { return {}; }
   });
@@ -1012,7 +1316,7 @@ function esc(s) {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RECONSTRUCT TEMPLATE
+# RECONSTRUCT TEMPLATE (unverändert aus Original)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _RECONSTRUCT_TEMPLATE = r"""<!DOCTYPE html>
@@ -1085,7 +1389,6 @@ const RESPONSES  = {{ responses | tojson }};
 const QUESTIONS  = {{ voting.questions | tojson }};
 let decryptedAll = [];
 
-// ── Decrypt using WebCrypto ──────────────────────────────────────────────────
 async function decryptEntry(encStr, privateKey) {
   const parts = encStr.split('|');
   if (parts.length !== 4) throw new Error('Ungültiges Format');
@@ -1097,12 +1400,10 @@ async function decryptEntry(encStr, privateKey) {
   const iv        = b64ToU8(ivB64);
   const ciphertext= b64ToU8(cipherB64);
 
-  // RSA decrypt AES key
   const aesKeyBytes = await crypto.subtle.decrypt(
     { name: 'RSA-OAEP' }, privateKey, encAesKey
   );
 
-  // AES-GCM decrypt (ciphertext + tag)
   const importedAes = await crypto.subtle.importKey(
     'raw', aesKeyBytes, { name: 'AES-GCM' }, false, ['decrypt']
   );
@@ -1121,8 +1422,6 @@ async function importPrivateKey(pem) {
     .replace(/-----END (?:RSA )?PRIVATE KEY-----/, '')
     .replace(/\s+/g, '');
   const der = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
-
-  // Try PKCS8 first, then fall back to PKCS1 (wrapped)
   try {
     return await crypto.subtle.importKey(
       'pkcs8', der.buffer,
@@ -1176,7 +1475,6 @@ function renderResults() {
   const rc        = document.getElementById('resultContainer');
   rc.classList.add('show');
 
-  // Per-question aggregation
   const qBlocks = QUESTIONS.map((frage, qi) => {
     const vals = decryptedAll.map(d => d.data[frage.Frage]).filter(v => v !== null && v !== undefined);
 

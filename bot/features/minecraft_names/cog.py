@@ -276,7 +276,7 @@ class MinecraftNamesCog(commands.Cog):
         await _set_minecraft_name(interaction, member, minecraft_name)
 
     @name.command(
-        name="self",
+        name="others",
         description="[Admin] Setze den Minecraft-Namen eines anderen Mitglieds.",
     )
     @app_commands.describe(
