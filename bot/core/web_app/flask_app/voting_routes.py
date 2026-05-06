@@ -397,8 +397,10 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
             return _render_error("Abstimmung nicht gefunden", "Diese Abstimmung existiert nicht.", 404)
         voting = r.data[0]
 
-        user    = flask_session.get("user", {})
-        is_mbl  = bool(MBL_ID and user.get("id") == MBL_ID)
+        flask_user   = flask_session.get("user", {})
+        voter_session = flask_session.get(f"voter_{voting_id}", {})
+        mbl_uid      = flask_user.get("id") or voter_session.get("user_id", "")
+        is_mbl       = bool(MBL_ID and mbl_uid == MBL_ID)
 
         if voting.get("is_active") and not is_mbl:
             return _render_error("Zugriff verweigert", "Die Ergebnisse sind erst nach Ende der Abstimmung verfügbar.", 403)
@@ -431,8 +433,10 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
         if not voting.get("public_key"):
             return _render_error("Keine Verschlüsselung", "Diese Abstimmung verwendet keine Verschlüsselung.", 400)
 
-        user   = flask_session.get("user", {})
-        is_mbl = bool(MBL_ID and user.get("id") == MBL_ID)
+        flask_user    = flask_session.get("user", {})
+        voter_session = flask_session.get(f"voter_{voting_id}", {})
+        mbl_uid       = flask_user.get("id") or voter_session.get("user_id", "")
+        is_mbl        = bool(MBL_ID and mbl_uid == MBL_ID)
 
         responses = []
         if not voting.get("is_active") or is_mbl:
@@ -501,8 +505,10 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
         """Speichert entschlüsselte Ergebnisse als öffentliche JSON-Datei."""
         from flask import session as flask_session
         import json as _json, datetime as _dt
-        user   = flask_session.get("user", {})
-        is_mbl = bool(MBL_ID and user.get("id") == MBL_ID)
+        flask_user    = flask_session.get("user", {})
+        voter_session = flask_session.get(f"voter_{voting_id}", {})
+        mbl_uid       = flask_user.get("id") or voter_session.get("user_id", "")
+        is_mbl        = bool(MBL_ID and mbl_uid == MBL_ID)
         if not is_mbl:
             return jsonify({"error": "Kein Zugriff"}), 403
 
