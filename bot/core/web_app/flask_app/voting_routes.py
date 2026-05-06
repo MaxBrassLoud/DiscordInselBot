@@ -47,6 +47,7 @@ WEB_BASE_URL  = os.getenv("WEB_BASE_URL", "http://localhost:5000").rstrip("/")
 # Verzeichnis für Abstimmungs-JSON-Dateien
 _BOT_ROOT   = Path(__file__).resolve().parent.parent.parent.parent.parent
 VOTINGS_DIR = _BOT_ROOT / "votings"
+RESULTS_DIR = _BOT_ROOT / "results"
 
 import requests as req_lib
 import logging
@@ -407,16 +408,20 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
             .eq("voting_id", voting_id)\
             .execute().data or []
 
+        public_results_exist = (RESULTS_DIR / f"{voting_id}.json").exists()
+
         return render_template_string(
             _RESULTS_TEMPLATE,
             voting=voting,
             voting_id=voting_id,
             responses=responses,
             is_mbl=is_mbl,
+            public_results_exist=public_results_exist,
         )
 
     @app.route("/vote/<voting_id>/reconstruct")
     def vote_reconstruct(voting_id):
+        from flask import session as flask_session
         sb = get_supabase()
         r  = sb.table("votings").select("*").eq("id", voting_id).execute()
         if not r.data:
@@ -426,14 +431,27 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
         if not voting.get("public_key"):
             return _render_error("Keine Verschlüsselung", "Diese Abstimmung verwendet keine Verschlüsselung.", 400)
 
+        user   = flask_session.get("user", {})
+        is_mbl = bool(MBL_ID and user.get("id") == MBL_ID)
+
         responses = []
-        if not voting.get("is_active"):
+        if not voting.get("is_active") or is_mbl:
             responses = sb.table("voting_responses")\
                 .select("answers, is_encrypted, submitted_at")\
                 .eq("voting_id", voting_id)\
                 .execute().data or []
 
-        return render_template_string(_RECONSTRUCT_TEMPLATE, voting=voting, voting_id=voting_id, responses=responses)
+        results_file      = RESULTS_DIR / f"{voting_id}.json"
+        already_published = results_file.exists()
+
+        return render_template_string(
+            _RECONSTRUCT_TEMPLATE,
+            voting=voting,
+            voting_id=voting_id,
+            responses=responses,
+            is_mbl=is_mbl,
+            already_published=already_published,
+        )
 
     @app.route("/api/vote/<voting_id>/members")
     def api_vote_members(voting_id):
@@ -476,6 +494,56 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
 
         total = len(sb.table("voting_responses").select("id").eq("voting_id", voting_id).execute().data or [])
         return jsonify({"voters": voters, "total_responses": total, "tracked": len(voters)})
+
+    # ── POST /api/vote/<id>/publish-results  (nur MBL) ────────────────────────
+    @app.route("/api/vote/<voting_id>/publish-results", methods=["POST"])
+    def api_publish_results(voting_id):
+        """Speichert entschlüsselte Ergebnisse als öffentliche JSON-Datei."""
+        from flask import session as flask_session
+        import json as _json, datetime as _dt
+        user   = flask_session.get("user", {})
+        is_mbl = bool(MBL_ID and user.get("id") == MBL_ID)
+        if not is_mbl:
+            return jsonify({"error": "Kein Zugriff"}), 403
+
+        sb = get_supabase()
+        r  = sb.table("votings").select("id, title, questions").eq("id", voting_id).execute()
+        if not r.data:
+            return jsonify({"error": "Abstimmung nicht gefunden"}), 404
+
+        payload = request.get_json(silent=True)
+        if not payload or "results" not in payload:
+            return jsonify({"error": "Keine Ergebnisse übergeben"}), 400
+
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        out = {
+            "voting_id":    voting_id,
+            "title":        r.data[0].get("title", ""),
+            "questions":    r.data[0].get("questions", []),
+            "published_at": _dt.datetime.utcnow().isoformat() + "Z",
+            "entries":      payload["results"],
+        }
+        result_path = RESULTS_DIR / f"{voting_id}.json"
+        result_path.write_text(_json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        public_url = f"{WEB_BASE_URL}/vote/{voting_id}/public-results"
+        return jsonify({"ok": True, "url": public_url})
+
+    # ── GET /vote/<id>/public-results  (öffentlich für alle) ─────────────────
+    @app.route("/vote/<voting_id>/public-results")
+    def vote_public_results(voting_id):
+        """Zeigt veröffentlichte, entschlüsselte Ergebnisse – für jeden zugänglich."""
+        import json as _json
+        result_path = RESULTS_DIR / f"{voting_id}.json"
+        if not result_path.exists():
+            return _render_error(
+                "Keine Ergebnisse veröffentlicht",
+                "Für diese Abstimmung wurden noch keine Ergebnisse veröffentlicht.",
+                404,
+            )
+        data = _json.loads(result_path.read_text(encoding="utf-8"))
+        return render_template_string(_PUBLIC_RESULTS_TEMPLATE, data=data, voting_id=voting_id)
+
 
     # ══════════════════════════════════════════════════════════════════════════
     # VOTING CREATOR (nur MBL)
@@ -609,6 +677,77 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
 # ══════════════════════════════════════════════════════════════════════════════
 # TEMPLATES
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Public Results Template ───────────────────────────────────────────────────
+_PUBLIC_RESULTS_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{ data.title }} – Ergebnisse</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono&display=swap">
+<style>
+:root{--bg:#060708;--surface:#0f1117;--card:#161b24;--card2:#1c2130;--border:#1f2535;--border2:#2a3245;--text:#e2e8f5;--sub:#7a8499;--dim:#3d4660;--accent:#5b8cff;--green:#4ade80;--gold:#fbbf24;--red:#f87171;--r:12px;--r2:8px;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:48px 22px;-webkit-font-smoothing:antialiased;}
+.page{max-width:760px;margin:0 auto;}
+h1{font-size:1.8rem;font-weight:700;margin-bottom:8px;}
+.sub{color:var(--sub);font-size:.9rem;margin-bottom:32px;}
+.pub-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);border-radius:20px;padding:4px 12px;font-size:.75rem;font-weight:600;color:var(--green);margin-bottom:28px;}
+.stat-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:32px;}
+.stat-box{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:18px 20px;flex:1;min-width:120px;}
+.stat-num{font-size:1.6rem;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace;}
+.stat-lbl{font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-top:4px;}
+.q-block{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:24px;margin-bottom:16px;}
+.q-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px;}
+.q-title{font-size:1rem;font-weight:500;margin-bottom:18px;}
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.bar-label{width:160px;font-size:.85rem;color:var(--sub);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bar-track{flex:1;background:var(--border2);border-radius:4px;height:8px;overflow:hidden;}
+.bar-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .5s ease;}
+.bar-count{font-family:'DM Mono',monospace;font-size:.78rem;color:var(--sub);width:40px;text-align:right;flex-shrink:0;}
+.answer-row{background:var(--card2);border:1px solid var(--border2);border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:.88rem;color:var(--sub);}
+.answer-row span{color:var(--text);}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>📊 {{ data.title }}</h1>
+  <div class="sub">Veröffentlichte Ergebnisse</div>
+  <div class="pub-badge">✅ Öffentlich veröffentlicht am {{ data.published_at[:10] }}</div>
+
+  <div class="stat-row">
+    <div class="stat-box"><div class="stat-num" id="totalCount">–</div><div class="stat-lbl">Antworten</div></div>
+    <div class="stat-box"><div class="stat-num">{{ data.questions | length }}</div><div class="stat-lbl">Fragen</div></div>
+  </div>
+
+  {% for frage in data.questions %}
+  <div class="q-block" data-q-idx="{{ loop.index0 }}" data-q-type="{{ frage.Typ }}">
+    <div class="q-label">Frage {{ loop.index }}</div>
+    <div class="q-title">{{ frage.Frage }}</div>
+    <div class="q-results" id="qr-{{ loop.index0 }}"></div>
+  </div>
+  {% endfor %}
+</div>
+<script>
+const DATA = {{ data | tojson }};
+const entries = DATA.entries || [];
+document.getElementById('totalCount').textContent = entries.length;
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+DATA.questions.forEach((frage, qi) => {
+  const container = document.getElementById('qr-' + qi);
+  const vals = entries.map(e => e.data && e.data[frage.Frage]).filter(v => v !== null && v !== undefined);
+  if (frage.Typ === 'text') {
+    container.innerHTML = vals.map(v => `<div class="answer-row"><span>${esc(String(v))}</span></div>`).join('') || '<div style="color:var(--sub);font-size:.82rem;">Keine Antworten</div>';
+  } else {
+    const counts = {}; vals.forEach(v => { const items = Array.isArray(v) ? v : [v]; items.forEach(item => { const key = item?.name || item || '?'; counts[key] = (counts[key]||0)+1; }); });
+    const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]); const max = sorted[0]?.[1] || 1;
+    container.innerHTML = sorted.map(([k,c]) => `<div class="bar-row"><div class="bar-label" title="${esc(k)}">${esc(k)}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/max*100)}%"></div></div><div class="bar-count">${c}</div></div>`).join('') || '<div style="color:var(--sub);font-size:.82rem;">Keine Antworten</div>';
+  }
+});
+</script>
+</body>
+</html>"""
 
 # ── Voters Template ───────────────────────────────────────────────────────────
 _VOTERS_TEMPLATE = r"""<!DOCTYPE html>
@@ -2021,10 +2160,17 @@ h1{font-size:1.8rem;font-weight:700;margin-bottom:8px;}
   <h1>📊 {{ voting.title }}</h1>
   <div class="sub">{{ voting.description }}</div>
 
+  {% if is_mbl and voting.is_active %}
+  <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);border-radius:20px;padding:4px 12px;font-size:.75rem;font-weight:600;color:var(--green);margin-bottom:20px;">🟢 Laufende Abstimmung – MBL-Vorschau</div>
+  {% endif %}
+
   {% if voting.public_key %}
   <div class="enc-notice">
     🔐 Diese Abstimmung ist verschlüsselt. Die Rohdaten können nur mit dem privaten Schlüssel entschlüsselt werden.
     <br><a class="dec-link" href="/vote/{{ voting_id }}/reconstruct">→ Entschlüsselungs-Tool öffnen</a>
+    {% if public_results_exist %}
+    <br><a class="dec-link" href="/vote/{{ voting_id }}/public-results" style="color:var(--green);">→ Öffentliche Ergebnisseite anzeigen</a>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -2110,7 +2256,13 @@ textarea.key-input:focus{border-color:var(--accent);}
 .btn{background:var(--accent);color:#000;font-family:'DM Sans',sans-serif;font-weight:700;font-size:.9rem;padding:12px 28px;border:none;border-radius:var(--r2);cursor:pointer;margin-top:14px;transition:all .2s;}
 .btn:hover:not(:disabled){filter:brightness(1.1);}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-green{background:var(--green);color:#000;}
 .warn-box{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:var(--r2);padding:12px 16px;font-size:.82rem;color:var(--gold);margin-bottom:20px;}
+.active-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);border-radius:20px;padding:4px 12px;font-size:.75rem;font-weight:600;color:var(--green);margin-bottom:20px;}
+.pub-box{background:rgba(91,140,255,.07);border:1px solid rgba(91,140,255,.25);border-radius:var(--r2);padding:16px 20px;margin-top:16px;display:none;}
+.pub-box.show{display:block;}
+.pub-link{display:block;font-family:'DM Mono',monospace;font-size:.82rem;color:var(--accent);word-break:break-all;margin-top:8px;}
+.already-pub{background:rgba(74,222,128,.07);border:1px solid rgba(74,222,128,.2);border-radius:var(--r2);padding:12px 16px;font-size:.82rem;color:var(--green);margin-bottom:20px;}
 .result-container{display:none;}
 .result-container.show{display:block;}
 .q-block{background:var(--card2);border:1px solid var(--border2);border-radius:var(--r2);padding:18px 20px;margin-bottom:12px;}
@@ -2127,6 +2279,15 @@ textarea.key-input:focus{border-color:var(--accent);}
 <div class="page">
   <h1>🔓 Antworten entschlüsseln</h1>
   <div class="sub">{{ voting.title }} — Entschlüsselung mit privatem RSA-Schlüssel</div>
+
+  {% if voting.is_active %}
+  <div class="active-badge">🟢 Abstimmung läuft noch – MBL-Vorschau</div>
+  {% endif %}
+
+  {% if already_published %}
+  <div class="already-pub">✅ Ergebnisse bereits veröffentlicht · <a href="/vote/{{ voting_id }}/public-results" style="color:var(--green);">→ Öffentliche Seite öffnen</a></div>
+  {% endif %}
+
   <div class="warn-box">⚠️ Der private Schlüssel verlässt <strong>niemals</strong> deinen Browser. Die Entschlüsselung findet vollständig lokal statt.</div>
   <div class="card">
     <label>Privater RSA-Schlüssel (PEM-Format)</label>
@@ -2138,13 +2299,25 @@ textarea.key-input:focus{border-color:var(--accent);}
     <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
       <button class="dl-btn" onclick="downloadJSON()">⬇️ JSON exportieren</button>
       <button class="dl-btn" onclick="downloadCSV()">⬇️ CSV exportieren</button>
+      {% if is_mbl %}
+      <button class="dl-btn btn-green" onclick="publishResults()" id="publishBtn">🌐 Ergebnisse veröffentlichen</button>
+      {% endif %}
     </div>
     <div id="resultsGrid"></div>
+    {% if is_mbl %}
+    <div class="pub-box" id="pubBox">
+      <strong style="font-size:.85rem;">✅ Veröffentlicht!</strong>
+      <div style="font-size:.78rem;color:var(--sub);margin-top:4px;">Öffentlicher Link:</div>
+      <a class="pub-link" id="pubLink" href="#" target="_blank"></a>
+    </div>
+    {% endif %}
   </div>
 </div>
 <script>
 const RESPONSES = {{ responses | tojson }};
 const QUESTIONS = {{ voting.questions | tojson }};
+const VOTING_ID = {{ voting_id | tojson }};
+const IS_MBL    = {{ is_mbl | tojson }};
 let decryptedAll = [];
 async function decryptEntry(encStr, privateKey) {
   const parts = encStr.split('|'); if (parts.length !== 4) throw new Error('Ungültiges Format');
@@ -2177,8 +2350,28 @@ function renderResults() {
   const qBlocks = QUESTIONS.map((frage, qi) => { const vals = decryptedAll.map(d => d.data[frage.Frage]).filter(v => v !== null && v !== undefined); let inner = ''; if (frage.Typ === 'text') { inner = vals.map(v => `<div class="answer-row"><span>${esc(String(v))}</span></div>`).join(''); } else { const counts = {}; vals.forEach(v => { const items = Array.isArray(v) ? v : [v]; items.forEach(item => { const key = item?.name || item || '?'; counts[key] = (counts[key] || 0) + 1; }); }); inner = Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([k, c]) => `<div class="answer-row"><span>${esc(k)}</span> — ${c}×</div>`).join(''); } return `<div class="q-block"><div class="q-label">Frage ${qi+1}</div><div class="q-title">${esc(frage.Frage)}</div>${inner || '<div style="color:var(--sub);font-size:.82rem;">Keine Antworten</div>'}</div>`; });
   container.innerHTML = qBlocks.join('');
 }
+async function publishResults() {
+  if (!IS_MBL) return;
+  if (!decryptedAll.length) { alert('Zuerst entschlüsseln!'); return; }
+  const btn = document.getElementById('publishBtn'); btn.disabled = true; btn.textContent = 'Veröffentliche...';
+  try {
+    const res = await fetch(`/api/vote/${VOTING_ID}/publish-results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: decryptedAll })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const box = document.getElementById('pubBox'); const link = document.getElementById('pubLink');
+      box.classList.add('show'); link.href = data.url; link.textContent = data.url;
+      btn.textContent = '✅ Veröffentlicht';
+    } else {
+      alert('Fehler: ' + (data.error || 'Unbekannt')); btn.disabled = false; btn.textContent = '🌐 Veröffentlichen';
+    }
+  } catch(e) { alert('Netzwerkfehler: ' + e.message); btn.disabled = false; btn.textContent = '🌐 Veröffentlichen'; }
+}
 function downloadJSON() { const blob = new Blob([JSON.stringify(decryptedAll, null, 2)], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'abstimmung_ergebnisse.json'; a.click(); }
-function downloadCSV() { const headers = ['Abgestimmt am', ...QUESTIONS.map(q => q.Frage)]; const rows = decryptedAll.map(d => [d.submitted_at, ...QUESTIONS.map(q => { const v = d.data[q.Frage]; if (Array.isArray(v)) return v.map(i => i?.name || i).join('; '); return v?.name || v || ''; })]); const csv = [headers, ...rows].map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n'); const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'abstimmung_ergebnisse.csv'; a.click(); }
+function downloadCSV() { const headers = ['Abgestimmt am', ...QUESTIONS.map(q => q.Frage)]; const rows = decryptedAll.map(d => [d.submitted_at, ...QUESTIONS.map(q => { const v = d.data[q.Frage]; if (Array.isArray(v)) return v.map(i => i?.name || i).join('; '); return v?.name || v || ''; })]); const csv = [headers, ...rows].map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}`).join(',')).join('\n'); const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'abstimmung_ergebnisse.csv'; a.click(); }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 </script>
 </body>
