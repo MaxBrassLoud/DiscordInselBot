@@ -254,12 +254,12 @@ class MinecraftNamesCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    name = app_commands.Group(
+    name_command = app_commands.Group(
         name="name",
         description="Namen System"
     )
 
-    @name.command(
+    @name_command.command(
         name="minecraft",
         description="Trage deinen Minecraft-Namen ein oder aktualisiere ihn.",
     )
@@ -275,7 +275,7 @@ class MinecraftNamesCog(commands.Cog):
         member = interaction.guild.get_member(interaction.user.id) or interaction.user
         await _set_minecraft_name(interaction, member, minecraft_name)
 
-    @name.command(
+    @name_command.command(
         name="others",
         description="[Admin] Setze den Minecraft-Namen eines anderen Mitglieds.",
     )
