@@ -14,20 +14,35 @@ WARTERAUM-LOGIK:
   - GESPERRTE User (in rejected_user_ids mit Ablauf-Zeit):
       • Werden aus dem Warteraum gekickt solange die Sperre aktiv ist
       • Nach Ablauf der Sperre können sie wieder anfragen
+  - GEBANNTE User (in banned_user_ids):
+      • Werden aus dem Warteraum dauerhaft gekickt
+      • Können nicht in den Hauptkanal beitreten
+      • Nur Besitzer/Team kann bannen/entbannen
   - NORMALE User:
       • Müssen den Warteraum nutzen und eine Anfrage stellen
       • Beim Ablehnen: Kick + Sperre für festgelegten Zeitraum
         (Standard: 5 Minuten, konfigurierbar vom Kanalbesitzer via Button)
 
+DISCONNECT-WHITELIST-ENTFERNUNG:
+  Wenn ein User per Discord-Disconnect (Moderator/Besitzer trennt Verbindung)
+  aus dem Hauptkanal entfernt wird:
+    • Zugangs-Rolle wird entzogen (Whitelist-Entfernung)
+    • User wird für die konfigurierte reject_duration_minutes gesperrt
+
 SPERR-FORMAT in rejected_user_ids:
   Statt reiner User-IDs wird ein JSON-String gespeichert:
   [{"user_id": "...", "until": "2026-04-22T15:00:00+00:00"}, ...]
 
-NEUE DB-SPALTE (einmalig ausführen):
+BAN-FORMAT in banned_user_ids:
+  [{"user_id": "...", "banned_by": "...", "banned_at": "ISO-Timestamp"}, ...]
+
+NEUE DB-SPALTEN (einmalig ausführen):
     ALTER TABLE voice_channels
         ADD COLUMN IF NOT EXISTS rejected_user_ids JSONB DEFAULT '[]';
     ALTER TABLE voice_channels
         ADD COLUMN IF NOT EXISTS reject_duration_minutes INTEGER DEFAULT 5;
+    ALTER TABLE voice_channels
+        ADD COLUMN IF NOT EXISTS banned_user_ids JSONB DEFAULT '[]';
 """
 
 from __future__ import annotations
@@ -204,6 +219,56 @@ def _get_reject_duration(vc_row: dict) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# BAN HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_ban_list(vc_row: dict) -> list[dict]:
+    """
+    Gibt die Liste der gebannten User zurück.
+    Format: [{"user_id": "...", "banned_by": "...", "banned_at": "ISO-Timestamp"}, ...]
+    """
+    raw = vc_row.get("banned_user_ids")
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return []
+    return []
+
+
+def _is_banned(vc_row: dict, user_id: str) -> bool:
+    """Prüft ob ein User aus dem Voice-Kanal gebannt ist."""
+    for entry in _get_ban_list(vc_row):
+        if entry.get("user_id") == str(user_id):
+            return True
+    return False
+
+
+def _add_ban(vc_id: int, vc_row: dict, user_id: str, banned_by_id: str):
+    """Bannt einen User dauerhaft aus dem Voice-Kanal."""
+    entries = _get_ban_list(vc_row)
+    # Alten Eintrag entfernen falls vorhanden
+    entries = [e for e in entries if e.get("user_id") != str(user_id)]
+    entries.append({
+        "user_id":   str(user_id),
+        "banned_by": str(banned_by_id),
+        "banned_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _update_vc(vc_id, {"banned_user_ids": entries})
+
+
+def _remove_ban(vc_id: int, vc_row: dict, user_id: str):
+    """Entbannt einen User aus dem Voice-Kanal."""
+    entries = _get_ban_list(vc_row)
+    entries = [e for e in entries if e.get("user_id") != str(user_id)]
+    _update_vc(vc_id, {"banned_user_ids": entries})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PERMISSION CHECKS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -327,6 +392,7 @@ def _build_panel_embed(vc_row: dict, guild: discord.Guild) -> discord.Embed:
             inline=True,
         )
     if not is_open:
+        ban_count = len(_get_ban_list(vc_row))
         embed.add_field(
             name="⏳ Warteraum",
             value=f"<#{vc_row['wait_channel_id']}>" if vc_row.get("wait_channel_id") else "*–*",
@@ -335,6 +401,11 @@ def _build_panel_embed(vc_row: dict, guild: discord.Guild) -> discord.Embed:
         embed.add_field(
             name="⛔ Sperr-Dauer",
             value=f"{reject_minutes} Minuten bei Ablehnung",
+            inline=True,
+        )
+        embed.add_field(
+            name="🚫 Gebannte User",
+            value=str(ban_count) if ban_count > 0 else "Keine",
             inline=True,
         )
         embed.add_field(
@@ -393,6 +464,279 @@ class _RejectDurationModal(discord.ui.Modal, title="Sperr-Dauer festlegen"):
             embed=discord.Embed(title="✅ Sperr-Dauer gesetzt", description=desc, color=discord.Color.green()),
             ephemeral=True,
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BAN / UNBAN VIEW
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _BanActionSelectView(discord.ui.View):
+    """Erste Auswahl: Bannen oder Entbannen?"""
+
+    def __init__(self, vc_row: dict, main_ch: discord.VoiceChannel, guild: discord.Guild):
+        super().__init__(timeout=60)
+        self.vc_row  = vc_row
+        self.main_ch = main_ch
+        self.guild   = guild
+
+    @discord.ui.button(label="🚫 User bannen", style=discord.ButtonStyle.danger)
+    async def ban_action(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Alle User im Kanal + alle bekannten Member aus dem Guild als Kandidaten
+        # Wir zeigen alle User die NICHT gebannt, NICHT der Besitzer und NICHT der Bot sind
+        all_members_in_ch = [
+            m for m in self.main_ch.members
+            if m.id != interaction.guild.me.id
+            and str(m.id) != self.vc_row.get("owner_id")
+            and not _is_banned(self.vc_row, str(m.id))
+        ]
+        if not all_members_in_ch:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="ℹ️ Keine bannbaren User",
+                    description="Es befinden sich keine bannbaren User im Kanal.",
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        view = _BanSelectView(
+            members=all_members_in_ch,
+            vc_row=self.vc_row,
+            main_ch=self.main_ch,
+            guild=self.guild,
+        )
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="🚫 User aus Kanal bannen",
+                description=(
+                    "Wähle einen oder mehrere User die du aus diesem Voice-Kanal bannen möchtest.\n"
+                    "Gebannte User werden sofort aus dem Kanal entfernt und können den Warteraum nicht mehr nutzen."
+                ),
+                color=discord.Color.red(),
+            ),
+            view=view,
+        )
+
+    @discord.ui.button(label="✅ User entbannen", style=discord.ButtonStyle.success)
+    async def unban_action(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ban_list = _get_ban_list(self.vc_row)
+        if not ban_list:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="ℹ️ Keine gebannten User",
+                    description="Es sind keine User aus diesem Kanal gebannt.",
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        view = _UnbanSelectView(
+            ban_list=ban_list,
+            vc_row=self.vc_row,
+            guild=self.guild,
+        )
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ User entbannen",
+                description="Wähle einen oder mehrere User die du aus diesem Voice-Kanal entbannen möchtest.",
+                color=discord.Color.green(),
+            ),
+            view=view,
+        )
+
+
+class _BanSelectView(discord.ui.View):
+    """Select-Menü zum Auswählen der zu bannenden User."""
+
+    def __init__(
+        self,
+        members: list[discord.Member],
+        vc_row: dict,
+        main_ch: discord.VoiceChannel,
+        guild: discord.Guild,
+    ):
+        super().__init__(timeout=60)
+        self.vc_row  = vc_row
+        self.main_ch = main_ch
+        self.guild   = guild
+
+        options = [
+            discord.SelectOption(
+                label=m.display_name[:100],
+                value=str(m.id),
+                description=f"@{m.name}",
+            )
+            for m in members[:25]
+        ]
+        sel = discord.ui.Select(
+            placeholder="User zum Bannen auswählen…",
+            min_values=1,
+            max_values=min(len(options), 10),
+            options=options,
+        )
+        sel.callback = self._selected
+        self.add_item(sel)
+
+    async def _selected(self, interaction: discord.Interaction):
+        # Frische Daten aus DB holen
+        fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+        if not fresh:
+            await interaction.response.edit_message(
+                embed=discord.Embed(title="❌ Kanal nicht mehr gefunden.", color=discord.Color.red()),
+                view=None,
+            )
+            return
+
+        access_role_id = fresh.get("access_role_id")
+        banned_names   = []
+
+        for uid in interaction.data["values"]:
+            member = interaction.guild.get_member(int(uid))
+            if not member:
+                continue
+
+            # In die Ban-Liste eintragen
+            _add_ban(fresh["id"], fresh, uid, str(interaction.user.id))
+            # Frisch laden für nächsten Eintrag
+            fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+
+            # Zugangs-Rolle entziehen (von Whitelist entfernen)
+            if access_role_id:
+                await _revoke_access(interaction.guild, member, access_role_id)
+
+            # Aus dem Kanal kicken wenn noch drin
+            if member.voice and member.voice.channel == self.main_ch:
+                try:
+                    await member.move_to(None, reason="Voice-Ban durch Kanalbesitzer")
+                except Exception as e:
+                    logger.error(f"[ban] move_to: {e}")
+
+            banned_names.append(member.display_name)
+
+            # DM an gebannten User
+            try:
+                await member.send(embed=discord.Embed(
+                    title="🚫 Du wurdest aus einem Voice-Kanal gebannt",
+                    description=(
+                        f"Du wurdest dauerhaft aus dem Voice-Kanal **{self.main_ch.name}** gebannt.\n"
+                        "Du kannst dem Kanal und dem Warteraum nicht mehr beitreten."
+                    ),
+                    color=discord.Color.dark_red(),
+                ))
+            except discord.Forbidden:
+                pass
+
+        self.stop()
+        names = ", ".join(banned_names) if banned_names else "Niemand"
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"🚫 {names} {'wurde' if len(banned_names) == 1 else 'wurden'} gebannt",
+                description="Zugangs-Rolle entzogen und aus dem Kanal entfernt.",
+                color=discord.Color.dark_red(),
+            ),
+            view=None,
+        )
+
+        # Panel aktualisieren
+        fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+        if fresh and fresh.get("panel_message_id"):
+            try:
+                msg = await self.main_ch.fetch_message(int(fresh["panel_message_id"]))
+                await msg.edit(embed=_build_panel_embed(fresh, interaction.guild), view=VoicePanelView())
+            except Exception:
+                pass
+
+
+class _UnbanSelectView(discord.ui.View):
+    """Select-Menü zum Auswählen der zu entbannenden User."""
+
+    def __init__(
+        self,
+        ban_list: list[dict],
+        vc_row: dict,
+        guild: discord.Guild,
+    ):
+        super().__init__(timeout=60)
+        self.vc_row = vc_row
+        self.guild  = guild
+
+        options = []
+        for entry in ban_list[:25]:
+            uid    = entry.get("user_id", "")
+            member = guild.get_member(int(uid)) if uid else None
+            label  = member.display_name[:100] if member else f"User {uid[:10]}"
+            desc   = f"@{member.name}" if member else f"ID: {uid}"
+            options.append(discord.SelectOption(label=label, value=uid, description=desc))
+
+        if not options:
+            return
+
+        sel = discord.ui.Select(
+            placeholder="User zum Entbannen auswählen…",
+            min_values=1,
+            max_values=min(len(options), 10),
+            options=options,
+        )
+        sel.callback = self._selected
+        self.add_item(sel)
+
+    async def _selected(self, interaction: discord.Interaction):
+        fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+        if not fresh:
+            await interaction.response.edit_message(
+                embed=discord.Embed(title="❌ Kanal nicht mehr gefunden.", color=discord.Color.red()),
+                view=None,
+            )
+            return
+
+        unbanned_names = []
+        for uid in interaction.data["values"]:
+            _remove_ban(fresh["id"], fresh, uid)
+            fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+
+            member = interaction.guild.get_member(int(uid))
+            name   = member.display_name if member else f"User {uid}"
+            unbanned_names.append(name)
+
+            # Optionale DM an entbannten User
+            if member:
+                try:
+                    main_ch = interaction.guild.get_channel(int(self.vc_row["main_channel_id"]))
+                    ch_name = main_ch.name if main_ch else "Voice-Kanal"
+                    await member.send(embed=discord.Embed(
+                        title="✅ Bann aufgehoben",
+                        description=(
+                            f"Dein Bann aus dem Voice-Kanal **{ch_name}** wurde aufgehoben.\n"
+                            "Du kannst den Warteraum wieder nutzen um Zugang anzufragen."
+                        ),
+                        color=discord.Color.green(),
+                    ))
+                except discord.Forbidden:
+                    pass
+
+        self.stop()
+        names = ", ".join(unbanned_names) if unbanned_names else "Niemand"
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"✅ {names} {'wurde' if len(unbanned_names) == 1 else 'wurden'} entbannt",
+                description="Die User können den Warteraum wieder nutzen.",
+                color=discord.Color.green(),
+            ),
+            view=None,
+        )
+
+        # Panel aktualisieren
+        fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+        if fresh and fresh.get("panel_message_id"):
+            try:
+                main_ch = interaction.guild.get_channel(int(fresh["main_channel_id"]))
+                if main_ch:
+                    msg = await main_ch.fetch_message(int(fresh["panel_message_id"]))
+                    await msg.edit(embed=_build_panel_embed(fresh, interaction.guild), view=VoicePanelView())
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -493,11 +837,6 @@ class VoicePanelView(discord.ui.View):
                     )
                     return
 
-                # Hauptkanal-Berechtigungen:
-                # - @everyone: sehen=ja, beitreten=nein
-                # - access_role: sehen=ja, beitreten=ja
-                # - Team-Rollen (allowed): sehen=ja, beitreten=ja  ← können direkt rein
-                # - Besitzer + Bot: alles
                 new_overwrites = {
                     guild.default_role: discord.PermissionOverwrite(
                         view_channel=True, connect=False,
@@ -513,7 +852,6 @@ class VoicePanelView(discord.ui.View):
                     new_overwrites[owner] = discord.PermissionOverwrite(
                         view_channel=True, connect=True, move_members=True, manage_channels=True,
                     )
-                # Team-Rollen bekommen connect=True im Hauptkanal
                 for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
                     role = guild.get_role(int(rid))
                     if role:
@@ -529,16 +867,10 @@ class VoicePanelView(discord.ui.View):
                     await interaction.followup.send("❌ Konnte Kanal-Berechtigungen nicht setzen.", ephemeral=True)
                     return
 
-                # Aktuelle Mitglieder im Hauptkanal bekommen die Zugangs-Rolle
                 for m in main_ch.members:
                     if m.id != guild.me.id:
                         await _grant_access(guild, m, str(access_role.id))
 
-                # Warteraum erstellen:
-                # - @everyone: sehen=ja, beitreten=ja (normaler Warteraum)
-                # - Team-Rollen: sehen=ja, beitreten=ja (können auch in den Warteraum)
-                # - access_role: KEIN connect (bereits angenommene gehen direkt in Hauptkanal)
-                # - Besitzer + Bot: kein connect (Besitzer ist im Hauptkanal)
                 owner_display = owner.display_name if owner else "Kanal"
                 wait_overwrites = {
                     guild.default_role: discord.PermissionOverwrite(
@@ -548,8 +880,6 @@ class VoicePanelView(discord.ui.View):
                         view_channel=True, connect=True, move_members=True, manage_channels=True,
                     ),
                     access_role: discord.PermissionOverwrite(
-                        # Bereits angenommene sollen NICHT in den Warteraum
-                        # (sie werden direkt in den Hauptkanal verschoben)
                         view_channel=True, connect=True,
                     ),
                 }
@@ -557,7 +887,6 @@ class VoicePanelView(discord.ui.View):
                     wait_overwrites[owner] = discord.PermissionOverwrite(
                         view_channel=True, connect=False,
                     )
-                # Team-Rollen dürfen auch in den Warteraum
                 for rid in _parse_role_ids(cfg.get("allowed_role_ids", "")):
                     role = guild.get_role(int(rid))
                     if role:
@@ -626,7 +955,8 @@ class VoicePanelView(discord.ui.View):
                 title="👟 User aus dem Kanal entfernen",
                 description=(
                     "Wähle einen oder mehrere Nutzer.\n"
-                    + ("Im **privaten Modus** wird die Zugangs-Rolle entzogen."
+                    + ("Im **privaten Modus** wird die Zugangs-Rolle entzogen und "
+                       "der User für die konfigurierte Sperr-Dauer gesperrt."
                        if is_private else "")
                 ),
                 color=discord.Color.red(),
@@ -636,10 +966,57 @@ class VoicePanelView(discord.ui.View):
         )
 
     @discord.ui.button(
+        label="🚫 Bannen / Entbannen",
+        style=discord.ButtonStyle.danger,
+        custom_id="vpc_ban_user",
+        row=1,
+    )
+    async def ban_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Ban oder Unban eines Users aus diesem Voice-Kanal (nicht Server-Ban)."""
+        cfg    = _get_config(str(interaction.guild_id))
+        vc_row = _get_vc_by_main(str(interaction.channel_id))
+        if not cfg or not vc_row:
+            await interaction.response.send_message("❌ Kanal nicht gefunden.", ephemeral=True)
+            return
+        if not _can_manage(interaction.user, vc_row, cfg):
+            await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+            return
+
+        is_private = not vc_row.get("is_open", True)
+        if not is_private:
+            await interaction.response.send_message(
+                "❌ Bannen ist nur bei **privaten** Kanälen verfügbar.",
+                ephemeral=True,
+            )
+            return
+
+        main_ch = interaction.guild.get_channel(int(vc_row["main_channel_id"]))
+        if not main_ch:
+            await interaction.response.send_message("❌ Kanal nicht gefunden.", ephemeral=True)
+            return
+
+        ban_count = len(_get_ban_list(vc_row))
+        view = _BanActionSelectView(vc_row=vc_row, main_ch=main_ch, guild=interaction.guild)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🚫 Kanal-Ban Verwaltung",
+                description=(
+                    "Wähle eine Aktion:\n\n"
+                    f"Aktuell gebannte User: **{ban_count}**\n\n"
+                    "• **Bannen** – User aus dem Kanal entfernen und dauerhaft sperren\n"
+                    "• **Entbannen** – Bann aufheben, User kann wieder anfragen"
+                ),
+                color=discord.Color.dark_red(),
+            ),
+            view=view,
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
         label="👥 User-Limit",
         style=discord.ButtonStyle.secondary,
         custom_id="vpc_user_limit",
-        row=0,
+        row=1,
     )
     async def user_limit(self, interaction: discord.Interaction, button: discord.ui.Button):
         cfg    = _get_config(str(interaction.guild_id))
@@ -670,7 +1047,7 @@ class VoicePanelView(discord.ui.View):
         label="⛔ Sperr-Dauer",
         style=discord.ButtonStyle.secondary,
         custom_id="vpc_reject_duration",
-        row=0,
+        row=1,
     )
     async def reject_duration(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Kanalbesitzer kann einstellen wie lange abgelehnte User gesperrt sind."""
@@ -690,7 +1067,7 @@ class VoicePanelView(discord.ui.View):
         label="🗑️ Kanal löschen",
         style=discord.ButtonStyle.danger,
         custom_id="vpc_delete_channel",
-        row=0,
+        row=1,
     )
     async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         cfg    = _get_config(str(interaction.guild_id))
@@ -739,6 +1116,12 @@ class _KickSelectView(discord.ui.View):
     async def _selected(self, interaction: discord.Interaction):
         access_role_id = self.vc_row.get("access_role_id")
         kicked = []
+
+        # Frische DB-Daten für Reject-Dauer
+        fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
+        target_row = fresh if fresh else self.vc_row
+        duration = _get_reject_duration(target_row) if self.is_private else 0
+
         for uid in interaction.data["values"]:
             member = interaction.guild.get_member(int(uid))
             if not member:
@@ -750,11 +1133,24 @@ class _KickSelectView(discord.ui.View):
                     logger.error(f"[kick] move_to: {e}")
             kicked.append(member.display_name)
             if self.is_private and access_role_id:
+                # Zugangs-Rolle entziehen (von Whitelist entfernen)
                 await _revoke_access(interaction.guild, member, access_role_id)
+                # Sperr-Zeit setzen (wie bei Ablehnen im Warteraum)
+                if duration > 0 and fresh:
+                    _add_reject(fresh["id"], fresh, uid, duration)
+                    fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
 
         self.stop()
         names = ", ".join(kicked) if kicked else "Niemand"
-        extra = "\nZugangs-Rolle entzogen." if self.is_private and kicked else ""
+        extra_lines = []
+        if self.is_private and kicked:
+            extra_lines.append("Zugangs-Rolle entzogen (von Whitelist entfernt).")
+            if duration > 0:
+                extra_lines.append(
+                    f"Für **{duration} Minute{'n' if duration != 1 else ''}** gesperrt."
+                )
+        extra = "\n".join(extra_lines)
+
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title=f"👟 {names} {'wurde' if len(kicked) == 1 else 'wurden'} entfernt",
@@ -880,13 +1276,10 @@ class WaitingRoomRequestView(discord.ui.View):
         self._done = True
         self.stop()
 
-        # Zugangs-Rolle vergeben (nur bei normalen Usern sinnvoll,
-        # Team hat ohnehin connect=True auf dem Hauptkanal)
         access_role_id = self.vc_row.get("access_role_id")
         if access_role_id and not self.is_team:
             await _grant_access(interaction.guild, self.requester, access_role_id)
 
-        # In Hauptkanal verschieben
         if self._still_waiting():
             try:
                 await self.requester.move_to(self.main_ch)
@@ -919,7 +1312,6 @@ class WaitingRoomRequestView(discord.ui.View):
         self._done = True
         self.stop()
 
-        # Aus Warteraum kicken
         if self._still_waiting():
             try:
                 await self.requester.move_to(None)
@@ -927,15 +1319,12 @@ class WaitingRoomRequestView(discord.ui.View):
                 logger.error(f"[deny] move_to: {e}")
 
         if self.is_team:
-            # Team-Mitglieder: nur Kick, KEINE Sperre
-            # Sie können weiterhin direkt in den Hauptkanal oder den Warteraum nutzen
             description = (
                 f"**{self.requester.display_name}** wurde aus dem Warteraum entfernt.\n"
                 "Als Team-Mitglied kann er/sie weiterhin direkt in den Kanal beitreten."
             )
             color = discord.Color.orange()
         else:
-            # Normale User: Sperre für konfigurierte Dauer
             fresh = _get_vc_by_main(str(self.vc_row["main_channel_id"]))
             target_row = fresh if fresh else self.vc_row
             duration = _get_reject_duration(target_row)
@@ -947,7 +1336,6 @@ class WaitingRoomRequestView(discord.ui.View):
                     f"**{self.requester.display_name}** wurde abgelehnt und "
                     f"{duration_text} aus dem Warteraum gesperrt."
                 )
-                # DM an abgelehnten User
                 try:
                     await self.requester.send(embed=discord.Embed(
                         title="❌ Zugangsanfrage abgelehnt",
@@ -979,7 +1367,6 @@ class WaitingRoomRequestView(discord.ui.View):
         if self._done:
             return
         self._done = True
-        # Bei Timeout: aus dem Warteraum kicken (nur normale User)
         if not self.is_team and self._still_waiting():
             try:
                 await self.requester.move_to(None)
@@ -1045,18 +1432,19 @@ async def _create_voice_channels(
             logger.warning(f"[voice] Move fehlgeschlagen: {e}")
 
     vc_data = _save_vc({
-        "server_id":              str(guild.id),
-        "owner_id":               str(member.id),
-        "main_channel_id":        str(main_ch.id),
-        "wait_channel_id":        None,
-        "panel_message_id":       None,
-        "access_role_id":         None,
-        "rejected_user_ids":      [],
+        "server_id":               str(guild.id),
+        "owner_id":                str(member.id),
+        "main_channel_id":         str(main_ch.id),
+        "wait_channel_id":         None,
+        "panel_message_id":        None,
+        "access_role_id":          None,
+        "rejected_user_ids":       [],
         "reject_duration_minutes": 5,
-        "is_open":                True,
-        "user_limit":             0,
-        "created_at":             datetime.now(timezone.utc).isoformat(),
-        "last_empty_at":          None,
+        "banned_user_ids":         [],
+        "is_open":                 True,
+        "user_limit":              0,
+        "created_at":              datetime.now(timezone.utc).isoformat(),
+        "last_empty_at":           None,
     })
 
     try:
@@ -1308,12 +1696,10 @@ class VoiceCog(commands.Cog):
         self.bot.add_view(VoicePanelView())
         logger.info("✅ VoicePanelView registriert")
 
-
     voice = app_commands.Group(
         name="voice",
         description="Voicechannel System"
     )
-
 
     @voice.command(name="setup", description="Richte den automatischen Voice Channel Creator ein")
     async def voice_setup(self, interaction: discord.Interaction):
@@ -1366,15 +1752,83 @@ class VoiceCog(commands.Cog):
             if vc_row:
                 await self._handle_waitroom_join(guild, member, vc_row, cfg)
 
-        # ── 3. Kanal verlassen → Leerlauf prüfen ──────────────────────────────
+        # ── 3. Hauptkanal verlassen → Disconnect-Check ────────────────────────
+        #
+        # Erkennung: User war im Hauptkanal und ist jetzt NICHT in einem anderen
+        # Voice-Kanal (after.channel is None) → wurde disconnected (nicht selbst
+        # gewechselt). Im privaten Modus → Whitelist entziehen + Sperre setzen.
+        #
         if before.channel and str(before.channel.id) != creator_ch_id:
             vc_row = _get_vc_by_main(str(before.channel.id))
             if vc_row:
+                # Nur im privaten Modus relevant
+                if (
+                    not vc_row.get("is_open", True)         # Kanal ist privat
+                    and after.channel is None                 # komplett disconnected
+                    and str(member.id) != vc_row["owner_id"] # nicht der Besitzer
+                    and member.id != guild.me.id              # nicht der Bot
+                ):
+                    await self._handle_forced_disconnect(guild, member, vc_row)
+
                 await self._check_empty(guild, vc_row)
                 return
+
+            # Warteraum verlassen
             vc_row = _get_vc_by_wait(str(before.channel.id))
             if vc_row:
                 await self._check_empty(guild, vc_row)
+
+    async def _handle_forced_disconnect(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        vc_row: dict,
+    ) -> None:
+        """
+        Wird aufgerufen wenn ein User per Discord-Disconnect (Moderator/Bot trennt
+        die Verbindung) aus dem Hauptkanal entfernt wird.
+
+        Unterscheidung selbst verlassen vs. forced disconnect:
+          - after.channel is None → wurde vollständig disconnected
+          - Wenn ein User selbst in einen anderen Kanal wechselt, ist after.channel != None
+
+        Aktion:
+          1. Zugangs-Rolle entziehen (von Whitelist entfernen)
+          2. Sperr-Zeit setzen (wie bei Ablehnen im Warteraum)
+        """
+        access_role_id = vc_row.get("access_role_id")
+
+        # Zugangs-Rolle nur entziehen wenn der User sie überhaupt hat
+        if access_role_id and _has_access_role(member, vc_row):
+            await _revoke_access(guild, member, access_role_id)
+            logger.info(
+                f"[voice] Forced-Disconnect: Zugangs-Rolle entzogen für {member} "
+                f"in Kanal {vc_row['main_channel_id']}"
+            )
+
+            # Sperr-Zeit setzen
+            duration = _get_reject_duration(vc_row)
+            if duration > 0:
+                _add_reject(vc_row["id"], vc_row, str(member.id), duration)
+                logger.info(
+                    f"[voice] Forced-Disconnect: {member} gesperrt für {duration} Minuten"
+                )
+
+                # DM an den User
+                try:
+                    main_ch = guild.get_channel(int(vc_row["main_channel_id"]))
+                    ch_name = main_ch.name if main_ch else "Voice-Kanal"
+                    await member.send(embed=discord.Embed(
+                        title="🔌 Verbindung getrennt",
+                        description=(
+                            f"Deine Verbindung zum Voice-Kanal **{ch_name}** wurde getrennt.\n"
+                            f"Du kannst in **{duration} Minute{'n' if duration != 1 else ''}** "
+                            "erneut eine Beitrittsanfrage stellen."
+                        ),
+                        color=discord.Color.orange(),
+                    ))
+                except discord.Forbidden:
+                    pass
 
     async def _handle_waitroom_join(
         self, guild: discord.Guild, member: discord.Member, vc_row: dict, cfg: dict
@@ -1400,8 +1854,27 @@ class VoiceCog(commands.Cog):
                 logger.error(f"[waitroom access_role re-join] {e}")
             return
 
+        # ── Gebannte User → sofort kicken ─────────────────────────────────────
+        if _is_banned(vc_row, str(member.id)):
+            try:
+                await member.move_to(None)
+            except Exception as e:
+                logger.error(f"[waitroom banned kick] {e}")
+            try:
+                main_ch_name = main_ch.name if main_ch else "Voice-Kanal"
+                await member.send(embed=discord.Embed(
+                    title="🚫 Zugang dauerhaft gesperrt",
+                    description=(
+                        f"Du bist aus dem Voice-Kanal **{main_ch_name}** gebannt.\n"
+                        "Du kannst den Warteraum nicht nutzen."
+                    ),
+                    color=discord.Color.dark_red(),
+                ))
+            except discord.Forbidden:
+                pass
+            return
+
         # ── Aktuell gesperrte User → sofort kicken ───────────────────────────
-        # Team-Mitglieder werden NICHT gesperrt, also trifft das nur normale User
         if _is_rejected(vc_row, str(member.id)):
             remaining = _get_reject_remaining(vc_row, str(member.id))
             try:
@@ -1427,10 +1900,6 @@ class VoiceCog(commands.Cog):
             return
 
         # ── Team-Mitglieder → Warteraum erlaubt, optionale Anfrage ───────────
-        # Team hat connect=True auf dem Hauptkanal und kann direkt beitreten.
-        # Wenn sie in den Warteraum gehen, ist das freiwillig. Es erscheint
-        # eine Anfrage die angenommen oder abgelehnt werden kann.
-        # Beim Ablehnen: nur Kick, KEINE Sperre.
         if _is_team_member(member, cfg):
             embed = discord.Embed(
                 title="🔔 Team-Anfrage aus dem Warteraum",
