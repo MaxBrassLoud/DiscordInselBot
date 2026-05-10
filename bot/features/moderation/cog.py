@@ -766,8 +766,8 @@ class ModerationCog(commands.Cog):
 
         # --- Timeout wurde AUFGEHOBEN ---
         elif (
-            before.communication_disabled_until is not None
-            and after.communication_disabled_until is None
+            before.timed_out_until is not None
+            and after.timed_out_until is None
         ):
             moderator, reason = await _fetch_audit_info(guild, after, "untimeout")
 
