@@ -4,6 +4,7 @@ bot/features/moderation/cog.py
 Moderations-System mit:
   - /moderation setup      – Log-Kanal für Moderationsaktionen festlegen
   - /moderation timeout    – User timeout (Dauer oder bis zu einem Zeitpunkt)
+  - /moderation untimeout  – Timeout manuell aufheben
   - Automatisches Logging wenn Discord-Timeout (nativ) gesetzt/aufgehoben wird
 
 SUPABASE SQL (einmalig ausführen):
@@ -529,6 +530,35 @@ async def _apply_timeout(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# AUDIT LOG HELPER (für native Timeouts)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_audit_info(
+    guild: discord.Guild,
+    target: discord.Member,
+    action_type: str,
+) -> tuple[discord.Member | None, str | None]:
+    """
+    Versucht Moderator und Grund aus dem Audit-Log zu lesen.
+    Gibt (moderator, reason) zurück.
+    """
+    try:
+        discord_action = discord.AuditLogAction.member_update
+        async for entry in guild.audit_logs(limit=10, action=discord_action):
+            if entry.target and entry.target.id == target.id:
+                # Einträge die höchstens 5 Sekunden alt sind berücksichtigen
+                age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                if age > 5:
+                    continue
+                moderator = guild.get_member(entry.user.id) if entry.user else None
+                reason    = entry.reason or None
+                return moderator, reason
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    return None, None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # COG
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -682,23 +712,38 @@ class ModerationCog(commands.Cog):
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         """
         Erkennt native Discord-Timeouts (über Rechtsklick oder andere Bots)
-        und loggt sie.
+        und loggt sie, sendet DM. Aktionen des eigenen Bots werden ignoriert,
+        da diese bereits durch die Commands verarbeitet werden.
         """
-        if before.communication_disabled_until == after.communication_disabled_until:
+        logger.debug("Update-Player")
+        logger.debug(before.timed_out_until)
+        logger.debug(after.timed_out_until)
+        if before.timed_out_until == after.timed_out_until:
             return
 
-        guild  = after.guild
-        now    = datetime.now(timezone.utc)
 
-        # Timeout wurde GESETZT
+
+
+        guild = after.guild
+        now = datetime.now(timezone.utc)
+
+        # --- Timeout wurde GESETZT ---
         if (
-            after.communication_disabled_until is not None
-            and (before.communication_disabled_until is None
-                 or after.communication_disabled_until > now)
+            after.timed_out_until is not None
+            and (
+                before.timed_out_until is None
+                or after.timed_out_until > now
+            )
         ):
-            until = after.communication_disabled_until
+            until = after.timed_out_until
             moderator, reason = await _fetch_audit_info(guild, after, "timeout")
 
+            # Wenn die Aktion von unserem Bot stammt, wurde bereits durch den Command
+            # alles erledigt (DM, Log, DB). Dann nichts tun.
+            if moderator and moderator == guild.me:
+                return
+
+            # Andernfalls: native Aktion → Log + DM + DB
             await _send_log_embed(
                 guild=guild,
                 action="timeout",
@@ -716,16 +761,19 @@ class ModerationCog(commands.Cog):
                 reason=reason,
                 until=until,
             )
-            # DM nur wenn kein Grund angegeben (Bot-Command schickt DM separat)
-            if not reason or reason == "Kein Grund angegeben":
-                await _dm_user(after, guild, reason, until, removed=False)
+            # DM wird immer gesendet, damit der betroffene User Bescheid weiß
+            await _dm_user(after, guild, reason, until, removed=False)
 
-        # Timeout wurde AUFGEHOBEN
+        # --- Timeout wurde AUFGEHOBEN ---
         elif (
             before.communication_disabled_until is not None
             and after.communication_disabled_until is None
         ):
             moderator, reason = await _fetch_audit_info(guild, after, "untimeout")
+
+            if moderator and moderator == guild.me:
+                return
+
             await _send_log_embed(
                 guild=guild,
                 action="untimeout",
@@ -743,35 +791,7 @@ class ModerationCog(commands.Cog):
                 reason=reason,
                 until=None,
             )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AUDIT LOG HELPER
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def _fetch_audit_info(
-    guild: discord.Guild,
-    target: discord.Member,
-    action_type: str,
-) -> tuple[discord.Member | None, str | None]:
-    """
-    Versucht Moderator und Grund aus dem Audit-Log zu lesen.
-    Gibt (moderator, reason) zurück.
-    """
-    try:
-        discord_action = discord.AuditLogAction.member_update
-        async for entry in guild.audit_logs(limit=10, action=discord_action):
-            if entry.target and entry.target.id == target.id:
-                # Einträge die höchstens 5 Sekunden alt sind berücksichtigen
-                age = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
-                if age > 5:
-                    continue
-                moderator = guild.get_member(entry.user.id) if entry.user else None
-                reason    = entry.reason or None
-                return moderator, reason
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-    return None, None
+            await _dm_user(after, guild, reason, None, removed=True)
 
 
 async def setup(bot: commands.Bot):
