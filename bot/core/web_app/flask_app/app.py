@@ -1312,3 +1312,6 @@ register_voice_setup_routes(
 )
 from .voting_routes import register_voting_routes
 register_voting_routes(app)
+
+from .legal_routes import register_legal_routes
+register_legal_routes(app)

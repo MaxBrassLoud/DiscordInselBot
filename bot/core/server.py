@@ -48,7 +48,8 @@ FEATURE_COGS = [
     "bot.features.birthdays.cog",
     "bot.features.levels.cog",
     "bot.features.voting.cog",
-    "bot.features.moderation.cog"
+    "bot.features.moderation.cog",
+    "bot.features.faq.cog"
 ]
 
 

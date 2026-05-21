@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ 'Datenschutzerklaerung' if page == 'datenschutz' else 'Impressum' }} - Insel Bot</title>
+  <meta name="description" content="{{ 'Datenschutzerklaerung' if page == 'datenschutz' else 'Impressum' }} fuer den Insel Bot.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="legal-body">
+
+<div class="page-bg">
+  <div class="bg-grid"></div>
+  <div class="bg-radial"></div>
+</div>
+
+<nav class="home-nav">
+  <a href="{{ url_for('index') }}" class="nav-logo">
+    <div class="nav-logo-mark">
+      <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+        <rect width="34" height="34" rx="9" fill="#4ade80"/>
+        <path d="M10 22c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="13" cy="13" r="1.8" fill="#000"/>
+        <circle cx="21" cy="13" r="1.8" fill="#000"/>
+      </svg>
+    </div>
+    Insel <span class="g">Bot</span>
+  </a>
+  <div class="nav-links">
+    <a href="{{ url_for('privacy_policy') }}" class="nav-link">Datenschutz</a>
+    <a href="{{ url_for('imprint') }}" class="nav-link">Impressum</a>
+    <a href="{{ url_for('index') }}" class="nav-cta">Startseite</a>
+  </div>
+</nav>
+
+<main class="legal-page">
+  <header class="legal-hero">
+    <div class="section-eyebrow">Insel Bot</div>
+    <h1 class="legal-title">{{ 'Datenschutzerklaerung' if page == 'datenschutz' else 'Impressum' }}</h1>
+    <p class="legal-sub">
+      Stand: {{ details.last_updated }}
+    </p>
+  </header>
+
+  <section class="legal-layout">
+    <aside class="legal-aside">
+      <a class="{{ 'active' if page == 'datenschutz' else '' }}" href="{{ url_for('privacy_policy') }}">Datenschutz</a>
+      <a class="{{ 'active' if page == 'impressum' else '' }}" href="{{ url_for('imprint') }}">Impressum</a>
+    </aside>
+
+    <div class="legal-content">
+      {% for section in sections %}
+        <article class="legal-section">
+          <h2>{{ section.title }}</h2>
+          {% for item in section.body %}
+            <p>{{ item }}</p>
+          {% endfor %}
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+</main>
+
+<footer class="home-footer">
+  <div class="footer-brand">Insel <span>Bot</span></div>
+  <div class="footer-links">
+    <a href="{{ url_for('privacy_policy') }}">Datenschutz</a>
+    <a href="{{ url_for('imprint') }}">Impressum</a>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -514,7 +514,128 @@ img { display: block; max-width: 100%; }
   color: var(--text3);
 }
 .footer-brand span { color: var(--green); }
+.footer-links {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.footer-links a {
+  color: var(--text3);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: color var(--fast);
+}
+.footer-links a:hover { color: var(--green); }
 .footer-note { font-size: 0.76rem; color: var(--text3); }
+
+/* Legal pages */
+.legal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.legal-page {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 74px 22px 88px;
+  flex: 1;
+}
+
+.legal-hero {
+  max-width: 740px;
+  margin-bottom: 34px;
+}
+
+.legal-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: clamp(2.4rem, 7vw, 4.6rem);
+  line-height: 0.98;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+.legal-sub {
+  color: var(--text2);
+  font-size: 0.95rem;
+}
+
+.legal-layout {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.legal-aside {
+  position: sticky;
+  top: 78px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 8px;
+}
+
+.legal-aside a {
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: all var(--fast);
+}
+
+.legal-aside a:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.legal-aside a.active {
+  color: var(--green);
+  background: var(--green-g2);
+}
+
+.legal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.legal-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 24px 26px;
+}
+
+.legal-section h2 {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.legal-section p {
+  color: var(--text2);
+  font-size: 0.9rem;
+  line-height: 1.75;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+
+.legal-section p:last-child { margin-bottom: 0; }
 
 /* ═══════════════════════════════════════════════════════════
    LOGIN
@@ -1188,6 +1309,9 @@ tr.legacy-row:hover td {
   .content { padding: 14px; }
   .topbar, .detail-topbar { padding: 0 14px; }
   .tabs { display: none; }
+  .legal-layout { grid-template-columns: 1fr; }
+  .legal-aside { position: static; flex-direction: row; }
+  .legal-aside a { flex: 1; text-align: center; }
 }
 
 @media (max-width: 600px) {
