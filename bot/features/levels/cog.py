@@ -42,7 +42,7 @@ logger = get_logger("levels")
 # ══════════════════════════════════════════════════════════════════════════════
 
 MSG_COOLDOWN_SECONDS = 0           # 1 Nachrichten-XP pro User pro Minute
-VOICE_XP_PER_MINUTE = 10             # XP pro Minute im Voice (wenn nicht taub)
+VOICE_XP_PER_MINUTE = 2             # XP pro Minute im Voice (wenn nicht taub)
 MSG_XP = 1
 REACTION_XP = 1
 
@@ -470,7 +470,6 @@ class LevelsCog(commands.Cog):
         logger.debug(f"[voice] Task läuft. {len(self._voice_joined)} User im Tracking.")
 
         for key, joined_at in list(self._voice_joined.items()):
-            # Nur User, die mindestens 55s durchgängig nicht taub im Voice sind
             if (now - joined_at).total_seconds() < 55:
                 continue
 
@@ -486,24 +485,18 @@ class LevelsCog(commands.Cog):
                     continue
 
                 voice = member.voice
-                # AFK-Kanal ausschließen
                 if guild.afk_channel and voice.channel.id == guild.afk_channel.id:
                     continue
-
-                # Taub-Check
                 if voice.deaf or voice.self_deaf:
                     self._voice_joined.pop(key, None)
-                    logger.info(f"[voice] {member} ist taub → aus Tracking entfernt.")
                     continue
 
-                # Prüfen, ob der User allein im Voice ist und ob Solo-XP erlaubt ist
                 if not VOICE_SOLO_XP_ENABLED:
                     non_bot = [m for m in voice.channel.members if not m.bot]
                     if len(non_bot) < 2:
-                        logger.debug(f"[voice] {member} allein im Kanal und VOICE_SOLO_XP_ENABLED=False → keine XP.")
+                        logger.debug(f"[voice] {member} allein im Kanal → keine XP (Solo-XP deaktiviert).")
                         continue
 
-                # XP vergeben
                 old, new, xp = _upsert_xp(server_id, user_id, VOICE_XP_PER_MINUTE, voice_delta=1)
                 logger.info(f"[voice] +{VOICE_XP_PER_MINUTE} XP an {member} (Level {old}→{new})")
 
@@ -518,7 +511,6 @@ class LevelsCog(commands.Cog):
             except Exception as e:
                 logger.error(f"[voice] Fehler bei {key}: {e}")
 
-        # Alte Einträge aufräumen (5 Min Timeout)
         stale = [k for k, t in self._voice_joined.items() if (now - t).total_seconds() > 300]
         for k in stale:
             self._voice_joined.pop(k, None)
@@ -527,6 +519,18 @@ class LevelsCog(commands.Cog):
     @voice_xp_task.before_loop
     async def before_voice_xp(self):
         await self.bot.wait_until_ready()
+
+    # Hilfsfunktion: Sichere Ephemeral-Antwort --------------------------------
+    async def _safe_defer(self, interaction: discord.Interaction, ephemeral: bool = True):
+        """
+        Defert die Interaktion sicher und fängt ab, wenn sie bereits abgelaufen ist.
+        Gibt False zurück, wenn die Interaktion nicht mehr gültig ist.
+        """
+        try:
+            await interaction.response.defer(ephemeral=ephemeral)
+            return True
+        except (discord.NotFound, discord.HTTPException):
+            return False
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SLASH COMMANDS
@@ -537,7 +541,9 @@ class LevelsCog(commands.Cog):
     @level.command(name="info")
     @app_commands.describe(mitglied="Mitglied anzeigen")
     async def level_info(self, interaction: discord.Interaction, mitglied: Optional[discord.Member] = None):
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return  # Interaktion existiert nicht mehr
+
         await self._flush_cache_async()
         target = mitglied or interaction.user
         row = _get_cached_user(str(interaction.guild_id), str(target.id)) or _get_user_row(str(interaction.guild_id), str(target.id))
@@ -551,7 +557,9 @@ class LevelsCog(commands.Cog):
 
     @level.command(name="top")
     async def level_top(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
+
         await self._flush_cache_async()
         rows = _get_leaderboard(str(interaction.guild_id))
         if not rows:
@@ -582,7 +590,8 @@ class LevelsCog(commands.Cog):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
         server_id = str(interaction.guild_id)
         user_id = str(mitglied.id)
         key = f"{server_id}:{user_id}"
@@ -603,7 +612,8 @@ class LevelsCog(commands.Cog):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
         old, new, xp = _upsert_xp(str(interaction.guild_id), str(mitglied.id), menge)
         direction = "hinzugefügt" if menge >= 0 else "entzogen"
         embed = discord.Embed(title="⭐ XP angepasst",
@@ -623,7 +633,8 @@ class LevelsCog(commands.Cog):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
         if not self._voice_joined:
             await interaction.followup.send("🔎 Keine User im Voice-Tracking.", ephemeral=True)
             return
