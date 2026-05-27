@@ -1752,24 +1752,16 @@ class VoiceCog(commands.Cog):
             if vc_row:
                 await self._handle_waitroom_join(guild, member, vc_row, cfg)
 
-        # ── 3. Hauptkanal verlassen → Disconnect-Check ────────────────────────
+        # ── 3. Hauptkanal verlassen → Empty-Check ──────────────────────────────
         #
-        # Erkennung: User war im Hauptkanal und ist jetzt NICHT in einem anderen
-        # Voice-Kanal (after.channel is None) → wurde disconnected (nicht selbst
-        # gewechselt). Im privaten Modus → Whitelist entziehen + Sperre setzen.
+        # after.channel is None bedeutet auch, dass ein User den Voice-Kanal
+        # selbst verlassen hat. Deshalb darf hier keine Sperre gesetzt werden.
+        # Explizite Kicks/Bans über das Panel entziehen Rollen und setzen Sperren
+        # direkt im jeweiligen Button-Handler.
         #
         if before.channel and str(before.channel.id) != creator_ch_id:
             vc_row = _get_vc_by_main(str(before.channel.id))
             if vc_row:
-                # Nur im privaten Modus relevant
-                if (
-                    not vc_row.get("is_open", True)         # Kanal ist privat
-                    and after.channel is None                 # komplett disconnected
-                    and str(member.id) != vc_row["owner_id"] # nicht der Besitzer
-                    and member.id != guild.me.id              # nicht der Bot
-                ):
-                    await self._handle_forced_disconnect(guild, member, vc_row)
-
                 await self._check_empty(guild, vc_row)
                 return
 
@@ -1777,58 +1769,6 @@ class VoiceCog(commands.Cog):
             vc_row = _get_vc_by_wait(str(before.channel.id))
             if vc_row:
                 await self._check_empty(guild, vc_row)
-
-    async def _handle_forced_disconnect(
-        self,
-        guild: discord.Guild,
-        member: discord.Member,
-        vc_row: dict,
-    ) -> None:
-        """
-        Wird aufgerufen wenn ein User per Discord-Disconnect (Moderator/Bot trennt
-        die Verbindung) aus dem Hauptkanal entfernt wird.
-
-        Unterscheidung selbst verlassen vs. forced disconnect:
-          - after.channel is None → wurde vollständig disconnected
-          - Wenn ein User selbst in einen anderen Kanal wechselt, ist after.channel != None
-
-        Aktion:
-          1. Zugangs-Rolle entziehen (von Whitelist entfernen)
-          2. Sperr-Zeit setzen (wie bei Ablehnen im Warteraum)
-        """
-        access_role_id = vc_row.get("access_role_id")
-
-        # Zugangs-Rolle nur entziehen wenn der User sie überhaupt hat
-        if access_role_id and _has_access_role(member, vc_row):
-            await _revoke_access(guild, member, access_role_id)
-            logger.info(
-                f"[voice] Forced-Disconnect: Zugangs-Rolle entzogen für {member} "
-                f"in Kanal {vc_row['main_channel_id']}"
-            )
-
-            # Sperr-Zeit setzen
-            duration = _get_reject_duration(vc_row)
-            if duration > 0:
-                _add_reject(vc_row["id"], vc_row, str(member.id), duration)
-                logger.info(
-                    f"[voice] Forced-Disconnect: {member} gesperrt für {duration} Minuten"
-                )
-
-                # DM an den User
-                try:
-                    main_ch = guild.get_channel(int(vc_row["main_channel_id"]))
-                    ch_name = main_ch.name if main_ch else "Voice-Kanal"
-                    await member.send(embed=discord.Embed(
-                        title="🔌 Verbindung getrennt",
-                        description=(
-                            f"Deine Verbindung zum Voice-Kanal **{ch_name}** wurde getrennt.\n"
-                            f"Du kannst in **{duration} Minute{'n' if duration != 1 else ''}** "
-                            "erneut eine Beitrittsanfrage stellen."
-                        ),
-                        color=discord.Color.orange(),
-                    ))
-                except discord.Forbidden:
-                    pass
 
     async def _handle_waitroom_join(
         self, guild: discord.Guild, member: discord.Member, vc_row: dict, cfg: dict
