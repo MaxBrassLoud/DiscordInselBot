@@ -82,12 +82,6 @@ def register_legal_routes(app):
                     #f"Zustaendige Aufsichtsbehoerde: {details['supervisory_authority']}",
                 ],
             },
-            {
-                "title": "8. Hinweis",
-                "body": [
-                    "Diese Datenschutzerklaerung ist eine technische Vorlage fuer den Insel Bot und sollte vor produktiver Nutzung mit den echten Betreiber-, Hosting- und Auftragsverarbeitungsdaten abgeglichen werden.",
-                ],
-            },
         ]
         return render_template("legal.html", page="datenschutz", details=details, sections=sections)
 
