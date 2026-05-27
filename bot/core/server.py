@@ -76,10 +76,18 @@ async def on_ready():
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
     msg = f"❌ Fehler: {error}"
-    if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=True)
-    else:
-        await interaction.response.send_message(msg, ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except discord.NotFound:
+        logger.warning(
+            "[AppCommandError] Interaction konnte nicht beantwortet werden "
+            f"(abgelaufen/unbekannt): {error}"
+        )
+        return
+
     logger.error(f"[AppCommandError] {error}")
 
 
