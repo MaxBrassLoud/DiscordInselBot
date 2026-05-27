@@ -98,6 +98,7 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
                 "log_channel_id":           body.get("log_channel_id") or None,
                 "mc_log_channel_id":        body.get("mc_log_channel_id") or None,
                 "web_admin_role_ids":       web_adm_ids,
+                "panel_message":            body.get("panel_message", ""),
                 "welcome_message":          body.get("welcome_message", ""),
                 "instruction_message":      body.get("instruction_message", ""),
                 "rejection_cooldown_hours": int(body.get("rejection_cooldown_hours", 24)),
@@ -137,7 +138,7 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
 
             body        = request.get_json() or {}
             panel_title = body.get("panel_title", "⛏️ Bewerbung einreichen")
-            panel_desc  = body.get("panel_desc") or config.get("welcome_message") or (
+            panel_desc  = body.get("panel_desc") or config.get("panel_message") or config.get("welcome_message") or (
                 "Klicke auf den Button um deine Bewerbung einzureichen."
             )
 
@@ -175,6 +176,7 @@ def register_application_setup_routes(app, login_required, _is_mbl, _bot_get, _c
 
             sb.table("application_servers").update({
                 "panel_message_id": new_msg_id,
+                "panel_message": panel_desc,
             }).eq("server_id", server_id).execute()
 
             return jsonify({"ok": True, "panel_sent": panel_sent, "message_id": new_msg_id})

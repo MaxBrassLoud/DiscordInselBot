@@ -58,9 +58,12 @@ def _overview_embed(cfg: dict) -> discord.Embed:
     embed.add_field(name="👮 Staff-Rollen",        value=_ro("staff_role_ids"),    inline=False)
     embed.add_field(name="🌐 Web-Admin Rollen",    value=_ro("web_admin_role_ids"), inline=False)
 
+    panel = cfg.get("panel_message") or cfg.get("welcome_message") or ""
+    if panel:
+        embed.add_field(name="📝 Panel-Text", value=panel[:200] + ("…" if len(panel) > 200 else ""), inline=False)
     welcome = cfg.get("welcome_message") or ""
     if welcome:
-        embed.add_field(name="💬 Willkommens-Text", value=welcome[:200] + ("…" if len(welcome) > 200 else ""), inline=False)
+        embed.add_field(name="💬 Ticket-Embed-Text", value=welcome[:200] + ("…" if len(welcome) > 200 else ""), inline=False)
     return embed
 
 
@@ -101,7 +104,7 @@ async def _move_app_panel_to_new_channel(
 
     try:
         from bot.features.applications.views import ApplicationPanelView, _build_panel_embed
-        welcome_text = cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
+        welcome_text = cfg.get("panel_message") or cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
         embed      = _build_panel_embed(welcome_text)
         panel_view = ApplicationPanelView(bot=bot)
         new_msg    = await new_ch.send(embed=embed, view=panel_view)
@@ -265,7 +268,7 @@ class AppEditMainView(discord.ui.View):
                 ch = interaction.guild.get_channel(int(cfg["panel_channel_id"]))
                 if ch:
                     msg = await ch.fetch_message(int(cfg["panel_message_id"]))
-                    welcome_text = cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
+                    welcome_text = cfg.get("panel_message") or cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
                     await msg.edit(
                         embed=_build_panel_embed(welcome_text),
                         view=ApplicationPanelView(bot=self.bot),
@@ -569,8 +572,13 @@ class AppRoleSettingsView(discord.ui.View):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
+    panel_msg = discord.ui.TextInput(
+        label="Panel-Text",
+        style=discord.TextStyle.paragraph,
+        required=True, max_length=800,
+    )
     welcome_msg = discord.ui.TextInput(
-        label="Willkommens-Text ({player}, {mc})",
+        label="Ticket-Embed-Text ({player}, {mc})",
         style=discord.TextStyle.paragraph,
         required=True, max_length=1000,
     )
@@ -585,12 +593,14 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
         super().__init__()
         self._cfg    = cfg
         self._parent = parent
+        self.panel_msg.default      = (cfg.get("panel_message") or cfg.get("welcome_message") or "")[:800]
         self.welcome_msg.default     = (cfg.get("welcome_message") or "")[:1000]
         self.instruction_msg.default = (cfg.get("instruction_message") or "")[:1000]
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             get_supabase().table("application_servers").update({
+                "panel_message":       self.panel_msg.value,
                 "welcome_message":     self.welcome_msg.value,
                 "instruction_message": self.instruction_msg.value or "",
             }).eq("server_id", self._parent.guild_id).execute()
@@ -599,7 +609,8 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
                 embed=discord.Embed(
                     title="✅ Texte gespeichert!",
                     description=(
-                        f"**Willkommens-Text:**\n{self.welcome_msg.value[:300]}\n\n"
+                        f"**Panel-Text:**\n{self.panel_msg.value[:300]}\n\n"
+                        f"**Ticket-Embed-Text:**\n{self.welcome_msg.value[:300]}\n\n"
                         f"**Anweisungs-Text:**\n{(self.instruction_msg.value or '–')[:300]}"
                     ),
                     color=discord.Color.green(),
@@ -622,7 +633,7 @@ class AppPanelEditView(discord.ui.View):
         self.bot    = bot
         self.parent = parent
         self._title = "⛏️ Bewerbung einreichen"
-        self._desc  = cfg.get("welcome_message", "Klicke auf den Button um deine Bewerbung einzureichen.")
+        self._desc  = cfg.get("panel_message") or cfg.get("welcome_message") or "Klicke auf den Button um deine Bewerbung einzureichen."
         self._build()
 
     def build_preview_embed(self) -> discord.Embed:
@@ -699,9 +710,9 @@ class AppPanelEditView(discord.ui.View):
             panel_view = ApplicationPanelView(bot=self.bot)
             await panel_msg.edit(embed=embed, view=panel_view)
 
-            # Welcome-Message auch in DB speichern
+            # Panel-Text getrennt vom Ticket-Embed-Text speichern
             get_supabase().table("application_servers").update({
-                "welcome_message": self._desc,
+                "panel_message": self._desc,
             }).eq("server_id", self.parent.guild_id).execute()
 
             for item in self.children:
@@ -720,7 +731,7 @@ class AppPanelTextModal(discord.ui.Modal, title="Panel-Text bearbeiten"):
         required=True, max_length=100,
     )
     panel_desc = discord.ui.TextInput(
-        label="Panel-Text (Willkommens-Nachricht)",
+        label="Panel-Text",
         style=discord.TextStyle.paragraph,
         required=True, max_length=800,
         placeholder="Klicke auf den Button um deine Bewerbung einzureichen.",

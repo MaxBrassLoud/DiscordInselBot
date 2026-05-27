@@ -80,6 +80,7 @@ async def _save_config(guild_id: str, state: dict):
         "instruction_message":      state.get("instruction_message", _DEFAULT_INSTRUCTION),
         "rejection_cooldown_hours": int(state.get("rejection_cooldown_hours", 24)),
         "web_admin_role_ids":       ",".join(state.get("web_admin_role_ids", [])),
+        "panel_message":            state.get("panel_message", state.get("welcome_message", _DEFAULT_WELCOME)),
     }
     existing = supabase.table("application_servers").select("server_id").eq("server_id", str(guild_id)).execute()
     if existing.data:
@@ -99,6 +100,7 @@ _DEFAULT_INSTRUCTION = (
     "Schreibe hier deine Bewerbung. Unser Staff wird sie so schnell wie möglich bearbeiten. "
     "Bitte sei geduldig und beantworte alle Fragen ehrlich. Viel Erfolg! 🍀"
 )
+_DEFAULT_PANEL_MESSAGE = "Klicke auf den Button um deine Bewerbung einzureichen."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -394,6 +396,7 @@ class AppWizardStep3View(discord.ui.View):
                 ("⛏️ MC-Log",         f"<#{mc_log}>" if mc_log else "*nicht gesetzt*",                        True),
                 ("⏳ Cooldown",        f"{cooldown} Stunden nach Ablehnung",                                   True),
                 ("🌐 Web-Admins",     ", ".join(f"<@&{r}>" for r in web_admins) if web_admins else "*keine*", False),
+                ("📝 Panel-Text",      (self.state.get("panel_message") or _DEFAULT_PANEL_MESSAGE)[:300],       False),
             ],
         )
 
@@ -424,8 +427,14 @@ class AppWizardStep3View(discord.ui.View):
 
 
 class AppTextsModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten"):
+    panel_msg = discord.ui.TextInput(
+        label="Panel-Text (öffentlicher Button)",
+        style=discord.TextStyle.paragraph,
+        required=True, max_length=800,
+        placeholder="Klicke auf den Button um deine Bewerbung einzureichen.",
+    )
     welcome_msg = discord.ui.TextInput(
-        label="Willkommens-Text ({player} = Minecraft-Name)",
+        label="Embed-Text im Ticket ({player}, {mc})",
         style=discord.TextStyle.paragraph,
         required=True, max_length=1000,
     )
@@ -444,11 +453,13 @@ class AppTextsModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten"):
     def __init__(self, parent: AppWizardStep3View):
         super().__init__()
         self._parent = parent
+        self.panel_msg.default      = parent.state.get("panel_message", _DEFAULT_PANEL_MESSAGE)
         self.welcome_msg.default     = parent.state.get("welcome_message", _DEFAULT_WELCOME)
         self.instruction_msg.default = parent.state.get("instruction_message", _DEFAULT_INSTRUCTION)
         self.cooldown.default        = str(parent.state.get("rejection_cooldown_hours", 24))
 
     async def on_submit(self, interaction: discord.Interaction):
+        self._parent.state["panel_message"]            = self.panel_msg.value
         self._parent.state["welcome_message"]          = self.welcome_msg.value
         self._parent.state["instruction_message"]      = self.instruction_msg.value or ""
         try:
@@ -542,8 +553,8 @@ class AppWizardStep4View(discord.ui.View):
                 await interaction.followup.send("❌ Panel-Kanal nicht gefunden!", ephemeral=True)
                 return
 
-            welcome_text = state.get("welcome_message", _DEFAULT_WELCOME)
-            embed        = _build_panel_embed(welcome_text)
+            panel_text = state.get("panel_message") or state.get("welcome_message", _DEFAULT_WELCOME)
+            embed      = _build_panel_embed(panel_text)
             panel_view   = ApplicationPanelView(bot=self.bot)
             panel_msg    = await panel_channel.send(embed=embed, view=panel_view)
 
@@ -615,6 +626,7 @@ async def start_application_wizard(
         "web_admin_role_ids":       [],
         "welcome_message":          _DEFAULT_WELCOME,
         "instruction_message":      _DEFAULT_INSTRUCTION,
+        "panel_message":            _DEFAULT_PANEL_MESSAGE,
         "rejection_cooldown_hours": 24,
     }
 
@@ -622,10 +634,12 @@ async def start_application_wizard(
         for key in [
             "panel_channel_id", "category_id", "newbie_role_id",
             "member_role_id", "log_channel_id", "mc_log_channel_id",
-            "welcome_message", "instruction_message",
+            "welcome_message", "instruction_message", "panel_message",
         ]:
             if existing_config.get(key):
                 state[key] = existing_config[key]
+        if not existing_config.get("panel_message") and existing_config.get("welcome_message"):
+            state["panel_message"] = existing_config["welcome_message"]
 
         # Staff-Rollen als Liste
         raw_staff = existing_config.get("staff_role_ids", "")

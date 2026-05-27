@@ -278,12 +278,12 @@
         </div>
 
         <div class="field">
-          <label>💬 Willkommens-Text im Panel <span style="font-size:.68rem;color:var(--text3);">({player} = Minecraft-Name)</span></label>
+          <label>💬 Text im Bewerbungsticket-Embed <span style="font-size:.68rem;color:var(--text3);">({player} = Discord-Mention, {mc} = Minecraft-Name)</span></label>
           <textarea id="cfg_welcome" rows="4" placeholder="Willkommen {player}! ..."></textarea>
         </div>
 
         <div class="field">
-          <label>📌 Anweisungs-Text im Bewerbungskanal</label>
+          <label>📌 Zusätzlicher Anweisungs-Text im Bewerbungskanal</label>
           <textarea id="cfg_instruction" rows="3" placeholder="📋 Willkommen! Schreibe hier deine Bewerbung..."></textarea>
         </div>
 
@@ -407,6 +407,7 @@ async function loadConfig() {
       if (c.rejection_cooldown_hours != null) q('cfg_cooldown').value = c.rejection_cooldown_hours;
       if (c.welcome_message)     q('cfg_welcome').value     = c.welcome_message;
       if (c.instruction_message) q('cfg_instruction').value = c.instruction_message;
+      if (c.panel_message)       q('panel_desc').value      = c.panel_message;
     }, 150);
 
     const rawStaff = c.staff_role_ids || '';
@@ -424,7 +425,7 @@ async function loadConfig() {
     if (c.panel_channel_id && c.category_id) goStep(2, false);
   }
 
-  q('panel_desc').value = d.config?.welcome_message || 'Klicke auf den Button um deine Bewerbung einzureichen.';
+  q('panel_desc').value = d.config?.panel_message || d.config?.welcome_message || 'Klicke auf den Button um deine Bewerbung einzureichen.';
   buildPreview();
 }
 
@@ -507,6 +508,7 @@ async function saveConfig() {
     log_channel_id:           q('cfg_log_channel').value    || null,
     mc_log_channel_id:        q('cfg_mc_log_channel').value || null,
     rejection_cooldown_hours: parseInt(q('cfg_cooldown').value || '24'),
+    panel_message:            q('panel_desc').value,
     welcome_message:          q('cfg_welcome').value,
     instruction_message:      q('cfg_instruction').value,
   };
@@ -533,8 +535,6 @@ function buildSummary() {
     `<div class="summary-row"><div class="summary-label">${esc(label)}</div><div class="summary-value">${esc(value)}</div></div>`
   ).join('');
 
-  const welcome = q('cfg_welcome').value;
-  if (welcome && !q('panel_desc').value) q('panel_desc').value = welcome;
   buildPreview();
 }
 
