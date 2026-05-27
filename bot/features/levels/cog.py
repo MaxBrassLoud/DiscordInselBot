@@ -5,19 +5,11 @@ Level-System für den Insel Bot.
 
 PUNKTE:
   • Jede Nachricht:                +1 Punkt  (max 1 Punkt pro 60s pro User – Spam-Schutz)
-  • Jede Minute im Voice Chat:     +2 Punkte (Voice-Tracking per Task alle 60s)
+  • Jede Minute im Voice Chat:     +2 Punkte (nur wenn NICHT taub; Stumm ist erlaubt)
   • Jede Reaktion auf Nachrichten: +1 Punkt  (wer reagiert bekommt den Punkt)
 
 LEVEL-FORMEL (exponentiell):
   XP für Level N = 10 * (N ^ 1.8)
-  → Level 1:   10 XP
-  → Level 5:   229 XP
-  → Level 10:  631 XP
-  → Level 20:  2.512 XP
-  → Level 50:  28.900 XP
-
-SETUP:
-  /level setup  – Level-Update-Kanal konfigurieren
 
 COMMANDS:
   /level info [@user]  – Level-Card anzeigen
@@ -25,28 +17,7 @@ COMMANDS:
   /level setup         – Admin: Level-Kanal konfigurieren
   /level reset [@user] – Admin: Level zurücksetzen
   /level xp <user> <menge> – Admin: XP manuell ändern
-
-SUPABASE SQL (einmalig ausführen):
-    CREATE TABLE IF NOT EXISTS user_levels (
-        id            BIGSERIAL PRIMARY KEY,
-        user_id       TEXT NOT NULL,
-        server_id     TEXT NOT NULL,
-        xp            INTEGER DEFAULT 0,
-        level         INTEGER DEFAULT 0,
-        messages      INTEGER DEFAULT 0,
-        voice_minutes INTEGER DEFAULT 0,
-        reactions     INTEGER DEFAULT 0,
-        last_msg_at   TIMESTAMPTZ,
-        updated_at    TIMESTAMPTZ DEFAULT now(),
-        UNIQUE (user_id, server_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_user_levels_server
-        ON user_levels (server_id, xp DESC);
-
-    ALTER TABLE settings
-        ADD COLUMN IF NOT EXISTS level_channel_id TEXT;
-    ALTER TABLE settings
-        ADD COLUMN IF NOT EXISTS levels_enabled BOOLEAN DEFAULT TRUE;
+  /level debug         – Zeigt, welche User gerade für Voice-XP getrackt werden
 """
 
 from __future__ import annotations
@@ -54,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import math
 from datetime import datetime, timezone
-from math import trunc
 from typing import Optional, Dict, Set, List
 
 import discord
@@ -68,39 +38,35 @@ from bot.utils.permissions import has_admin_rights
 logger = get_logger("levels")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KONSTANTEN
+# KONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-MSG_COOLDOWN_SECONDS = 0          # Mindestabstand zwischen Nachricht-XP für einen User
-VOICE_XP_PER_MINUTE = 2            # XP pro Minute im Voice-Kanal
-MSG_XP = 1                         # XP pro Nachricht
-REACTION_XP = 1                    # XP pro Reaktion
+MSG_COOLDOWN_SECONDS = 0           # 1 Nachrichten-XP pro User pro Minute
+VOICE_XP_PER_MINUTE = 10             # XP pro Minute im Voice (wenn nicht taub)
+MSG_XP = 1
+REACTION_XP = 1
+
+VOICE_SOLO_XP_ENABLED = True        # True = auch allein im Voice XP sammeln, False = nur mit min. 1 anderen Person
 
 XP_BASE = 10
 XP_EXPONENT = 1.1
 
-# Cache‑Einstellungen
-FLUSH_INTERVAL_SECONDS = 600       # 10 Minuten
-FLUSH_EVENT_THRESHOLD = 200        # Nach 200 XP-Events zurückschreiben
+FLUSH_INTERVAL_SECONDS = 600
+FLUSH_EVENT_THRESHOLD = 200
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LEVEL MATH
 # ══════════════════════════════════════════════════════════════════════════════
 
 def xp_for_level(level: int) -> int:
-    """XP die benötigt werden um Level N zu erreichen (kumulativ)."""
     if level <= 0:
         return 0
     return math.ceil(XP_BASE * (level ** XP_EXPONENT))
 
-
 def total_xp_for_level(level: int) -> int:
-    """Gesamt-XP die benötigt werden um Level N zu erreichen."""
     return sum(xp_for_level(lvl) for lvl in range(1, level + 1))
 
-
 def level_from_xp(xp: int) -> int:
-    """Berechnet das aktuelle Level anhand der Gesamt-XP."""
     level = 0
     needed = 0
     while needed + xp_for_level(level + 1) <= xp:
@@ -108,38 +74,27 @@ def level_from_xp(xp: int) -> int:
         needed += xp_for_level(level)
     return level
 
-
 def xp_progress(xp: int) -> tuple[int, int, int]:
-    """
-    Gibt (current_level, xp_in_level, xp_needed_for_next) zurück.
-    xp_in_level = XP die der User im aktuellen Level bereits hat
-    xp_needed   = XP die er für den nächsten Level-Aufstieg braucht
-    """
     level = level_from_xp(xp)
     spent = total_xp_for_level(level)
     xp_in_level = xp - spent
     xp_for_next_level = xp_for_level(level + 1)
     return level, xp_in_level, xp_for_next_level
 
-
 def progress_bar(current: int, total: int, length: int = 15) -> str:
-    """Erstellt einen Text-Fortschrittsbalken."""
     filled = int(length * current / max(total, 1))
     bar = "█" * filled + "░" * (length - filled)
     return f"[{bar}]"
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-# DATABASE & CACHE (global für den gesamten Cog)
+# DATABASE & CACHE
 # ══════════════════════════════════════════════════════════════════════════════
 
-_user_cache: Dict[str, dict] = {}      # key = f"{server_id}:{user_id}"
-_dirty_keys: Set[str] = set()          # Keys, die noch nicht in der DB sind
-_flush_lock = asyncio.Lock()           # Verhindert parallele Flushes
-
+_user_cache: Dict[str, dict] = {}
+_dirty_keys: Set[str] = set()
+_flush_lock = asyncio.Lock()
 
 def _get_user_row(server_id: str, user_id: str) -> Optional[dict]:
-    """Liest einen User‑Datensatz aus der Datenbank (ohne Cache)."""
     try:
         r = get_supabase().table("user_levels") \
             .select("*") \
@@ -151,9 +106,7 @@ def _get_user_row(server_id: str, user_id: str) -> Optional[dict]:
         logger.error(f"[levels] _get_user_row: {e}")
         return None
 
-
 def _load_into_cache(server_id: str, user_id: str) -> Optional[dict]:
-    """Lädt einen User aus der DB in den Cache, falls vorhanden."""
     key = f"{server_id}:{user_id}"
     row = _get_user_row(server_id, user_id)
     if row:
@@ -161,14 +114,11 @@ def _load_into_cache(server_id: str, user_id: str) -> Optional[dict]:
         _dirty_keys.discard(key)
     return _user_cache.get(key)
 
-
 def _get_cached_user(server_id: str, user_id: str) -> Optional[dict]:
-    """Holt User aus Cache (lädt bei Bedarf aus DB)."""
     key = f"{server_id}:{user_id}"
     if key not in _user_cache:
         _load_into_cache(server_id, user_id)
     return _user_cache.get(key)
-
 
 def _upsert_xp(
     server_id: str,
@@ -178,16 +128,11 @@ def _upsert_xp(
     voice_delta: int = 0,
     reaction_delta: int = 0,
 ) -> tuple[int, int, int]:
-    """
-    Fügt XP hinzu (im Cache) und gibt (old_level, new_level, new_xp) zurück.
-    Die Änderungen werden als „dirty“ markiert und später asynchron geschrieben.
-    """
     key = f"{server_id}:{user_id}"
     now = datetime.now(timezone.utc).isoformat()
     current = _get_cached_user(server_id, user_id)
 
     if not current:
-        # Neuer User – lege initialen Record an
         new_xp = max(0, xp_delta)
         new_level = level_from_xp(new_xp)
         current = {
@@ -203,10 +148,8 @@ def _upsert_xp(
         }
         _user_cache[key] = current
         _dirty_keys.add(key)
-        old_level = 0
-        return old_level, new_level, new_xp
+        return 0, new_level, new_xp
 
-    # Bestehenden User aktualisieren
     old_level = current.get("level", 0)
     current["xp"] = max(0, current.get("xp", 0) + xp_delta)
     current["messages"] = current.get("messages", 0) + msg_delta
@@ -215,16 +158,12 @@ def _upsert_xp(
     if msg_delta:
         current["last_msg_at"] = now
     current["updated_at"] = now
-
     new_level = level_from_xp(current["xp"])
     current["level"] = new_level
     _dirty_keys.add(key)
-
     return old_level, new_level, current["xp"]
 
-
 def _get_level_channel(server_id: str) -> Optional[str]:
-    """Liest den konfigurierten Level‑Kanal aus der DB (ohne Cache)."""
     try:
         r = get_supabase().table("settings") \
             .select("level_channel_id, levels_enabled") \
@@ -238,9 +177,7 @@ def _get_level_channel(server_id: str) -> Optional[str]:
         logger.error(f"[levels] _get_level_channel: {e}")
     return None
 
-
 def _set_level_channel(server_id: str, channel_id: Optional[str], enabled: bool = True):
-    """Speichert die Level‑Kanal‑Konfiguration direkt (kein Cache nötig)."""
     sb = get_supabase()
     existing = sb.table("settings").select("id").eq("guild_id", server_id).execute()
     data = {"guild_id": server_id, "level_channel_id": channel_id, "levels_enabled": enabled}
@@ -249,9 +186,7 @@ def _set_level_channel(server_id: str, channel_id: Optional[str], enabled: bool 
     else:
         sb.table("settings").insert(data).execute()
 
-
 def _get_leaderboard(server_id: str, limit: int = 10) -> List[dict]:
-    """Rangliste direkt aus der DB (immer aktuell)."""
     try:
         r = get_supabase().table("user_levels") \
             .select("user_id, xp, level, messages, voice_minutes, reactions") \
@@ -263,9 +198,7 @@ def _get_leaderboard(server_id: str, limit: int = 10) -> List[dict]:
         logger.error(f"[levels] _get_leaderboard: {e}")
         return []
 
-
 def _get_rank(server_id: str, user_id: str) -> int:
-    """Ermittelt den Rang eines Users (basierend auf der aktuellen DB)."""
     try:
         r = get_supabase().table("user_levels") \
             .select("user_id") \
@@ -278,27 +211,19 @@ def _get_rank(server_id: str, user_id: str) -> int:
         logger.error(f"[levels] _get_rank: {e}")
     return 0
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-# LEVEL-UP EMBED
+# EMBEDS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_levelup_embed(member: discord.Member, old_level: int, new_level: int, total_xp: int) -> discord.Embed:
     embed = discord.Embed(
         title="🎉 Level Up!",
-        description=(
-            f"**{member.display_name}** ist von **Level {old_level}** auf "
-            f"**Level {new_level}** aufgestiegen! 🚀"
-        ),
+        description=f"**{member.display_name}** ist von **Level {old_level}** auf **Level {new_level}** aufgestiegen! 🚀",
         color=discord.Color.from_rgb(74, 222, 128),
     )
     _, xp_in, xp_next = xp_progress(total_xp)
     bar = progress_bar(xp_in, xp_next)
-    embed.add_field(
-        name="📊 Fortschritt",
-        value=f"`{bar}` {xp_in}/{xp_next} XP",
-        inline=False,
-    )
+    embed.add_field(name="📊 Fortschritt", value=f"`{bar}` {xp_in}/{xp_next} XP", inline=False)
     embed.add_field(name="⭐ Gesamt-XP", value=f"{total_xp:,}", inline=True)
     embed.add_field(name="🏆 Neues Level", value=str(new_level), inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -306,12 +231,7 @@ def _build_levelup_embed(member: discord.Member, old_level: int, new_level: int,
     embed.timestamp = discord.utils.utcnow()
     return embed
 
-
-def _build_level_card(
-    member: discord.Member,
-    row: dict,
-    rank: int,
-) -> discord.Embed:
+def _build_level_card(member: discord.Member, row: dict, rank: int) -> discord.Embed:
     xp = row.get("xp", 0)
     level = row.get("level", 0)
     messages = row.get("messages", 0)
@@ -321,33 +241,17 @@ def _build_level_card(
     _, xp_in, xp_next = xp_progress(xp)
     bar = progress_bar(xp_in, xp_next)
 
-    embed = discord.Embed(
-        title=f"📊 Level-Info – {member.display_name}",
-        color=discord.Color.from_rgb(74, 222, 128),
-    )
+    embed = discord.Embed(title=f"📊 Level-Info – {member.display_name}", color=discord.Color.from_rgb(74, 222, 128))
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="🏆 Level", value=str(level), inline=True)
     embed.add_field(name="📍 Rang", value=f"#{rank}", inline=True)
     embed.add_field(name="⭐ Gesamt-XP", value=f"{xp:,}", inline=True)
-    embed.add_field(
-        name="📈 Fortschritt zum nächsten Level",
-        value=f"`{bar}` {xp_in:,} / {xp_next:,} XP",
-        inline=False,
-    )
+    embed.add_field(name="📈 Fortschritt", value=f"`{bar}` {xp_in:,} / {xp_next:,} XP", inline=False)
     embed.add_field(name="💬 Nachrichten", value=f"{messages:,}", inline=True)
     embed.add_field(name="🎙️ Voice-Minuten", value=f"{voice_min:,}", inline=True)
     embed.add_field(name="😄 Reaktionen", value=f"{reactions:,}", inline=True)
-
-    next_level_total = total_xp_for_level(level + 1)
-    current_total = total_xp_for_level(level)
-    embed.add_field(
-        name="🎯 Nächstes Level",
-        value=f"Level {level + 1} bei {next_level_total:,} XP total ({next_level_total - xp:,} XP noch nötig)",
-        inline=False,
-    )
     embed.set_footer(text=f"Server: {member.guild.name}")
     return embed
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SETUP VIEW
@@ -362,56 +266,29 @@ class LevelSetupView(discord.ui.View):
         self._rebuild()
 
     def _build_embed(self) -> discord.Embed:
-        e = discord.Embed(
-            title="⚙️ Level-System Setup",
-            color=discord.Color.from_rgb(74, 222, 128),
-        )
-        e.add_field(
-            name="📢 Level-Update Kanal",
-            value=f"<#{self.channel_id}>" if self.channel_id else "*Nicht gesetzt – Level-Ups werden still verarbeitet*",
-            inline=False,
-        )
-        e.add_field(
-            name="🔧 System",
-            value="✅ Aktiv" if self.enabled else "❌ Deaktiviert",
-            inline=True,
-        )
-        e.add_field(
-            name="📊 Punkte-Übersicht",
-            value=(
-                "💬 Nachricht → **+1 XP** (max 1×/Minute)\n"
-                "🎙️ Voice-Minute → **+2 XP**\n"
-                "😄 Reaktion → **+1 XP**"
-            ),
-            inline=False,
-        )
+        e = discord.Embed(title="⚙️ Level-System Setup", color=discord.Color.from_rgb(74, 222, 128))
+        e.add_field(name="📢 Level-Update Kanal", value=f"<#{self.channel_id}>" if self.channel_id else "*Nicht gesetzt*", inline=False)
+        e.add_field(name="🔧 System", value="✅ Aktiv" if self.enabled else "❌ Deaktiviert", inline=True)
+        solo_text = "✅ Alleine XP" if VOICE_SOLO_XP_ENABLED else "👥 Nur mit anderen"
+        e.add_field(name="📊 Punkte-Übersicht",
+                    value=(f"💬 Nachricht → +1 XP (max 1×/Minute)\n"
+                           f"🎙️ Voice-Minute → +2 XP (nicht taub) [{solo_text}]\n"
+                           f"😄 Reaktion → +1 XP"),
+                    inline=False)
         return e
 
     def _rebuild(self):
         self.clear_items()
-
-        ch_sel = discord.ui.ChannelSelect(
-            placeholder="📢 Kanal für Level-Up Nachrichten wählen…",
-            min_values=0, max_values=1,
-            channel_types=[discord.ChannelType.text],
-            row=0,
-        )
+        ch_sel = discord.ui.ChannelSelect(placeholder="📢 Kanal wählen…", min_values=0, max_values=1,
+                                          channel_types=[discord.ChannelType.text], row=0)
         ch_sel.callback = self._on_channel
         self.add_item(ch_sel)
-
-        toggle_btn = discord.ui.Button(
-            label=f"System: {'AN ✅' if self.enabled else 'AUS ❌'}",
-            style=discord.ButtonStyle.success if self.enabled else discord.ButtonStyle.secondary,
-            row=1,
-        )
+        toggle_btn = discord.ui.Button(label=f"System: {'AN ✅' if self.enabled else 'AUS ❌'}",
+                                       style=discord.ButtonStyle.success if self.enabled else discord.ButtonStyle.secondary,
+                                       row=1)
         toggle_btn.callback = self._on_toggle
         self.add_item(toggle_btn)
-
-        save_btn = discord.ui.Button(
-            label="💾 Speichern",
-            style=discord.ButtonStyle.primary,
-            row=1,
-        )
+        save_btn = discord.ui.Button(label="💾 Speichern", style=discord.ButtonStyle.primary, row=1)
         save_btn.callback = self._on_save
         self.add_item(save_btn)
 
@@ -435,7 +312,6 @@ class LevelSetupView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(embed=embed, view=self)
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # COG
 # ══════════════════════════════════════════════════════════════════════════════
@@ -443,39 +319,28 @@ class LevelSetupView(discord.ui.View):
 class LevelsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Cooldown‑Cache (reine Speicherung der letzten Nachricht)
         self._msg_cooldown: Dict[str, datetime] = {}
-        # Voice‑Tracking (join-Zeiten)
-        self._voice_joined: Dict[str, datetime] = {}
-        # Event‑Zähler für Flush nach Schwellwert
+        self._voice_joined: Dict[str, datetime] = {}   # key = server_id:user_id
         self._event_counter = 0
-
-        # Regelmäßigen Flush starten
         self.flush_cache_task.start()
+        self.voice_xp_task.start()
 
     def cog_unload(self):
-        """Beim Herunterfahren des Cogs: Cache in DB schreiben und Tasks stoppen."""
         self.flush_cache_task.cancel()
-        self._flush_cache_sync()   # Synchron flush, weil wir im Shutdown sind
+        self.voice_xp_task.cancel()
+        self._flush_cache_sync()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Flush‑Logik (Cache → Datenbank)
-    # ═══════════════════════════════════════════════════════════════════════════
-
+    # Flush -----------------------------------------------------------------
     def _flush_cache_sync(self):
-        """Schreibt alle dirty Records in einem Batch in die Datenbank."""
         if not _dirty_keys:
             return
-
         records_to_upsert = []
         for key in list(_dirty_keys):
             record = _user_cache.get(key)
             if not record:
                 _dirty_keys.discard(key)
                 continue
-
-            # Nur die Spalten, die in der Tabelle existieren
-            clean_record = {
+            clean = {
                 "user_id": record["user_id"],
                 "server_id": record["server_id"],
                 "xp": record["xp"],
@@ -485,55 +350,33 @@ class LevelsCog(commands.Cog):
                 "reactions": record["reactions"],
                 "updated_at": record["updated_at"],
             }
-            # last_msg_at nur hinzufügen, wenn vorhanden
             if record.get("last_msg_at"):
-                clean_record["last_msg_at"] = record["last_msg_at"]
-
-            records_to_upsert.append(clean_record)
-
-        if not records_to_upsert:
-            return
-
-        try:
-            sb = get_supabase()
-            # Wichtig: on_conflict auf die beiden Unique-Spalten
-            sb.table("user_levels").upsert(
-                records_to_upsert,
-                on_conflict="user_id,server_id"
-            ).execute()
-            # Nur bei Erfolg als clean markieren
-            _dirty_keys.clear()
-            logger.info(f"[levels] Flushed {len(records_to_upsert)} dirty records successfully.")
-        except Exception as e:
-            logger.error(f"[levels] Fehler beim Flush: {e}", exc_info=True)
-            # dirty bleiben – wird beim nächsten Flush erneut versucht
+                clean["last_msg_at"] = record["last_msg_at"]
+            records_to_upsert.append(clean)
+        if records_to_upsert:
+            try:
+                get_supabase().table("user_levels").upsert(
+                    records_to_upsert, on_conflict="user_id,server_id"
+                ).execute()
+                _dirty_keys.clear()
+                logger.info(f"[levels] Flushed {len(records_to_upsert)} records")
+            except Exception as e:
+                logger.error(f"[levels] Flush error: {e}")
 
     async def _flush_cache_async(self):
-        """Asynchroner Flush mit Lock, um parallele Ausführung zu verhindern."""
         async with _flush_lock:
             await self.bot.loop.run_in_executor(None, self._flush_cache_sync)
 
     @tasks.loop(seconds=FLUSH_INTERVAL_SECONDS)
     async def flush_cache_task(self):
-        """Periodischer Flush (alle 10 Minuten)."""
         await self._flush_cache_async()
 
     @flush_cache_task.before_loop
     async def before_flush(self):
         await self.bot.wait_until_ready()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Level‑Up Benachrichtigung
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    async def _notify_levelup(
-        self,
-        guild: discord.Guild,
-        member: discord.Member,
-        old_level: int,
-        new_level: int,
-        total_xp: int,
-    ):
+    # Level-Up Notify -------------------------------------------------------
+    async def _notify_levelup(self, guild, member, old_level, new_level, total_xp):
         channel_id = _get_level_channel(str(guild.id))
         if not channel_id:
             return
@@ -543,17 +386,11 @@ class LevelsCog(commands.Cog):
         embed = _build_levelup_embed(member, old_level, new_level, total_xp)
         try:
             await channel.send(embed=embed)
-        except discord.Forbidden:
-            logger.warning(f"[levels] Kein Zugriff auf Level-Kanal {channel_id}")
         except Exception as e:
-            logger.error(f"[levels] _notify_levelup: {e}")
+            logger.error(f"[levels] notify error: {e}")
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Cooldown‑Helper für Nachrichten
-    # ═══════════════════════════════════════════════════════════════════════════
-
+    # Cooldown --------------------------------------------------------------
     def _check_msg_cooldown(self, server_id: str, user_id: str) -> bool:
-        """Prüft, ob der User für diese Nachricht XP bekommen darf."""
         key = f"{server_id}:{user_id}"
         now = datetime.now(timezone.utc)
         last = self._msg_cooldown.get(key)
@@ -562,89 +399,84 @@ class LevelsCog(commands.Cog):
         self._msg_cooldown[key] = now
         return True
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Event‑Listener
-    # ═══════════════════════════════════════════════════════════════════════════
-
+    # Event Listener: Messages ----------------------------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
             return
-        server_id = str(message.guild.id)
-        user_id = str(message.author.id)
-
-        if not self._check_msg_cooldown(server_id, user_id):
+        if not self._check_msg_cooldown(str(message.guild.id), str(message.author.id)):
             return
-
-        old_level, new_level, new_xp = _upsert_xp(
-            server_id, user_id, MSG_XP, msg_delta=1
-        )
-
-        # Level‑Up benachrichtigen
-        if new_level > old_level:
-            await self._notify_levelup(message.guild, message.author, old_level, new_level, new_xp)
-
-        # Event‑Zähler erhöhen und ggf. Flush auslösen
+        old, new, xp = _upsert_xp(str(message.guild.id), str(message.author.id), MSG_XP, msg_delta=1)
+        if new > old:
+            await self._notify_levelup(message.guild, message.author, old, new, xp)
         self._event_counter += 1
         if self._event_counter >= FLUSH_EVENT_THRESHOLD:
             self._event_counter = 0
             await self._flush_cache_async()
 
+    # Event Listener: Reactions ---------------------------------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        if user.bot:
+        if user.bot or not reaction.message.guild:
             return
-        guild = reaction.message.guild
-        if not guild:
-            return
-
-        server_id = str(guild.id)
-        user_id = str(user.id)
-
-        old_level, new_level, new_xp = _upsert_xp(
-            server_id, user_id, REACTION_XP, reaction_delta=1
-        )
-
-        if new_level > old_level:
-            member = guild.get_member(user.id)
+        old, new, xp = _upsert_xp(str(reaction.message.guild.id), str(user.id), REACTION_XP, reaction_delta=1)
+        if new > old:
+            member = reaction.message.guild.get_member(user.id)
             if member:
-                await self._notify_levelup(guild, member, old_level, new_level, new_xp)
-
+                await self._notify_levelup(reaction.message.guild, member, old, new, xp)
         self._event_counter += 1
         if self._event_counter >= FLUSH_EVENT_THRESHOLD:
             self._event_counter = 0
             await self._flush_cache_async()
 
+    # Voice State Tracking --------------------------------------------------
     @commands.Cog.listener()
-    async def on_voice_state_update(
-        self,
-        member: discord.Member,
-        before: discord.VoiceState,
-        after: discord.VoiceState,
-    ):
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot:
             return
-        server_id = str(member.guild.id)
-        user_id = str(member.id)
-        key = f"{server_id}:{user_id}"
+        key = f"{member.guild.id}:{member.id}"
 
-        # Kanal betreten
+        # Voice verlassen
+        if before.channel and not after.channel:
+            removed = self._voice_joined.pop(key, None)
+            if removed:
+                logger.info(f"[voice] {member} hat Voice verlassen → Tracking beendet.")
+            return
+
+        # Voice betreten
         if after.channel and not before.channel:
-            self._voice_joined[key] = datetime.now(timezone.utc)
-        # Kanal verlassen / wechseln → Timestamp entfernen (wird beim Wechsel neu gesetzt)
-        elif before.channel and not after.channel:
-            self._voice_joined.pop(key, None)
+            if after.deaf or after.self_deaf:
+                logger.info(f"[voice] {member} betritt Voice, ist aber TAUB → kein Tracking.")
+            else:
+                self._voice_joined[key] = datetime.now(timezone.utc)
+                logger.info(f"[voice] {member} betritt Voice (nicht taub) → Tracking gestartet.")
+            return
 
+        # Status-Änderung innerhalb eines Channels
+        if after.channel and before.channel:
+            was_deaf = before.deaf or before.self_deaf
+            is_deaf = after.deaf or after.self_deaf
+            if not was_deaf and is_deaf:
+                self._voice_joined.pop(key, None)
+                logger.info(f"[voice] {member} wurde taub → Tracking gestoppt.")
+            elif was_deaf and not is_deaf:
+                self._voice_joined[key] = datetime.now(timezone.utc)
+                logger.info(f"[voice] {member} nicht mehr taub → Tracking neu gestartet.")
+
+    # Voice XP Loop (jede Minute) -------------------------------------------
     @tasks.loop(seconds=60)
     async def voice_xp_task(self):
-        """Alle 60 Sekunden: Voice‑XP für aktive User vergeben."""
         now = datetime.now(timezone.utc)
+        logger.debug(f"[voice] Task läuft. {len(self._voice_joined)} User im Tracking.")
+
         for key, joined_at in list(self._voice_joined.items()):
+            # Nur User, die mindestens 55s durchgängig nicht taub im Voice sind
             if (now - joined_at).total_seconds() < 55:
                 continue
+
             try:
                 server_id, user_id = key.split(":", 1)
-                guild = discord.utils.get(self.bot.guilds, id=int(server_id))
+                guild = self.bot.get_guild(int(server_id))
                 if not guild:
                     self._voice_joined.pop(key, None)
                     continue
@@ -653,21 +485,30 @@ class LevelsCog(commands.Cog):
                     self._voice_joined.pop(key, None)
                     continue
 
-                # AFK‑Kanal ignorieren
-                if guild.afk_channel and member.voice.channel.id == guild.afk_channel.id:
+                voice = member.voice
+                # AFK-Kanal ausschließen
+                if guild.afk_channel and voice.channel.id == guild.afk_channel.id:
                     continue
 
-                # Allein im Kanal? Keine XP (Anti‑AFK)
-                non_bot_members = [m for m in member.voice.channel.members if not m.bot]
-                if len(non_bot_members) < 2:
+                # Taub-Check
+                if voice.deaf or voice.self_deaf:
+                    self._voice_joined.pop(key, None)
+                    logger.info(f"[voice] {member} ist taub → aus Tracking entfernt.")
                     continue
 
-                old_level, new_level, new_xp = _upsert_xp(
-                    server_id, user_id, VOICE_XP_PER_MINUTE, voice_delta=1
-                )
+                # Prüfen, ob der User allein im Voice ist und ob Solo-XP erlaubt ist
+                if not VOICE_SOLO_XP_ENABLED:
+                    non_bot = [m for m in voice.channel.members if not m.bot]
+                    if len(non_bot) < 2:
+                        logger.debug(f"[voice] {member} allein im Kanal und VOICE_SOLO_XP_ENABLED=False → keine XP.")
+                        continue
 
-                if new_level > old_level:
-                    await self._notify_levelup(guild, member, old_level, new_level, new_xp)
+                # XP vergeben
+                old, new, xp = _upsert_xp(server_id, user_id, VOICE_XP_PER_MINUTE, voice_delta=1)
+                logger.info(f"[voice] +{VOICE_XP_PER_MINUTE} XP an {member} (Level {old}→{new})")
+
+                if new > old:
+                    await self._notify_levelup(guild, member, old, new, xp)
 
                 self._event_counter += 1
                 if self._event_counter >= FLUSH_EVENT_THRESHOLD:
@@ -675,93 +516,59 @@ class LevelsCog(commands.Cog):
                     await self._flush_cache_async()
 
             except Exception as e:
-                logger.error(f"[levels] voice_xp_task key={key}: {e}")
+                logger.error(f"[voice] Fehler bei {key}: {e}")
+
+        # Alte Einträge aufräumen (5 Min Timeout)
+        stale = [k for k, t in self._voice_joined.items() if (now - t).total_seconds() > 300]
+        for k in stale:
+            self._voice_joined.pop(k, None)
+            logger.info(f"[voice] Timeout für {k}")
 
     @voice_xp_task.before_loop
     async def before_voice_xp(self):
         await self.bot.wait_until_ready()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Slash Commands
+    # SLASH COMMANDS
     # ═══════════════════════════════════════════════════════════════════════════
 
     level = app_commands.Group(name="level", description="Level-System")
 
-    @level.command(name="info", description="Zeige dein Level oder das eines anderen Mitglieds")
-    @app_commands.describe(mitglied="Das Mitglied dessen Level angezeigt werden soll")
-    async def level_info(
-        self,
-        interaction: discord.Interaction,
-        mitglied: Optional[discord.Member] = None,
-    ):
+    @level.command(name="info")
+    @app_commands.describe(mitglied="Mitglied anzeigen")
+    async def level_info(self, interaction: discord.Interaction, mitglied: Optional[discord.Member] = None):
         await interaction.response.defer(ephemeral=True)
-        # Cache vor dem Lesen des Rangs in DB schreiben
         await self._flush_cache_async()
-
         target = mitglied or interaction.user
-        server_id = str(interaction.guild_id)
-        user_id = str(target.id)
-
-        cached = _get_cached_user(server_id, user_id)
-        if cached:
-            row = cached
-        else:
-            row = _get_user_row(server_id, user_id)
-
+        row = _get_cached_user(str(interaction.guild_id), str(target.id)) or _get_user_row(str(interaction.guild_id), str(target.id))
         if not row:
-            if target == interaction.user:
-                await interaction.followup.send(
-                    "📊 Du hast noch keine XP gesammelt. Schreib Nachrichten, "
-                    "geh in Voice-Kanäle oder reagiere auf Nachrichten um XP zu verdienen!",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.followup.send(
-                    f"📊 **{target.display_name}** hat noch keine XP gesammelt.",
-                    ephemeral=True,
-                )
+            msg = "Du hast noch keine XP." if target == interaction.user else f"{target.display_name} hat noch keine XP."
+            await interaction.followup.send(msg, ephemeral=True)
             return
-
-        rank = _get_rank(server_id, user_id)  # jetzt aktuell, weil vorher geflusht
+        rank = _get_rank(str(interaction.guild_id), str(target.id))
         embed = _build_level_card(target, row, rank)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @level.command(name="top", description="Zeige die Top 10 Mitglieder nach Level")
+    @level.command(name="top")
     async def level_top(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # Cache vor dem Lesen der Rangliste in DB schreiben
         await self._flush_cache_async()
-
-        server_id = str(interaction.guild_id)
-        rows = _get_leaderboard(server_id, limit=10)
-
+        rows = _get_leaderboard(str(interaction.guild_id))
         if not rows:
-            await interaction.followup.send(
-                "📊 Noch keine Daten vorhanden. Sammle XP indem du Nachrichten schreibst!",
-                ephemeral=True,
-            )
+            await interaction.followup.send("Noch keine Daten.", ephemeral=True)
             return
-
-        embed = discord.Embed(
-            title=f"🏆 Level-Rangliste – {interaction.guild.name}",
-            color=discord.Color.from_rgb(74, 222, 128),
-        )
-
+        embed = discord.Embed(title=f"🏆 Rangliste – {interaction.guild.name}", color=discord.Color.from_rgb(74, 222, 128))
         medals = ["🥇", "🥈", "🥉"]
         lines = []
         for i, row in enumerate(rows, 1):
             member = interaction.guild.get_member(int(row["user_id"]))
             name = member.display_name if member else f"<@{row['user_id']}>"
             medal = medals[i - 1] if i <= 3 else f"**#{i}**"
-            level = row.get("level", 0)
-            xp = row.get("xp", 0)
-            lines.append(f"{medal} **{name}** — Level {level} · {xp:,} XP")
-
+            lines.append(f"{medal} **{name}** — Level {row['level']} · {row['xp']:,} XP")
         embed.description = "\n".join(lines)
-        embed.set_footer(text="XP durch Nachrichten, Voice-Minuten und Reaktionen")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @level.command(name="setup", description="[Admin] Konfiguriere das Level-System")
+    @level.command(name="setup")
     async def level_setup(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -769,8 +576,8 @@ class LevelsCog(commands.Cog):
         view = LevelSetupView(interaction.guild_id)
         await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
 
-    @level.command(name="reset", description="[Admin] Setze das Level eines Mitglieds zurück")
-    @app_commands.describe(mitglied="Das Mitglied das zurückgesetzt werden soll")
+    @level.command(name="reset")
+    @app_commands.describe(mitglied="User zurücksetzen")
     async def level_reset(self, interaction: discord.Interaction, mitglied: discord.Member):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
@@ -778,89 +585,59 @@ class LevelsCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         server_id = str(interaction.guild_id)
         user_id = str(mitglied.id)
-
-        # Cache‑Eintrag löschen (falls vorhanden) und in DB auf Null setzen
         key = f"{server_id}:{user_id}"
-        if key in _user_cache:
-            del _user_cache[key]
+        _user_cache.pop(key, None)
         _dirty_keys.discard(key)
-
         try:
-            sb = get_supabase()
-            existing = _get_user_row(server_id, user_id)
-            if existing:
-                sb.table("user_levels").update({
-                    "xp": 0, "level": 0, "messages": 0,
-                    "voice_minutes": 0, "reactions": 0,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("server_id", server_id).eq("user_id", user_id).execute()
-                # Nach dem Reset den Cache neu laden (optional, aber sicher)
-                _load_into_cache(server_id, user_id)
-                await interaction.followup.send(
-                    f"✅ Level von **{mitglied.display_name}** wurde zurückgesetzt.",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.followup.send(
-                    f"ℹ️ **{mitglied.display_name}** hat noch keine XP.",
-                    ephemeral=True,
-                )
+            get_supabase().table("user_levels").update({
+                "xp": 0, "level": 0, "messages": 0, "voice_minutes": 0, "reactions": 0,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("server_id", server_id).eq("user_id", user_id).execute()
+            await interaction.followup.send(f"✅ Level von {mitglied.display_name} zurückgesetzt.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-    @level.command(name="xp", description="[Admin] Vergib oder entziehe manuell XP")
-    @app_commands.describe(
-        mitglied="Das Mitglied",
-        menge="XP-Menge (positiv = hinzufügen, negativ = entziehen)",
-    )
-    async def level_give_xp(
-        self,
-        interaction: discord.Interaction,
-        mitglied: discord.Member,
-        menge: int,
-    ):
+    @level.command(name="xp")
+    @app_commands.describe(mitglied="User", menge="Menge (+/-)")
+    async def level_xp(self, interaction: discord.Interaction, mitglied: discord.Member, menge: int):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        server_id = str(interaction.guild_id)
-        user_id = str(mitglied.id)
-
-        old_level, new_level, new_xp = _upsert_xp(server_id, user_id, menge)
-        if new_xp < 0:
-            # Korrektur: XP nicht unter 0 fallen lassen
-            key = f"{server_id}:{user_id}"
-            if key in _user_cache:
-                _user_cache[key]["xp"] = 0
-                _user_cache[key]["level"] = 0
-                _dirty_keys.add(key)
-            new_xp = 0
-            new_level = 0
-
-        direction = "hinzugefügt ➕" if menge >= 0 else "entzogen ➖"
-        embed = discord.Embed(
-            title="⭐ XP angepasst",
-            description=f"**{abs(menge):,} XP** wurden **{mitglied.display_name}** {direction}.",
-            color=discord.Color.green() if menge >= 0 else discord.Color.orange(),
-        )
-        embed.add_field(name="⭐ Neue Gesamt-XP", value=f"{new_xp:,}", inline=True)
-        embed.add_field(name="🏆 Neues Level", value=str(new_level), inline=True)
-
-        if new_level > old_level:
-            embed.add_field(name="🎉", value=f"Level-Up! {old_level} → {new_level}", inline=False)
-            await self._notify_levelup(interaction.guild, mitglied, old_level, new_level, new_xp)
-
-        # Sofort speichern (Admin-Aktion ist wichtig)
+        old, new, xp = _upsert_xp(str(interaction.guild_id), str(mitglied.id), menge)
+        direction = "hinzugefügt" if menge >= 0 else "entzogen"
+        embed = discord.Embed(title="⭐ XP angepasst",
+                              description=f"{abs(menge)} XP {direction} bei {mitglied.display_name}.",
+                              color=discord.Color.green() if menge >= 0 else discord.Color.orange())
+        embed.add_field(name="Neue XP", value=f"{xp:,}", inline=True)
+        embed.add_field(name="Level", value=str(new), inline=True)
+        if new > old:
+            embed.add_field(name="🎉", value=f"Level Up! {old} → {new}", inline=False)
+            await self._notify_levelup(interaction.guild, mitglied, old, new, xp)
         await self._flush_cache_async()
-
-        # Nach dem Speichern den Benutzer aus der DB neu laden, um 100% sicher zu sein
-        reloaded = _get_user_row(server_id, user_id)
-        if reloaded:
-            _user_cache[f"{server_id}:{user_id}"] = reloaded
-            _dirty_keys.discard(f"{server_id}:{user_id}")
-
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # DEBUG COMMAND ---------------------------------------------------------
+    @level.command(name="debug", description="[Admin] Zeigt aktuelles Voice-Tracking")
+    async def level_debug(self, interaction: discord.Interaction):
+        if not has_admin_rights(interaction):
+            await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        if not self._voice_joined:
+            await interaction.followup.send("🔎 Keine User im Voice-Tracking.", ephemeral=True)
+            return
+        lines = []
+        now = datetime.now(timezone.utc)
+        for key, joined in self._voice_joined.items():
+            server_id, user_id = key.split(":")
+            member = interaction.guild.get_member(int(user_id)) if interaction.guild.id == int(server_id) else None
+            name = member.display_name if member else f"Unbekannt ({user_id})"
+            seconds = int((now - joined).total_seconds())
+            lines.append(f"• **{name}** – seit {seconds}s im Voice (nicht taub)")
+        embed = discord.Embed(title="🎙️ Voice-Tracking Debug", description="\n".join(lines),
+                              color=discord.Color.blue())
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LevelsCog(bot))
