@@ -101,7 +101,7 @@ class FAQCog(commands.Cog):
             description=f"**{question}**\n{answer}",
             color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 # -------------------------------------------------------------------
