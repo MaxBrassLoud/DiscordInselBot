@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 
 FAQ = {
-    "Wie werde ich Mitglied?": "Gar Ned",
+    "Wie werde ich Mitglied?": "Aktuell nehmen wir leider keine neuen Mitglieder mehr auf. \nWir werden im https://discord.com/channels/1253751493513969735/1416403634471702609 bescheid geben, sobald wir wieder neue Mitglieder aufnehmen.\nSchaut also regelmäßig dort vorbei, um das nicht zu verpassen.\n \nSolltest du einen Freund haben, der bereits ein Mitglied bei uns ist, dann kannst du ein https://discord.com/channels/1253751493513969735/1479931271042957382 und die Situation schildern.\nDarauf hin kannst du auf Zustimmung von unserem Server Team eine https://discord.com/channels/1253751493513969735/1394713441863860336 erstellen und dort ausführlich die Fragen beantowrten.",
     "Wo baut ihr": "Nirgends",
     "Warum kann ich nicht beitreten(mitgliederstopp)": "Weils so ist",
     "Wann ist das nächste Event ": "Wenn es die Ankündigung dazu gibt...",
