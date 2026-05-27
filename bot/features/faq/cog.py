@@ -1,15 +1,16 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import random
 
 FAQ = {
     "Wie werde ich Mitglied?": "Aktuell nehmen wir leider keine neuen Mitglieder mehr auf. \nWir werden im https://discord.com/channels/1253751493513969735/1416403634471702609 bescheid geben, sobald wir wieder neue Mitglieder aufnehmen.\nSchaut also regelmäßig dort vorbei, um das nicht zu verpassen.\n \nSolltest du einen Freund haben, der bereits ein Mitglied bei uns ist, dann kannst du ein https://discord.com/channels/1253751493513969735/1479931271042957382 und die Situation schildern.\nDarauf hin kannst du auf Zustimmung von unserem Server Team eine https://discord.com/channels/1253751493513969735/1394713441863860336 erstellen und dort ausführlich die Fragen beantowrten.",
-    "Wo baut ihr": "Nirgends",
-    "Warum kann ich nicht beitreten(mitgliederstopp)": "Weils so ist",
+    "Wo baut ihr": "In einem Ozean",
+    "Warum kann ich nicht beitreten": "Aktuell nehmen wir keine neuen Mitglieder mehr auf. \n \nGründe dafür sind, das zuletzt zu viele unserem Clan beitreten wollten, sodass wir die Mengen an Spielern nicht mehr kontrollieren konnten und wir eine Communtiy sind in der sich viele Freundschaften wiederfinden. Durch zu viele Neuzugänge ist dies leider teilweise verloren gegangen.",
     "Wann ist das nächste Event ": "Wenn es die Ankündigung dazu gibt...",
-    "Wie du zu uns findest": "Gar Ned",
+    "Wie du zu uns findest": "Durch Magie",
     "Wo kann man eine eigene Insel bauen": "Bau Einfach",
-    "wie wird im Dorf gebaut(Stil und ohne Absprache außer es betrifft jemanden, wir dürfen umbauen etc.)": "What the hell"
+    "Wie wird im Dorf gebaut": "What the hell"
 }
 
 
@@ -53,6 +54,12 @@ class FAQSelect(discord.ui.Select):
             )
             return
 
+        if question == "Warum kann ich nicht beitreten":
+            if random.randint(0, 1499) == 67:
+                answer = "Weils so ist..."
+            else:
+                pass
+
         embed = discord.Embed(
             title="📖 FAQ Antwort",
             description=f"**{question}**\n{answer}",
@@ -89,19 +96,30 @@ class FAQCog(commands.Cog):
     @app_commands.describe(question="Wähle eine der Fragen aus")
     @app_commands.autocomplete(question=faq_autocomplete)
     async def faq_answer(self, interaction: discord.Interaction, question: str):
+        try:
+            await interaction.response.defer(thinking=True, ephemeral=False)
+        except discord.NotFound:
+            return
+
         answer = FAQ.get(question)
         if answer is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❓ Diese Frage ist nicht in der FAQ enthalten.", ephemeral=True
             )
             return
+
+        if question == "Warum kann ich nicht beitreten":
+            if random.randint(0, 1499) == 67:
+                answer = "Weils so ist..."
+            else:
+                pass
 
         embed = discord.Embed(
             title="📖 FAQ Antwort",
             description=f"**{question}**\n{answer}",
             color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
 
 # -------------------------------------------------------------------

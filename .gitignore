@@ -221,3 +221,5 @@ data/
 *.json
 /votings
 /output
+
+test/
