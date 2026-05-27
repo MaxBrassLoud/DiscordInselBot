@@ -13,7 +13,8 @@ FAQ = {
     "Wie wird im Dorf gebaut": "What the hell"
 }
 
-
+random_1 = 0
+random_2 = 499
 async def faq_autocomplete(
     interaction: discord.Interaction,
     current: str
@@ -55,7 +56,7 @@ class FAQSelect(discord.ui.Select):
             return
 
         if question == "Warum kann ich nicht beitreten":
-            if random.randint(0, 1499) == 67:
+            if random.randint(random_1, random_2) == 67:
                 answer = "Weils so ist..."
             else:
                 pass
@@ -109,7 +110,7 @@ class FAQCog(commands.Cog):
             return
 
         if question == "Warum kann ich nicht beitreten":
-            if random.randint(0, 1499) == 67:
+            if random.randint(random_1, random_2) == 67:
                 answer = "Weils so ist..."
             else:
                 pass
