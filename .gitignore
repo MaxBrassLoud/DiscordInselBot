@@ -217,6 +217,7 @@ __marimo__/
 /Tickets
 
 data/
+/backups/
 
 *.json
 /votings
