@@ -22,9 +22,12 @@ COMMANDS:
 
 from __future__ import annotations
 
+import atexit
 import asyncio
+import json
 import math
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Dict, Set, List
 
 import discord
@@ -53,6 +56,18 @@ XP_EXPONENT = 1.1
 
 FLUSH_INTERVAL_SECONDS = 600
 FLUSH_EVENT_THRESHOLD = 200
+VOICE_TRACKING_CACHE_FILE = Path(__file__).resolve().parents[3] / "data" / "voice_tracking_cache.json"
+
+
+def _delete_voice_tracking_cache_file():
+    try:
+        VOICE_TRACKING_CACHE_FILE.unlink(missing_ok=True)
+        VOICE_TRACKING_CACHE_FILE.with_suffix(".json.tmp").unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+atexit.register(_delete_voice_tracking_cache_file)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LEVEL MATH
@@ -320,7 +335,7 @@ class LevelsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._msg_cooldown: Dict[str, datetime] = {}
-        self._voice_joined: Dict[str, datetime] = {}   # key = server_id:user_id
+        self._voice_joined: Dict[str, datetime] = self._load_voice_tracking_cache()
         self._event_counter = 0
         self._initial_voice_sync_done = False
         self.flush_cache_task.start()
@@ -330,6 +345,55 @@ class LevelsCog(commands.Cog):
         self.flush_cache_task.cancel()
         self.voice_xp_task.cancel()
         self._flush_cache_sync()
+        self._delete_voice_tracking_cache()
+
+    # Voice tracking cache --------------------------------------------------
+    def _load_voice_tracking_cache(self) -> Dict[str, datetime]:
+        if not VOICE_TRACKING_CACHE_FILE.exists():
+            return {}
+        try:
+            with VOICE_TRACKING_CACHE_FILE.open("r", encoding="utf-8") as fp:
+                raw = json.load(fp)
+            sessions = {
+                key: datetime.fromisoformat(value)
+                for key, value in raw.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            logger.info(f"[voice] Voice-Tracking-Cache geladen: {len(sessions)} Sessions")
+            return sessions
+        except Exception as e:
+            logger.warning(f"[voice] Voice-Tracking-Cache konnte nicht geladen werden: {e}")
+            return {}
+
+    def _save_voice_tracking_cache(self):
+        try:
+            VOICE_TRACKING_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file = VOICE_TRACKING_CACHE_FILE.with_suffix(".json.tmp")
+            payload = {
+                key: joined_at.isoformat()
+                for key, joined_at in self._voice_joined.items()
+            }
+            with tmp_file.open("w", encoding="utf-8") as fp:
+                json.dump(payload, fp)
+            tmp_file.replace(VOICE_TRACKING_CACHE_FILE)
+        except Exception as e:
+            logger.warning(f"[voice] Voice-Tracking-Cache konnte nicht gespeichert werden: {e}")
+
+    def _delete_voice_tracking_cache(self):
+        try:
+            _delete_voice_tracking_cache_file()
+        except Exception as e:
+            logger.warning(f"[voice] Voice-Tracking-Cache konnte nicht gelöscht werden: {e}")
+
+    def _start_voice_tracking(self, key: str, joined_at: Optional[datetime] = None):
+        self._voice_joined[key] = joined_at or datetime.now(timezone.utc)
+        self._save_voice_tracking_cache()
+
+    def _stop_voice_tracking(self, key: str) -> Optional[datetime]:
+        removed = self._voice_joined.pop(key, None)
+        if removed:
+            self._save_voice_tracking_cache()
+        return removed
 
     # Flush -----------------------------------------------------------------
     def _flush_cache_sync(self):
@@ -439,7 +503,7 @@ class LevelsCog(commands.Cog):
 
         # Voice verlassen
         if before.channel and not after.channel:
-            removed = self._voice_joined.pop(key, None)
+            removed = self._stop_voice_tracking(key)
             if removed:
                 logger.info(f"[voice] {member} hat Voice verlassen → Tracking beendet.")
             return
@@ -449,7 +513,7 @@ class LevelsCog(commands.Cog):
             if after.deaf or after.self_deaf:
                 logger.info(f"[voice] {member} betritt Voice, ist aber TAUB → kein Tracking.")
             else:
-                self._voice_joined[key] = datetime.now(timezone.utc)
+                self._start_voice_tracking(key)
                 logger.info(f"[voice] {member} betritt Voice (nicht taub) → Tracking gestartet.")
             return
 
@@ -458,10 +522,10 @@ class LevelsCog(commands.Cog):
             was_deaf = before.deaf or before.self_deaf
             is_deaf = after.deaf or after.self_deaf
             if not was_deaf and is_deaf:
-                self._voice_joined.pop(key, None)
+                self._stop_voice_tracking(key)
                 logger.info(f"[voice] {member} wurde taub → Tracking gestoppt.")
             elif was_deaf and not is_deaf:
-                self._voice_joined[key] = datetime.now(timezone.utc)
+                self._start_voice_tracking(key)
                 logger.info(f"[voice] {member} nicht mehr taub → Tracking neu gestartet.")
 
     # Initialer Voice-Sync beim Bot-Start -----------------------------------
@@ -490,7 +554,7 @@ class LevelsCog(commands.Cog):
                             continue
                         key = f"{guild.id}:{member.id}"
                         if key not in self._voice_joined:
-                            self._voice_joined[key] = datetime.now(timezone.utc)
+                            self._start_voice_tracking(key)
                             count += 1
         logger.info(f"[voice] Initialer Sync abgeschlossen – {count} User werden getrackt.")
 
@@ -508,18 +572,18 @@ class LevelsCog(commands.Cog):
                 server_id, user_id = key.split(":", 1)
                 guild = self.bot.get_guild(int(server_id))
                 if not guild:
-                    self._voice_joined.pop(key, None)
+                    self._stop_voice_tracking(key)
                     continue
                 member = guild.get_member(int(user_id))
                 if not member or not member.voice or not member.voice.channel:
-                    self._voice_joined.pop(key, None)
+                    self._stop_voice_tracking(key)
                     continue
 
                 voice = member.voice
                 if guild.afk_channel and voice.channel.id == guild.afk_channel.id:
                     continue
                 if voice.deaf or voice.self_deaf:
-                    self._voice_joined.pop(key, None)
+                    self._stop_voice_tracking(key)
                     continue
 
                 if not VOICE_SOLO_XP_ENABLED:
@@ -541,11 +605,6 @@ class LevelsCog(commands.Cog):
 
             except Exception as e:
                 logger.error(f"[voice] Fehler bei {key}: {e}")
-
-        stale = [k for k, t in self._voice_joined.items() if (now - t).total_seconds() > 300]
-        for k in stale:
-            self._voice_joined.pop(k, None)
-            logger.info(f"[voice] Timeout für {k}")
 
     @voice_xp_task.before_loop
     async def before_voice_xp(self):
