@@ -32,6 +32,7 @@ WELCOME_MESSAGES = [
 
 class SetupWelcomerView(discord.ui.View):
     def __init__(self, guild_id: int, current_config: dict | None = None):
+
         super().__init__(timeout=300)
         self.guild_id = guild_id
         cfg = current_config or {}
@@ -131,6 +132,7 @@ class SetupWelcomerView(discord.ui.View):
 class WelcomerCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        logger.info("Welcomer Setup Loading")
 
     welcomer = app_commands.Group(
         name="welcomer",

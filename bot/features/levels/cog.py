@@ -322,6 +322,7 @@ class LevelsCog(commands.Cog):
         self._msg_cooldown: Dict[str, datetime] = {}
         self._voice_joined: Dict[str, datetime] = {}   # key = server_id:user_id
         self._event_counter = 0
+        self._initial_voice_sync_done = False
         self.flush_cache_task.start()
         self.voice_xp_task.start()
 
@@ -462,6 +463,36 @@ class LevelsCog(commands.Cog):
             elif was_deaf and not is_deaf:
                 self._voice_joined[key] = datetime.now(timezone.utc)
                 logger.info(f"[voice] {member} nicht mehr taub → Tracking neu gestartet.")
+
+    # Initialer Voice-Sync beim Bot-Start -----------------------------------
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._initial_voice_sync_done:
+            return
+        self._initial_voice_sync_done = True
+        logger.info("[voice] Führe initialen Voice-Sync durch...")
+        count = 0
+        for guild in self.bot.guilds:
+            for vc in guild.voice_channels:
+                # Falls Solo-XP deaktiviert ist, nur mit anderen tracken
+                if not VOICE_SOLO_XP_ENABLED:
+                    non_bot = [m for m in vc.members if not m.bot]
+                    if len(non_bot) < 2:
+                        continue
+
+                for member in vc.members:
+                    if member.bot:
+                        continue
+                    voice = member.voice
+                    if voice and not (voice.deaf or voice.self_deaf):
+                        # AFK-Channel ausschließen
+                        if guild.afk_channel and voice.channel.id == guild.afk_channel.id:
+                            continue
+                        key = f"{guild.id}:{member.id}"
+                        if key not in self._voice_joined:
+                            self._voice_joined[key] = datetime.now(timezone.utc)
+                            count += 1
+        logger.info(f"[voice] Initialer Sync abgeschlossen – {count} User werden getrackt.")
 
     # Voice XP Loop (jede Minute) -------------------------------------------
     @tasks.loop(seconds=60)
