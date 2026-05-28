@@ -83,10 +83,15 @@ class BackupResult:
 class RestoreResult:
     path: Path
     table_counts: dict[str, int]
+    skipped_counts: dict[str, int]
 
     @property
     def total_rows(self) -> int:
         return sum(self.table_counts.values())
+
+    @property
+    def skipped_rows(self) -> int:
+        return sum(self.skipped_counts.values())
 
 
 def get_backup_dir() -> Path:
@@ -149,6 +154,41 @@ def _chunk_rows(rows: list[dict[str, Any]], chunk_size: int = 500):
         yield rows[index:index + chunk_size]
 
 
+def _is_duplicate_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "23505" in text or "duplicate key value violates unique constraint" in text
+
+
+def _insert_rows_skip_duplicates(table_name: str, rows: list[dict[str, Any]]) -> tuple[int, int]:
+    supabase = get_supabase()
+    inserted = 0
+    skipped = 0
+
+    for chunk in _chunk_rows(rows):
+        if not chunk:
+            continue
+
+        try:
+            supabase.table(table_name).insert(chunk).execute()
+            inserted += len(chunk)
+            continue
+        except Exception as exc:
+            if not _is_duplicate_error(exc):
+                raise
+
+        for row in chunk:
+            try:
+                supabase.table(table_name).insert(row).execute()
+                inserted += 1
+            except Exception as exc:
+                if _is_duplicate_error(exc):
+                    skipped += 1
+                    continue
+                raise
+
+    return inserted, skipped
+
+
 def _resolve_backup_path(backup_name: str | None, backup_dir: Path | None = None) -> Path:
     target_dir = (backup_dir or get_backup_dir()).resolve()
     backups = list_database_backups(target_dir)
@@ -184,7 +224,7 @@ def restore_database_backup(
 ) -> RestoreResult:
     backup_path = _resolve_backup_path(backup_name, backup_dir)
     table_counts: dict[str, int] = {}
-    supabase = get_supabase()
+    skipped_counts: dict[str, int] = {}
 
     with zipfile.ZipFile(backup_path, "r") as archive:
         try:
@@ -206,16 +246,15 @@ def restore_database_backup(
             if not isinstance(rows, list):
                 raise ValueError(f"Ungueltiges Tabellenformat in {table_file}")
 
-            for chunk in _chunk_rows(rows):
-                if chunk:
-                    supabase.table(table_name).upsert(chunk).execute()
-            table_counts[table_name] = len(rows)
+            inserted, skipped = _insert_rows_skip_duplicates(table_name, rows)
+            table_counts[table_name] = inserted
+            skipped_counts[table_name] = skipped
 
     logger.info(
         f"[backup] Datenbank-Backup geladen: {backup_path} "
-        f"({sum(table_counts.values())} Zeilen)"
+        f"({sum(table_counts.values())} eingefuegt, {sum(skipped_counts.values())} uebersprungen)"
     )
-    return RestoreResult(path=backup_path, table_counts=table_counts)
+    return RestoreResult(path=backup_path, table_counts=table_counts, skipped_counts=skipped_counts)
 
 
 def create_database_backup(

@@ -196,8 +196,9 @@ class BackupCog(commands.Cog):
             description=(
                 f"Backup: `{result.path}`\n"
                 f"Tabellen: `{len(result.table_counts)}`\n"
-                f"Zeilen: `{result.total_rows}`\n"
-                "Modus: `upsert`"
+                f"Eingefuegt: `{result.total_rows}`\n"
+                f"Uebersprungen: `{result.skipped_rows}`\n"
+                "Modus: `auffuellen, doppelte Eintraege ueberspringen`"
             ),
             color=discord.Color.green(),
         )
