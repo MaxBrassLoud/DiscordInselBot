@@ -95,6 +95,15 @@ async def on_app_command_error(interaction: discord.Interaction, error):
 async def Ping(ctx):
     await ctx.send("Pong!")
 
+@bot.command()
+async def Sync(self, ctx: commands.Context):
+    """Synchronisiert die Slash-Commands global."""
+    from bot.utils.permissions import has_admin_rights
+    if has_admin_rights(ctx.author):
+        await ctx.bot.tree.sync()
+        await ctx.send("✅ Slash-Commands wurden global synchronisiert.")
+    else: pass
+
 
 async def main():
     # [FIX CRITICAL] keep_alive_async() statt keep_alive() nutzen
