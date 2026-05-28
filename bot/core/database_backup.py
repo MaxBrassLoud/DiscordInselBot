@@ -14,10 +14,10 @@ from bot.utils.logger import get_logger
 logger = get_logger("database_backup")
 
 DEFAULT_TABLES = [
+    "applications",
     "application_messages",
     "application_participants",
     "application_servers",
-    "applications",
     "birthdays",
     "events",
     "game_nights",
@@ -25,19 +25,46 @@ DEFAULT_TABLES = [
     "moderation_logs",
     "role_modules",
     "settings",
+    "tickets",
     "ticket_messages",
-    "ticket_module_roles",
     "ticket_modules",
+    "ticket_module_roles",
     "ticket_participants",
     "ticket_reminders",
     "ticket_servers",
-    "tickets",
     "user_levels",
     "voice_channels",
     "voice_creator_config",
+    "votings",
     "voting_responses",
     "voting_voter_log",
+]
+
+RESTORE_TABLE_ORDER = [
+    "applications",
+    "application_messages",
+    "application_participants",
+    "application_servers",
+    "birthdays",
+    "events",
+    "game_nights",
+    "minecraft_names",
+    "moderation_logs",
+    "role_modules",
+    "settings",
+    "tickets",
+    "ticket_messages",
+    "ticket_modules",
+    "ticket_module_roles",
+    "ticket_participants",
+    "ticket_reminders",
+    "ticket_servers",
+    "user_levels",
+    "voice_channels",
+    "voice_creator_config",
     "votings",
+    "voting_responses",
+    "voting_voter_log",
 ]
 
 
@@ -46,6 +73,16 @@ class BackupResult:
     path: Path
     table_counts: dict[str, int]
     created_at: datetime
+
+    @property
+    def total_rows(self) -> int:
+        return sum(self.table_counts.values())
+
+
+@dataclass
+class RestoreResult:
+    path: Path
+    table_counts: dict[str, int]
 
     @property
     def total_rows(self) -> int:
@@ -105,6 +142,80 @@ def _fetch_table_rows(table_name: str, page_size: int = 1000) -> list[dict[str, 
         start += page_size
 
     return rows
+
+
+def _chunk_rows(rows: list[dict[str, Any]], chunk_size: int = 500):
+    for index in range(0, len(rows), chunk_size):
+        yield rows[index:index + chunk_size]
+
+
+def _resolve_backup_path(backup_name: str | None, backup_dir: Path | None = None) -> Path:
+    target_dir = (backup_dir or get_backup_dir()).resolve()
+    backups = list_database_backups(target_dir)
+
+    if not backup_name:
+        if not backups:
+            raise FileNotFoundError("Es wurde kein Backup gefunden.")
+        return backups[0]
+
+    requested = Path(backup_name)
+    if requested.is_absolute():
+        candidate = requested.resolve()
+    else:
+        candidate = (target_dir / requested.name).resolve()
+
+    if target_dir not in candidate.parents and candidate != target_dir:
+        raise ValueError("Backup-Dateien muessen im konfigurierten Backup-Ordner liegen.")
+    if not candidate.exists() or candidate.suffix.lower() != ".zip":
+        raise FileNotFoundError(f"Backup nicht gefunden: {candidate}")
+    return candidate
+
+
+def _sort_tables_for_restore(tables: list[str]) -> list[str]:
+    known = [table for table in RESTORE_TABLE_ORDER if table in tables]
+    unknown = [table for table in tables if table not in RESTORE_TABLE_ORDER]
+    return known + unknown
+
+
+def restore_database_backup(
+    backup_name: str | None = None,
+    *,
+    backup_dir: Path | None = None,
+) -> RestoreResult:
+    backup_path = _resolve_backup_path(backup_name, backup_dir)
+    table_counts: dict[str, int] = {}
+    supabase = get_supabase()
+
+    with zipfile.ZipFile(backup_path, "r") as archive:
+        try:
+            metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
+            tables = metadata.get("tables") or []
+        except KeyError:
+            tables = [
+                name.removeprefix("tables/").removesuffix(".json")
+                for name in archive.namelist()
+                if name.startswith("tables/") and name.endswith(".json")
+            ]
+
+        for table_name in _sort_tables_for_restore(tables):
+            table_file = f"tables/{table_name}.json"
+            if table_file not in archive.namelist():
+                continue
+
+            rows = json.loads(archive.read(table_file).decode("utf-8"))
+            if not isinstance(rows, list):
+                raise ValueError(f"Ungueltiges Tabellenformat in {table_file}")
+
+            for chunk in _chunk_rows(rows):
+                if chunk:
+                    supabase.table(table_name).upsert(chunk).execute()
+            table_counts[table_name] = len(rows)
+
+    logger.info(
+        f"[backup] Datenbank-Backup geladen: {backup_path} "
+        f"({sum(table_counts.values())} Zeilen)"
+    )
+    return RestoreResult(path=backup_path, table_counts=table_counts)
 
 
 def create_database_backup(

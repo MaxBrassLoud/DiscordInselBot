@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 
 import discord
@@ -13,11 +14,34 @@ from bot.core.database_backup import (
     get_backup_keep_count,
     list_database_backups,
     prune_database_backups,
+    restore_database_backup,
 )
 from bot.utils.logger import get_logger
-from bot.utils.permissions import has_admin_rights
 
 logger = get_logger("backup_cog")
+
+
+def _is_mbl(interaction: discord.Interaction) -> bool:
+    return str(interaction.user.id) == str(os.getenv("MBL", "")).strip()
+
+
+async def backup_name_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if not _is_mbl(interaction):
+        return []
+
+    current_lower = current.lower()
+    backups = list_database_backups()
+    choices = []
+    for path in backups:
+        if current_lower and current_lower not in path.name.lower():
+            continue
+        choices.append(app_commands.Choice(name=path.name[:100], value=path.name))
+        if len(choices) >= 25:
+            break
+    return choices
 
 
 class BackupCog(commands.Cog):
@@ -45,6 +69,12 @@ class BackupCog(commands.Cog):
             self._last_error = None
             return result
 
+    async def _run_restore(self, backup_name: str | None):
+        async with self._backup_lock:
+            result = await asyncio.to_thread(restore_database_backup, backup_name)
+            self._last_error = None
+            return result
+
     @tasks.loop(hours=24)
     async def automatic_backup(self):
         try:
@@ -62,7 +92,7 @@ class BackupCog(commands.Cog):
         send_file="Wenn aktiviert, wird die Backup-ZIP direkt in Discord hochgeladen."
     )
     async def backup_create(self, interaction: discord.Interaction, send_file: bool = False):
-        if not has_admin_rights(interaction):
+        if not _is_mbl(interaction):
             await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
             return
 
@@ -99,7 +129,7 @@ class BackupCog(commands.Cog):
 
     @backup.command(name="status")
     async def backup_status(self, interaction: discord.Interaction):
-        if not has_admin_rights(interaction):
+        if not _is_mbl(interaction):
             await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
             return
 
@@ -126,6 +156,52 @@ class BackupCog(commands.Cog):
             color=discord.Color.blue(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @backup.command(name="load")
+    @app_commands.describe(
+        backup_name="Name der Backup-ZIP aus dem Backup-Ordner. Leer lassen fuer das neueste Backup.",
+        confirm="Zum Laden exakt LADEN eingeben.",
+    )
+    @app_commands.autocomplete(backup_name=backup_name_autocomplete)
+    async def backup_load(
+        self,
+        interaction: discord.Interaction,
+        confirm: str,
+        backup_name: str = "",
+    ):
+        if not _is_mbl(interaction):
+            await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
+            return
+        if confirm != "LADEN":
+            await interaction.response.send_message(
+                "Bitte bestaetige den Restore mit `LADEN`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            result = await self._run_restore(backup_name or None)
+        except Exception as exc:
+            self._last_error = str(exc)
+            await interaction.followup.send(
+                f"Backup konnte nicht geladen werden: `{exc}`",
+                ephemeral=True,
+            )
+            return
+
+        self._last_error = None
+        embed = discord.Embed(
+            title="Datenbank-Backup geladen",
+            description=(
+                f"Backup: `{result.path}`\n"
+                f"Tabellen: `{len(result.table_counts)}`\n"
+                f"Zeilen: `{result.total_rows}`\n"
+                "Modus: `upsert`"
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
