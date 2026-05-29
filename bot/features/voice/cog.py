@@ -1709,6 +1709,66 @@ class VoiceCog(commands.Cog):
         view = VoiceSetupView(guild_id=interaction.guild_id, bot=self.bot)
         await interaction.response.send_message(embed=view._build_embed(), view=view, ephemeral=True)
 
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ):
+        server_id     = str(member.guild.id)
+        guild         = member.guild
+        cfg           = _get_config(server_id)
+        if not cfg:
+            return
+
+        creator_ch_id = cfg.get("channel_id")
+
+        # ── 1. Erstell-Kanal betreten ─────────────────────────────────────────
+        if after.channel and str(after.channel.id) == creator_ch_id:
+            creator_role_ids = set(_parse_role_ids(cfg.get("creator_role_ids", "")))
+            if creator_role_ids:
+                user_role_ids = {str(r.id) for r in member.roles}
+                if not (member.guild_permissions.administrator or creator_role_ids & user_role_ids):
+                    try:
+                        await member.move_to(None)
+                    except Exception:
+                        pass
+                    try:
+                        await member.send(embed=discord.Embed(
+                            title="❌ Keine Berechtigung",
+                            description="Du hast nicht die nötige Rolle um einen eigenen Voice-Kanal zu erstellen.",
+                            color=discord.Color.red(),
+                        ))
+                    except discord.Forbidden:
+                        pass
+                    return
+            await _create_voice_channels(guild=guild, member=member, cfg=cfg, bot=self.bot)
+            return
+
+        # ── 2. Warteraum betreten ─────────────────────────────────────────────
+        if after.channel and str(after.channel.id) != creator_ch_id:
+            vc_row = _get_vc_by_wait(str(after.channel.id))
+            if vc_row:
+                await self._handle_waitroom_join(guild, member, vc_row, cfg)
+
+        # ── 3. Hauptkanal verlassen → Empty-Check ──────────────────────────────
+        #
+        # after.channel is None bedeutet auch, dass ein User den Voice-Kanal
+        # selbst verlassen hat. Deshalb darf hier keine Sperre gesetzt werden.
+        # Explizite Kicks/Bans über das Panel entziehen Rollen und setzen Sperren
+        # direkt im jeweiligen Button-Handler.
+        #
+        if before.channel and str(before.channel.id) != creator_ch_id:
+            vc_row = _get_vc_by_main(str(before.channel.id))
+            if vc_row:
+                await self._check_empty(guild, vc_row)
+                return
+
+            # Warteraum verlassen
+            vc_row = _get_vc_by_wait(str(before.channel.id))
+            if vc_row:
+                await self._check_empty(guild, vc_row)
 
     async def _handle_waitroom_join(
         self, guild: discord.Guild, member: discord.Member, vc_row: dict, cfg: dict
