@@ -12,7 +12,7 @@ def _setup_root_logger():
     _initialized = True
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)  # oder INFO – wie du magst
+    root.setLevel(logging.WARNING)  # oder INFO – wie du magst
 
     # Ordner anlegen
     log_dir = "Log"
