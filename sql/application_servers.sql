@@ -16,3 +16,5 @@ create table public.application_servers (
   panel_message text null,
   constraint application_servers_pkey primary key (server_id)
 ) TABLESPACE pg_default;
+
+ALTER TABLE application_servers ADD COLUMN acceptance_message TEXT;

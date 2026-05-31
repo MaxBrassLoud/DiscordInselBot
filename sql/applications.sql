@@ -33,3 +33,5 @@ where
 create unique INDEX IF not exists idx_applications_external_channel on public.applications using btree (server_id, external_channel_id) TABLESPACE pg_default
 where
   (external_channel_id is not null);
+
+ALTER TABLE applications ADD COLUMN control_message_id TEXT;
