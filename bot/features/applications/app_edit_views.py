@@ -1,10 +1,11 @@
 """
 app_edit_views.py  –  /bewerbung_bearbeiten Command Views
-==========================================================
+========================================================
 ÄNDERUNGEN:
   - Panel-Kanal wechseln: alte Nachricht löschen, neue im neuen Kanal senden
   - Prominenter "💾 Alle Änderungen speichern"-Button in der Haupt-View
   - AppChannelSettingsView: Panel-Kanal-Wechsel mit automatischem Umzug
+  - acceptance_message im Text-Modal hinzugefügt
 """
 
 from __future__ import annotations
@@ -64,6 +65,9 @@ def _overview_embed(cfg: dict) -> discord.Embed:
     welcome = cfg.get("welcome_message") or ""
     if welcome:
         embed.add_field(name="💬 Ticket-Embed-Text", value=welcome[:200] + ("…" if len(welcome) > 200 else ""), inline=False)
+    acceptance = cfg.get("acceptance_message") or ""
+    if acceptance:
+        embed.add_field(name="🎉 Annahme-Text", value=acceptance[:200] + ("…" if len(acceptance) > 200 else ""), inline=False)
     return embed
 
 
@@ -568,7 +572,7 @@ class AppRoleSettingsView(discord.ui.View):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEXTE BEARBEITEN (Modal)
+# TEXTE BEARBEITEN (Modal) – MIT acceptance_message
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
@@ -588,6 +592,12 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
         required=False, max_length=1000,
         placeholder="📋 Willkommen! Schreibe hier deine Bewerbung…",
     )
+    acceptance_msg = discord.ui.TextInput(
+        label="Annahme-Text (im Ticket, {player}, {mc})",
+        style=discord.TextStyle.paragraph,
+        required=False, max_length=1000,
+        placeholder="🎉 Herzlichen Glückwunsch {player}! Du wurdest angenommen...",
+    )
 
     def __init__(self, cfg: dict, parent: "AppEditMainView"):
         super().__init__()
@@ -596,6 +606,7 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
         self.panel_msg.default      = (cfg.get("panel_message") or cfg.get("welcome_message") or "")[:800]
         self.welcome_msg.default     = (cfg.get("welcome_message") or "")[:1000]
         self.instruction_msg.default = (cfg.get("instruction_message") or "")[:1000]
+        self.acceptance_msg.default  = (cfg.get("acceptance_message") or "")[:1000]
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -603,6 +614,7 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
                 "panel_message":       self.panel_msg.value,
                 "welcome_message":     self.welcome_msg.value,
                 "instruction_message": self.instruction_msg.value or "",
+                "acceptance_message":  self.acceptance_msg.value or "",
             }).eq("server_id", self._parent.guild_id).execute()
 
             await interaction.response.send_message(
@@ -611,7 +623,8 @@ class AppTextsModal(discord.ui.Modal, title="Texte bearbeiten"):
                     description=(
                         f"**Panel-Text:**\n{self.panel_msg.value[:300]}\n\n"
                         f"**Ticket-Embed-Text:**\n{self.welcome_msg.value[:300]}\n\n"
-                        f"**Anweisungs-Text:**\n{(self.instruction_msg.value or '–')[:300]}"
+                        f"**Anweisungs-Text:**\n{(self.instruction_msg.value or '–')[:300]}\n\n"
+                        f"**Annahme-Text:**\n{(self.acceptance_msg.value or '–')[:300]}"
                     ),
                     color=discord.Color.green(),
                 ),

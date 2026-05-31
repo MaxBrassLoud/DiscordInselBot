@@ -6,7 +6,8 @@ from discord import app_commands
 
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
-from .views import ApplicationSetupView, ApplicationEditView, ApplicationPanelView, ApplicationChannelView
+from .views import ApplicationSetupView, ApplicationPanelView, ApplicationChannelView
+from .app_edit_views import AppEditMainView
 from .manager import (
     ApplicationManager, load_application,
     mark_app_message_deleted, append_app_message_edit,
@@ -43,6 +44,7 @@ class ApplicationsCog(commands.Cog):
                 view = ApplicationChannelView(
                     app_id=app["app_id"], server_id=app["server_id"],
                     applicant_id=app["creator_id"], cfg=cfg, bot=self.bot,
+                    status=app.get("status", "open"),
                 )
                 if local and local.get("claimed_by"):
                     view._claimed_by = local["claimed_by"]
@@ -171,7 +173,6 @@ class ApplicationsCog(commands.Cog):
             return
 
         from bot.core.supabase_client import get_supabase
-        from bot.features.applications.app_edit_views import AppEditMainView
         import os
 
         sb = get_supabase()
@@ -201,7 +202,6 @@ class ApplicationsCog(commands.Cog):
         await interaction.response.send_message(
             embed=embed, view=view, ephemeral=True
         )
-
 
 
 async def setup(bot: commands.Bot):

@@ -6,6 +6,9 @@ Erweitert um:
   - mark_app_message_deleted() – Lösch-Markierung
   - append_app_message_edit()  – Bearbeitungs-History
   - load_app_participants()    – Teilnehmer-Tracking
+  - control_message_id für die Control-Nachricht im Ticket
+  - acceptance_message im Server-Config
+  - close_application_channel() zum Schließen nach Annahme
 
 Neue Supabase-Spalten (einmalig ausführen):
     ALTER TABLE application_messages ADD COLUMN IF NOT EXISTS is_deleted    BOOLEAN     DEFAULT FALSE;
@@ -28,6 +31,9 @@ Neue Supabase-Spalten (einmalig ausführen):
     );
     CREATE INDEX IF NOT EXISTS idx_app_participants
         ON application_participants (server_id, app_id);
+
+    ALTER TABLE application_servers ADD COLUMN acceptance_message TEXT;
+    ALTER TABLE applications ADD COLUMN control_message_id TEXT;
 """
 
 from __future__ import annotations
@@ -66,8 +72,9 @@ def save_application(server_id: str, app_id: int, data: dict):
         "rejection_reason":  data.get("rejection_reason"),
         "creator_name":      data.get("creator_name"),
         "closed_by":         data.get("closed_by"),
+        "control_message_id": data.get("control_message_id"),   # NEU
     }
-    row = {k: v for k, v in row.items() if v is not None or k in ("claimed_by", "closed_at", "rejection_reason", "closed_by")}
+    row = {k: v for k, v in row.items() if v is not None or k in ("claimed_by", "closed_at", "rejection_reason", "closed_by", "control_message_id")}
 
     existing = (
         supabase.table("applications")
@@ -457,6 +464,7 @@ class ApplicationManager:
         applicant:      discord.Member,
         minecraft_name: str,
         cfg:            dict,
+        bot:            discord.Client,
     ) -> tuple[discord.TextChannel, int]:
         supabase  = get_supabase()
         server_id = str(guild.id)
@@ -516,6 +524,22 @@ class ApplicationManager:
             avatar_url=str(applicant.display_avatar.url) if applicant.display_avatar else None,
         )
 
+        # Control-Nachricht (Buttons) senden und ID speichern
+        from .views import ApplicationChannelView   # <-- Lazy import
+        view = ApplicationChannelView(
+            app_id=app_id,
+            server_id=server_id,
+            applicant_id=str(applicant.id),
+            cfg=cfg,
+            bot=bot,
+            status="open",
+        )
+        # Temporäres Embed für die Control-Nachricht
+        control_embed = discord.Embed(title="Bewerbung", description="Verwaltung der Bewerbung", color=discord.Color.blurple())
+        control_msg = await channel.send(embed=control_embed, view=view)
+        # Control-Message-ID speichern
+        update_application(server_id, app_id, {"control_message_id": str(control_msg.id)})
+
         return channel, app_id
 
     @staticmethod
@@ -525,6 +549,7 @@ class ApplicationManager:
         app:      dict,
         acceptor: discord.Member,
         cfg:      dict,
+        bot:      discord.Client,
     ):
         supabase  = get_supabase()
         server_id = app["server_id"]
@@ -562,11 +587,41 @@ class ApplicationManager:
             avatar_url=str(acceptor.display_avatar.url) if acceptor.display_avatar else None,
         )
 
+        # Acceptance-Nachricht im Ticket senden
+        acceptance_text = cfg.get("acceptance_message", "")
+        if acceptance_text and applicant:
+            text = acceptance_text.replace("{player}", applicant.mention).replace("{mc}", app.get("minecraft_name", ""))
+            embed = discord.Embed(
+                title="✅ Bewerbung angenommen",
+                description=text,
+                color=discord.Color.green(),
+            )
+            await channel.send(embed=embed)
+
+        # Control-Message auf "accepted"-Status umstellen
+        control_msg_id = app.get("control_message_id")
+        if control_msg_id:
+            try:
+                control_msg = await channel.fetch_message(int(control_msg_id))
+                from .views import ApplicationChannelView   # <-- Lazy import
+                new_view = ApplicationChannelView(
+                    app_id=app_id,
+                    server_id=server_id,
+                    applicant_id=app["creator_id"],
+                    cfg=cfg,
+                    bot=bot,
+                    status="accepted",
+                )
+                await control_msg.edit(view=new_view)
+            except Exception as e:
+                logger.warning(f"[accept] Konnte Control-Nachricht nicht editieren: {e}")
+
+        # DM mit Log (optional)
         if applicant:
             try:
                 messages   = load_app_messages(server_id, app_id)
                 html_bytes = build_app_log_html(app, messages, acceptor.display_name)
-                log_file   = discord.File(fp=__import__('io').BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
+                log_file   = discord.File(io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="🎉 Deine Bewerbung wurde angenommen!",
                     description=(
@@ -582,10 +637,7 @@ class ApplicationManager:
             except Exception as e:
                 logger.warning(f"[accept] DM fehlgeschlagen: {e}")
 
-        try:
-            await channel.delete(reason=f"Bewerbung #{app_id} angenommen von {acceptor.display_name}")
-        except Exception as e:
-            logger.error(f"[accept] Kanal-Löschung: {e}")
+        # KEIN channel.delete() mehr
 
     @staticmethod
     async def reject_application(
@@ -630,12 +682,9 @@ class ApplicationManager:
         if applicant:
             try:
                 messages = load_app_messages(server_id, app_id)
-                # [FIX MEDIUM] Kopie erstellen statt app-Dict direkt zu mutieren.
-                # Vorher: app["rejection_reason"] = reason  <-- mutierte das Argument
                 app_for_log = {**app, "rejection_reason": reason}
                 html_bytes  = build_app_log_html(app_for_log, messages, rejector.display_name)
-                log_file    = discord.File(fp=__import__('io').BytesIO(html_bytes),
-                                           filename=f"bewerbung-{app_id}-log.html")
+                log_file    = discord.File(io.BytesIO(html_bytes), filename=f"bewerbung-{app_id}-log.html")
                 embed = discord.Embed(
                     title="❌ Deine Bewerbung wurde abgelehnt",
                     description=(
@@ -657,3 +706,17 @@ class ApplicationManager:
             await channel.delete(reason=f"Bewerbung #{app_id} abgelehnt von {rejector.display_name}")
         except Exception as e:
             logger.error(f"[reject] Kanal-Löschung: {e}")
+
+    @staticmethod
+    async def close_application_channel(
+        guild:    discord.Guild,
+        channel:  discord.TextChannel,
+        app:      dict,
+        closer:   discord.Member,
+    ):
+        """Schließt das Ticket (löscht den Kanal) nach Annahme."""
+        try:
+            await channel.send(f"🔒 Ticket wird von {closer.mention} geschlossen.")
+        except:
+            pass
+        await channel.delete(reason=f"Bewerbung #{app['app_id']} nach Annahme geschlossen von {closer.display_name}")

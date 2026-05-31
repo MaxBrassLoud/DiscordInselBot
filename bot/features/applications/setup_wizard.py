@@ -2,17 +2,6 @@
 bot/features/applications/setup_wizard.py
 ==========================================
 Schritt-für-Schritt Setup-Wizard für das Bewerbungs-System via Discord.
-
-FLOW (4 Schritte):
-  /bewerbung_setup
-    → Step 1: Panel-Kanal + Bewerbungs-Kategorie
-    → Step 2: Rollen (Neuling, Mitglied, Staff)
-    → Step 3: Optionale Kanäle + Texte & Cooldown
-    → Step 4: Bestätigung & Panel senden
-
-Ersetze die bestehende ApplicationSetupView in views.py durch:
-    from .setup_wizard import start_application_wizard
-    await start_application_wizard(interaction, bot, existing_config)
 """
 
 from __future__ import annotations
@@ -26,6 +15,19 @@ logger = get_logger("applications.wizard")
 
 STEP_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000")
+
+_DEFAULT_WELCOME = (
+    "Willkommen {player}! Schreibe einen kurzen Text in dem du uns mitteilst "
+    "wie wir dich nennen dürfen, was du gerne in Minecraft machst, "
+    "wie lange du schon Minecraft spielst und warum du unserem Clan beitreten möchtest. 😊"
+)
+_DEFAULT_INSTRUCTION = (
+    "📋 **Willkommen in deinem Bewerbungskanal!**\n"
+    "Schreibe hier deine Bewerbung. Unser Staff wird sie so schnell wie möglich bearbeiten. "
+    "Bitte sei geduldig und beantworte alle Fragen ehrlich. Viel Erfolg! 🍀"
+)
+_DEFAULT_PANEL_MESSAGE = "Klicke auf den Button um deine Bewerbung einzureichen."
+_DEFAULT_ACCEPTANCE = "🎉 Herzlichen Glückwunsch {player}! Deine Bewerbung wurde angenommen. Ein Teammitglied wird dich bei Gelegenheit in den Mitgliederbereich einladen."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -65,7 +67,6 @@ def _build_embed(
 
 
 async def _save_config(guild_id: str, state: dict):
-    """Speichert oder aktualisiert die Bewerbungs-Konfiguration in Supabase."""
     supabase = get_supabase()
     data = {
         "server_id":                str(guild_id),
@@ -81,6 +82,7 @@ async def _save_config(guild_id: str, state: dict):
         "rejection_cooldown_hours": int(state.get("rejection_cooldown_hours", 24)),
         "web_admin_role_ids":       ",".join(state.get("web_admin_role_ids", [])),
         "panel_message":            state.get("panel_message", state.get("welcome_message", _DEFAULT_WELCOME)),
+        "acceptance_message":       state.get("acceptance_message", _DEFAULT_ACCEPTANCE),
     }
     existing = supabase.table("application_servers").select("server_id").eq("server_id", str(guild_id)).execute()
     if existing.data:
@@ -88,19 +90,6 @@ async def _save_config(guild_id: str, state: dict):
     else:
         data["app_counter"] = 0
         supabase.table("application_servers").insert(data).execute()
-
-
-_DEFAULT_WELCOME = (
-    "Willkommen {player}! Schreibe einen kurzen Text in dem du uns mitteilst "
-    "wie wir dich nennen dürfen, was du gerne in Minecraft machst, "
-    "wie lange du schon Minecraft spielst und warum du unserem Clan beitreten möchtest. 😊"
-)
-_DEFAULT_INSTRUCTION = (
-    "📋 **Willkommen in deinem Bewerbungskanal!**\n"
-    "Schreibe hier deine Bewerbung. Unser Staff wird sie so schnell wie möglich bearbeiten. "
-    "Bitte sei geduldig und beantworte alle Fragen ehrlich. Viel Erfolg! 🍀"
-)
-_DEFAULT_PANEL_MESSAGE = "Klicke auf den Button um deine Bewerbung einzureichen."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -389,7 +378,7 @@ class AppWizardStep3View(discord.ui.View):
                 "**📋 Log-Kanal:** Links zu allen Bewerbungen.\n"
                 "**⛏️ MC-Log:** Minecraft-Namen der Bewerber werden hier gepostet.\n"
                 "**🌐 Web-Admin:** Diese Rollen sehen alle Bewerbungen im Dashboard.\n"
-                "**✏️ Texte:** Willkommens- und Anweisungstext anpassen."
+                "**✏️ Texte:** Willkommens-, Anweisungs-, Annahme- und Panel-Text anpassen."
             ),
             fields=[
                 ("📋 Log-Kanal",      f"<#{log}>" if log else "*nicht gesetzt*",                              True),
@@ -444,6 +433,12 @@ class AppTextsModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten"):
         required=False, max_length=1000,
         placeholder="z.B. 📋 Willkommen! Schreibe hier deine Bewerbung...",
     )
+    acceptance_msg = discord.ui.TextInput(
+        label="Annahme-Text (im Ticket, {player}, {mc})",
+        style=discord.TextStyle.paragraph,
+        required=False, max_length=1000,
+        placeholder="🎉 Herzlichen Glückwunsch {player}! Du wurdest angenommen...",
+    )
     cooldown = discord.ui.TextInput(
         label="Cooldown nach Ablehnung (Stunden, 0 = keiner)",
         placeholder="24",
@@ -456,12 +451,14 @@ class AppTextsModal(discord.ui.Modal, title="Texte & Cooldown bearbeiten"):
         self.panel_msg.default      = parent.state.get("panel_message", _DEFAULT_PANEL_MESSAGE)
         self.welcome_msg.default     = parent.state.get("welcome_message", _DEFAULT_WELCOME)
         self.instruction_msg.default = parent.state.get("instruction_message", _DEFAULT_INSTRUCTION)
+        self.acceptance_msg.default  = parent.state.get("acceptance_message", _DEFAULT_ACCEPTANCE)
         self.cooldown.default        = str(parent.state.get("rejection_cooldown_hours", 24))
 
     async def on_submit(self, interaction: discord.Interaction):
         self._parent.state["panel_message"]            = self.panel_msg.value
         self._parent.state["welcome_message"]          = self.welcome_msg.value
         self._parent.state["instruction_message"]      = self.instruction_msg.value or ""
+        self._parent.state["acceptance_message"]       = self.acceptance_msg.value or ""
         try:
             self._parent.state["rejection_cooldown_hours"] = max(0, int(self.cooldown.value))
         except ValueError:
@@ -544,10 +541,8 @@ class AppWizardStep4View(discord.ui.View):
             guild_id = str(guild.id)
             state    = self.state
 
-            # ── Konfiguration speichern ───────────────────────────────────────
             await _save_config(guild_id, state)
 
-            # ── Panel senden ──────────────────────────────────────────────────
             panel_channel = guild.get_channel(int(state["panel_channel_id"]))
             if not panel_channel:
                 await interaction.followup.send("❌ Panel-Kanal nicht gefunden!", ephemeral=True)
@@ -558,13 +553,11 @@ class AppWizardStep4View(discord.ui.View):
             panel_view   = ApplicationPanelView(bot=self.bot)
             panel_msg    = await panel_channel.send(embed=embed, view=panel_view)
 
-            # Panel-Message-ID speichern
             supabase = get_supabase()
             supabase.table("application_servers").update({
                 "panel_message_id": str(panel_msg.id),
             }).eq("server_id", guild_id).execute()
 
-            # ── Erfolg ────────────────────────────────────────────────────────
             success_embed = discord.Embed(
                 title="🎉 Bewerbungs-System eingerichtet!",
                 description=(
@@ -611,10 +604,6 @@ async def start_application_wizard(
     bot: discord.Client,
     existing_config: dict | None = None,
 ) -> None:
-    """
-    Startet den Bewerbungs-Setup-Wizard.
-    Wenn existing_config vorhanden, werden die Felder vorausgefüllt.
-    """
     state: dict = {
         "panel_channel_id":         None,
         "category_id":              None,
@@ -627,6 +616,7 @@ async def start_application_wizard(
         "welcome_message":          _DEFAULT_WELCOME,
         "instruction_message":      _DEFAULT_INSTRUCTION,
         "panel_message":            _DEFAULT_PANEL_MESSAGE,
+        "acceptance_message":       _DEFAULT_ACCEPTANCE,
         "rejection_cooldown_hours": 24,
     }
 
@@ -634,7 +624,7 @@ async def start_application_wizard(
         for key in [
             "panel_channel_id", "category_id", "newbie_role_id",
             "member_role_id", "log_channel_id", "mc_log_channel_id",
-            "welcome_message", "instruction_message", "panel_message",
+            "welcome_message", "instruction_message", "panel_message", "acceptance_message",
         ]:
             if existing_config.get(key):
                 state[key] = existing_config[key]
