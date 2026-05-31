@@ -8,8 +8,8 @@ PUNKTE:
   • Jede Minute im Voice Chat:     +2 Punkte (nur wenn NICHT taub; Stumm ist erlaubt)
   • Jede Reaktion auf Nachrichten: +1 Punkt  (wer reagiert bekommt den Punkt)
 
-LEVEL-FORMEL (exponentiell):
-  XP für Level N = 10 * (N ^ 1.8)
+LEVEL-FORMEL (exponentiell, kumulativ, auf 50 gerundet):
+  XP für Level N = 65 * (N ^ 1.94)
 
 COMMANDS:
   /level info [@user]  – Level-Card anzeigen
@@ -51,9 +51,6 @@ REACTION_XP = 1
 
 VOICE_SOLO_XP_ENABLED = True        # True = auch allein im Voice XP sammeln, False = nur mit min. 1 anderen Person
 
-XP_BASE = 10
-XP_EXPONENT = 1.1
-
 FLUSH_INTERVAL_SECONDS = 600
 FLUSH_EVENT_THRESHOLD = 200
 VOICE_TRACKING_CACHE_FILE = Path(__file__).resolve().parents[3] / "data" / "voice_tracking_cache.json"
@@ -70,31 +67,42 @@ def _delete_voice_tracking_cache_file():
 atexit.register(_delete_voice_tracking_cache_file)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEVEL MATH
+# LEVEL MATH (NEU: kumulativ, 65 * level^1.94, gerundet auf 50)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def xp_for_level(level: int) -> int:
+    """Kumulative XP, die benötigt werden, um Level `level` zu erreichen."""
     if level <= 0:
         return 0
-    return math.ceil(XP_BASE * (level ** XP_EXPONENT))
-
-def total_xp_for_level(level: int) -> int:
-    return sum(xp_for_level(lvl) for lvl in range(1, level + 1))
+    raw = 65 * (level ** 1.94)
+    return round(raw / 50) * 50
 
 def level_from_xp(xp: int) -> int:
-    level = 0
-    needed = 0
-    while needed + xp_for_level(level + 1) <= xp:
+    """Ermittelt das aktuelle Level aus der Gesamt-XP."""
+    if xp <= 0:
+        return 0
+    # Erste Schätzung über die inverse Funktion
+    level = int((xp / 65) ** (1 / 1.94))
+    # Wegen Rundung auf 50 korrigieren
+    while xp >= xp_for_level(level + 1):
         level += 1
-        needed += xp_for_level(level)
+    while level > 0 and xp < xp_for_level(level):
+        level -= 1
     return level
 
 def xp_progress(xp: int) -> tuple[int, int, int]:
+    """
+    Gibt zurück:
+        - aktuelles Level
+        - XP innerhalb des aktuellen Levels
+        - benötigte XP bis zum nächsten Level
+    """
     level = level_from_xp(xp)
-    spent = total_xp_for_level(level)
-    xp_in_level = xp - spent
-    xp_for_next_level = xp_for_level(level + 1)
-    return level, xp_in_level, xp_for_next_level
+    current_level_xp = xp_for_level(level)       # kumulative XP bis Level
+    next_level_xp = xp_for_level(level + 1)      # kumulative XP bis Level+1
+    xp_in_level = xp - current_level_xp
+    xp_needed = next_level_xp - current_level_xp
+    return level, xp_in_level, xp_needed
 
 def progress_bar(current: int, total: int, length: int = 15) -> str:
     filled = int(length * current / max(total, 1))
