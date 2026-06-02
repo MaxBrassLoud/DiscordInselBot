@@ -186,6 +186,39 @@ def _upsert_xp(
     _dirty_keys.add(key)
     return old_level, new_level, current["xp"]
 
+def _set_xp(server_id: str, user_id: str, new_xp: int) -> tuple[int, int, int]:
+    """
+    Setzt die XP eines Users absolut auf `new_xp` (mindestens 0).
+    Gibt zurück: (altes_Level, neues_Level, neue_XP)
+    """
+    key = f"{server_id}:{user_id}"
+    now = datetime.now(timezone.utc).isoformat()
+    current = _get_cached_user(server_id, user_id)
+
+    if current is None:
+        new_level = level_from_xp(max(0, new_xp))
+        current = {
+            "user_id": user_id,
+            "server_id": server_id,
+            "xp": max(0, new_xp),
+            "level": new_level,
+            "messages": 0,
+            "voice_minutes": 0,
+            "reactions": 0,
+            "last_msg_at": None,
+            "updated_at": now,
+        }
+        _user_cache[key] = current
+        old_level = 0
+    else:
+        old_level = current.get("level", 0)
+        current["xp"] = max(0, new_xp)
+        current["level"] = level_from_xp(current["xp"])
+        current["updated_at"] = now
+
+    _dirty_keys.add(key)
+    return old_level, current["level"], current["xp"]
+
 def _get_level_channel(server_id: str) -> Optional[str]:
     try:
         r = get_supabase().table("settings") \
@@ -704,24 +737,56 @@ class LevelsCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
 
-    @level.command(name="xp")
-    @app_commands.describe(mitglied="User", menge="Menge (+/-)")
-    async def level_xp(self, interaction: discord.Interaction, mitglied: discord.Member, menge: int):
+    @level.command(name="editxp", description="[Admin] XP hinzufügen, wegnehmen oder absolut setzen.")
+    @app_commands.describe(
+        mitglied="User",
+        wert="XP-Wert (positiv)",
+        aktion="add = hinzufügen, take = wegnehmen, set = absolut setzen"
+    )
+    @app_commands.choices(aktion=[
+        app_commands.Choice(name="add (hinzufügen)", value="add"),
+        app_commands.Choice(name="take (wegnehmen)", value="take"),
+        app_commands.Choice(name="set (absolut setzen)", value="set")
+    ])
+    async def level_editxp(
+            self,
+            interaction: discord.Interaction,
+            mitglied: discord.Member,
+            wert: int,
+            aktion: app_commands.Choice[str]
+    ):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
+        if wert < 0:
+            await interaction.response.send_message(
+                "❌ Der Wert muss positiv sein (die Aktion bestimmt, ob add/take/set).", ephemeral=True)
+            return
         if not await self._safe_defer(interaction, ephemeral=True):
             return
-        old, new, xp = _upsert_xp(str(interaction.guild_id), str(mitglied.id), menge)
-        direction = "hinzugefügt" if menge >= 0 else "entzogen"
-        embed = discord.Embed(title="⭐ XP angepasst",
-                              description=f"{abs(menge)} XP {direction} bei {mitglied.display_name}.",
-                              color=discord.Color.green() if menge >= 0 else discord.Color.orange())
+
+        if aktion.value == "add":
+            delta = wert
+            old, new, xp = _upsert_xp(str(interaction.guild_id), str(mitglied.id), delta)
+            titel = "XP hinzugefügt"
+            beschreibung = f"{wert} XP zu {mitglied.display_name} hinzugefügt."
+        elif aktion.value == "take":
+            delta = -wert
+            old, new, xp = _upsert_xp(str(interaction.guild_id), str(mitglied.id), delta)
+            titel = "XP weggenommen"
+            beschreibung = f"{wert} XP von {mitglied.display_name} weggenommen."
+        else:  # set
+            old, new, xp = _set_xp(str(interaction.guild_id), str(mitglied.id), wert)
+            titel = "XP gesetzt"
+            beschreibung = f"XP von {mitglied.display_name} auf **{xp:,}** gesetzt."
+
+        embed = discord.Embed(title=f"⭐ {titel}", description=beschreibung, color=discord.Color.green())
         embed.add_field(name="Neue XP", value=f"{xp:,}", inline=True)
         embed.add_field(name="Level", value=str(new), inline=True)
         if new > old:
             embed.add_field(name="🎉", value=f"Level Up! {old} → {new}", inline=False)
             await self._notify_levelup(interaction.guild, mitglied, old, new, xp)
+
         await self._flush_cache_async()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
