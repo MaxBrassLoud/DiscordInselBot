@@ -752,18 +752,23 @@ class CloseConfirmView(discord.ui.View):
         if not self._is_staff(interaction.user):
             await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+
+        # 🔧 FIX: Sofortige Bestätigung (bevor der Kanal gelöscht wird)
+        await interaction.response.send_message("🔒 Ticket wird geschlossen...", ephemeral=True)
+
         app = load_application(self.server_id, self.app_id)
         if not app:
+            # Nachricht wurde bereits gesendet, aber wir können noch eine followup senden (Kanal existiert noch)
             await interaction.followup.send("Bewerbung nicht gefunden.", ephemeral=True)
             return
+
         await ApplicationManager.close_application_channel(
             guild=interaction.guild,
             channel=self.channel,
             app=app,
             closer=interaction.user,
         )
-        await interaction.followup.send("Ticket wird geschlossen...", ephemeral=True)
+        # Kein weiteres followup nötig, da die Bestätigung bereits erfolgt ist
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
