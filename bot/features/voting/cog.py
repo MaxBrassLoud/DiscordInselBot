@@ -1,13 +1,14 @@
 """
 bot/features/voting/cog.py
 ===========================
-Abstimmungssystem – nur für den Bot-Inhaber (MBL).
+Abstimmungssystem – nur für den Bot-Inhaber (MBL) + Admins dürfen Links versenden.
 
 FEATURES:
   - /abstimmung erstellen   – Startet eine neue Abstimmung aus einer JSON-Datei
   - /abstimmung status      – Zeigt aktive Abstimmungen
   - /abstimmung beenden     – Beendet eine Abstimmung
-  - /abstimmung link        – Sendet den Abstimmungs-Link
+  - /abstimmung link        – Sendet den Abstimmungs-Link (auch für Admins)
+  - /abstimmung beispiel    – Zeigt ein Beispiel-JSON
 
 SUPABASE SQL (einmalig ausführen):
     CREATE TABLE IF NOT EXISTS votings (
@@ -28,7 +29,7 @@ SUPABASE SQL (einmalig ausführen):
     CREATE TABLE IF NOT EXISTS voting_responses (
         id              BIGSERIAL PRIMARY KEY,
         voting_id       TEXT NOT NULL REFERENCES votings(id),
-        voter_hash      TEXT NOT NULL,  -- SHA256(user_id + voting_id + secret) – anonym
+        voter_hash      TEXT NOT NULL,  -- SHA256(user_id + voting_id + secret)
         answers         TEXT NOT NULL,  -- JSON oder verschlüsseltes JSON
         is_encrypted    BOOLEAN DEFAULT FALSE,
         submitted_at    TIMESTAMPTZ DEFAULT now(),
@@ -114,7 +115,7 @@ class VotingCog(commands.Cog):
 
     abstimmung = app_commands.Group(
         name="abstimmung",
-        description="Abstimmungssystem (nur Bot-Inhaber)",
+        description="Abstimmungssystem (nur Bot-Inhaber & Administratoren dürfen Links senden)",
     )
 
     # ── /abstimmung erstellen ─────────────────────────────────────────────────
@@ -314,10 +315,11 @@ class VotingCog(commands.Cog):
         )
 
     # ── /abstimmung link ──────────────────────────────────────────────────────
+    # 🔓 ERWEITERT: Auch Server-Administratoren dürfen den Link senden
 
     @abstimmung.command(
         name="link",
-        description="[MBL] Sende den Abstimmungs-Link in diesen Kanal"
+        description="[MBL/Admin] Sende den Abstimmungs-Link in diesen Kanal"
     )
     @app_commands.describe(
         voting_id="Die ID der Abstimmung",
@@ -329,10 +331,47 @@ class VotingCog(commands.Cog):
         voting_id: str,
         ephemeral: bool = False,
     ):
-        if not _is_mbl(interaction.user):
-            await interaction.response.send_message("❌ Nur der Bot-Inhaber.", ephemeral=True)
-            return
+        # 1) Bot-Inhaber darf immer
+        if _is_mbl(interaction.user):
+            pass  # Erlaubt
+        else:
+            # 2) Prüfe, ob Benutzer Administrator auf dem Server der Abstimmung ist
+            sb = get_supabase()
+            voting_data = sb.table("votings").select("server_id, title, is_active, description").eq("id", voting_id).execute()
+            if not voting_data.data:
+                await interaction.response.send_message(f"❌ Abstimmung `{voting_id}` nicht gefunden.", ephemeral=True)
+                return
+            server_id_str = voting_data.data[0]["server_id"]
+            try:
+                guild_id = int(server_id_str)
+            except ValueError:
+                await interaction.response.send_message("❌ Ungültige Server-ID in der Abstimmung.", ephemeral=True)
+                return
 
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                await interaction.response.send_message(
+                    "❌ Bot ist nicht auf dem Server, für den diese Abstimmung erstellt wurde. Link kann nicht autorisiert werden.",
+                    ephemeral=True
+                )
+                return
+
+            # Mitgliedsobjekt holen (Cache + Fallback fetch)
+            member = guild.get_member(interaction.user.id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(interaction.user.id)
+                except discord.NotFound:
+                    member = None
+
+            if not member or not member.guild_permissions.administrator:
+                await interaction.response.send_message(
+                    "❌ Nur der Bot-Inhaber oder Server-Administratoren dürfen den Abstimmungs-Link versenden.",
+                    ephemeral=True
+                )
+                return
+
+        # Berechtigung bestanden – jetzt den Link senden
         sb = get_supabase()
         r  = sb.table("votings").select("title, is_active, description").eq("id", voting_id).execute()
         if not r.data:
