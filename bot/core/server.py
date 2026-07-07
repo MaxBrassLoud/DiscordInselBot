@@ -51,6 +51,7 @@ FEATURE_COGS = [
     "bot.features.moderation.cog",
     "bot.features.faq.cog",
     "bot.features.backups.cog",
+    "bot.features.moderation.raid_protection"
 ]
 
 
