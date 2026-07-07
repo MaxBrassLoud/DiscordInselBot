@@ -17,7 +17,7 @@ from discord.ext import commands
 from bot.core.supabase_client import get_supabase
 
 # ===== DEBUG-MODUS =====
-DEBUG = True  # Auf True setzen für ausführliche Konsolenausgaben
+DEBUG = False  # Auf True setzen für ausführliche Konsolenausgaben
 
 def debug_print(*args, **kwargs):
     if DEBUG:
