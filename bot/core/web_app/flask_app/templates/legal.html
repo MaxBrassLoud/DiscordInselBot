@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ 'Datenschutzerklaerung' if page == 'datenschutz' else 'Impressum' }} - Insel Bot</title>
   <meta name="description" content="{{ 'Datenschutzerklaerung' if page == 'datenschutz' else 'Impressum' }} fuer den Insel Bot.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body class="legal-body">
