@@ -16,12 +16,7 @@ from discord.ext import commands
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
 
-<<<<<<< Updated upstream
-# ===== DEBUG-MODUS =====
-DEBUG = False  # Auf True setzen für ausführliche Konsolenausgaben
-=======
 logger = get_logger("raid_protection")
->>>>>>> Stashed changes
 
 
 def _is_mbl(user_id: int) -> bool:
@@ -434,11 +429,10 @@ class RaidProtectionCog(commands.Cog):
         return embed
 
     async def _send_evidence_logs(
-            self,
-            log_channel: discord.TextChannel,
-            messages: list[discord.Message],
+        self,
+        log_channel: discord.TextChannel,
+        messages: list[discord.Message],
     ) -> None:
-        """Sendet alle Evidence-Nachrichten gebündelt in einem einzigen Embed."""
         if not messages:
             embed = discord.Embed(
                 title="Evidence | Keine Nachrichten gefunden",
@@ -449,73 +443,142 @@ class RaidProtectionCog(commands.Cog):
             await log_channel.send(embed=embed)
             return
 
-        total = len(messages)
-        embed = discord.Embed(
-            title=f"Evidence – Alle verdächtigen Nachrichten ({total} Stück)",
+        evidence_items: list[dict[str, Any]] = []
+        files: list[discord.File] = []
+        failed_files: list[str] = []
+
+        for idx, msg in enumerate(messages, 1):
+            mention_count = len(msg.mentions) + len(msg.role_mentions)
+            content = msg.content.strip() if msg.content else "*Keine Textnachricht*"
+            if len(content) > 650:
+                content = content[:647] + "..."
+
+            attachment_lines = []
+            if msg.attachments:
+                for attachment in msg.attachments:
+                    size_mb = attachment.size / 1024 / 1024
+                    attachment_lines.append(f"`{attachment.filename}` ({size_mb:.2f} MB) - {attachment.url}")
+
+                    try:
+                        files.append(await attachment.to_file(use_cached=True))
+                    except Exception as e:
+                        try:
+                            files.append(await attachment.to_file())
+                        except Exception as retry_error:
+                            logger.warning(f"[raid] attachment backup failed ({attachment.filename}): {e}; retry: {retry_error}")
+                            failed_files.append(f"{attachment.filename}: {attachment.url}")
+
+            evidence_items.append(
+                {
+                    "index": idx,
+                    "message": msg,
+                    "mention_count": mention_count,
+                    "content": content,
+                    "attachments": attachment_lines,
+                }
+            )
+
+        embeds = self._build_evidence_embeds(evidence_items, failed_files)
+        max_messages = max((len(embeds) + 9) // 10, (len(files) + 9) // 10, 1)
+
+        for batch in range(max_messages):
+            embed_chunk = embeds[batch * 10:(batch + 1) * 10]
+            file_chunk = files[batch * 10:(batch + 1) * 10]
+            content = None
+            if max_messages > 1:
+                content = f"Evidence-Paket {batch + 1}/{max_messages}"
+
+            try:
+                if embed_chunk and file_chunk:
+                    await log_channel.send(
+                        content=content,
+                        embeds=embed_chunk,
+                        files=file_chunk,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                elif embed_chunk:
+                    await log_channel.send(
+                        content=content,
+                        embeds=embed_chunk,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                elif file_chunk:
+                    await log_channel.send(
+                        content=content or "Weitere gesicherte Anhaenge",
+                        files=file_chunk,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except Exception as e:
+                logger.warning(f"[raid] bundled evidence upload failed: {e}")
+                if embed_chunk:
+                    try:
+                        await log_channel.send(
+                            content=content,
+                            embeds=embed_chunk,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                    except Exception as embed_error:
+                        logger.warning(f"[raid] bundled evidence embed fallback failed: {embed_error}")
+
+            await asyncio.sleep(0.25)
+
+    def _build_evidence_embeds(
+        self,
+        evidence_items: list[dict[str, Any]],
+        failed_files: list[str],
+    ) -> list[discord.Embed]:
+        embeds: list[discord.Embed] = []
+        total = len(evidence_items)
+        current = discord.Embed(
+            title=f"Evidence | {total} verdaechtige Nachrichten",
+            description=(
+                "Gebündelte Sicherung der geloeschten Raid-Nachrichten. "
+                "Anhaenge sind, soweit moeglich, an diese Log-Nachricht angehaengt."
+            ),
             color=discord.Color.blurple(),
             timestamp=datetime.now(timezone.utc),
         )
 
-        # Zusammenfassungen pro Nachricht erzeugen
-        message_summaries = []
-        for idx, msg in enumerate(messages, 1):
-            content = msg.content.strip() if msg.content else "*Keine Textnachricht*"
-            if len(content) > 500:
-                content = content[:497] + "..."
-
-            mention_count = len(msg.mentions) + len(msg.role_mentions)
-            channel_mention = msg.channel.mention
-            timestamp_str = discord.utils.format_dt(msg.created_at, "R")
-
-            # Anhänge als Links (nach Löschung der Originalnachricht nicht mehr gültig)
-            attachments_info = ""
-            if msg.attachments:
-                attach_links = [f"[{a.filename}]({a.url})" for a in msg.attachments[:5]]
-                attachments_info = f"\nAnhänge: {', '.join(attach_links)}"
-                if len(msg.attachments) > 5:
-                    attachments_info += f" (+{len(msg.attachments) - 5} weitere)"
-
-            summary = (
-                f"**{idx}.** {channel_mention} • {timestamp_str} • {mention_count} Erwähnungen\n"
-                f"{content}{attachments_info}"
+        for item in evidence_items:
+            msg: discord.Message = item["message"]
+            attachment_text = "\n".join(item["attachments"]) if item["attachments"] else "Keine Anhaenge"
+            value = (
+                f"**Kanal:** {msg.channel.mention} | **Zeit:** {discord.utils.format_dt(msg.created_at, 'F')}\n"
+                f"**Erwaehnungen:** {item['mention_count']} | **Nachricht-ID:** `{msg.id}`\n"
+                f"**Text:** {item['content']}\n"
+                f"**Anhaenge:** {attachment_text}"
             )
-            message_summaries.append(summary)
+            if len(value) > 1024:
+                value = value[:1021] + "..."
 
-        # Embed‑Felder füllen – maximal 25 Felder
-        MAX_FIELDS = 25
-        if total <= MAX_FIELDS:
-            for summary in message_summaries:
-                embed.add_field(name="\u200b", value=summary, inline=False)
-        else:
-            # Mehrere Zusammenfassungen in einem Feld bündeln (max. 1024 Zeichen pro Feld)
-            fields = []
-            current_field = ""
-            for summary in message_summaries:
-                if len(current_field) + len(summary) + 2 > 1024:
-                    fields.append(current_field)
-                    current_field = summary
-                else:
-                    if current_field:
-                        current_field += "\n---\n"
-                    current_field += summary
-            if current_field:
-                fields.append(current_field)
-
-            for i, field_content in enumerate(fields[:MAX_FIELDS]):
-                embed.add_field(name=f"Nachrichtenblock {i + 1}", value=field_content, inline=False)
-
-            if len(fields) > MAX_FIELDS:
-                embed.add_field(
-                    name="Weitere Nachrichten",
-                    value=f"{len(fields) - MAX_FIELDS} weitere Blöcke nicht angezeigt.",
-                    inline=False,
+            if len(current.fields) >= 24:
+                current.set_footer(text="Originalnachrichten werden nach Sicherung geloescht")
+                embeds.append(current)
+                current = discord.Embed(
+                    title=f"Evidence | Fortsetzung ({total} Nachrichten)",
+                    color=discord.Color.blurple(),
+                    timestamp=datetime.now(timezone.utc),
                 )
 
-        # Fußzeile mit Gesamtstatistik
-        total_mentions = sum(len(m.mentions) + len(m.role_mentions) for m in messages)
-        embed.set_footer(text=f"Gesamte Erwähnungen: {total_mentions} | Nachrichten: {total}")
+            current.add_field(name=f"Nachricht {item['index']}/{total}", value=value, inline=False)
 
-        await log_channel.send(embed=embed)
+        if failed_files:
+            failed_value = "\n".join(failed_files)
+            if len(failed_value) > 1024:
+                failed_value = failed_value[:1021] + "..."
+            if len(current.fields) >= 24:
+                current.set_footer(text="Originalnachrichten werden nach Sicherung geloescht")
+                embeds.append(current)
+                current = discord.Embed(
+                    title="Evidence | Upload-Hinweise",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            current.add_field(name="Nicht neu hochgeladen", value=failed_value, inline=False)
+
+        current.set_footer(text="Originalnachrichten werden nach Sicherung geloescht")
+        embeds.append(current)
+        return embeds
 
     async def resolve_case(self, interaction: discord.Interaction, fallback: Optional[RaidCase]) -> Optional[RaidCase]:
         if fallback:
