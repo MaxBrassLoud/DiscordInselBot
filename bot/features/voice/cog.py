@@ -1481,7 +1481,7 @@ async def _delete_vc_channels(guild: discord.Guild, vc_row: dict) -> None:
                 logger.warning(f"[cleanup] Kanal {ch_id}: {e}")
 
     _toggle_locks.pop(str(vc_row.get("main_channel_id", "")), None)
-    _delete_vc(vc_row["id"])
+    await asyncio.to_thread(_delete_vc, vc_row["id"])
     logger.info(f"[voice] Cleanup: owner={vc_row['owner_id']}")
 
 
@@ -1914,11 +1914,11 @@ class VoiceCog(commands.Cog):
     async def cleanup_task(self):
         try:
             for guild in self.bot.guilds:
-                cfg = _get_config(str(guild.id))
+                cfg = await asyncio.to_thread(_get_config, str(guild.id))
                 if not cfg:
                     continue
                 timeout = cfg.get("empty_timeout", 30)
-                for vc_row in _get_all_vcs(str(guild.id)):
+                for vc_row in await asyncio.to_thread(_get_all_vcs, str(guild.id)):
                     last_empty = vc_row.get("last_empty_at")
                     if not last_empty:
                         if not guild.get_channel(int(vc_row["main_channel_id"])):
