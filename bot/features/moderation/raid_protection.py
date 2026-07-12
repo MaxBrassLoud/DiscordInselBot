@@ -1,8 +1,9 @@
-"""Raid protection based on total mentions per short time window."""
+"""Raid protection based on total mentions, text duplicates and image duplicates per short time window."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import re
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+# Neue Abhängigkeiten für Bild-Hashing
+import imagehash
+from PIL import Image
 
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
@@ -23,12 +28,21 @@ def _is_mbl(user_id: int) -> bool:
     mbl_ids = {uid.strip() for uid in os.getenv("MBL", "").split(",") if uid.strip()}
     return str(user_id) in mbl_ids
 
+
+# ===== ERWEITERTE KONFIGURATION =====
 CONFIG = {
+    # Bestehende Werte
     "total_mention_threshold": 6,
     "message_time_window": 60,
     "new_member_days": 2,
     "timeout_hours": 24,
     "log_channel_override": None,
+
+    # Neue Werte für Duplikaterkennung
+    "text_duplicate_threshold": 8,          # Anzahl gleicher Texte im Zeitfenster
+    "image_duplicate_threshold": 3,         # Anzahl ähnlicher Bilder im Zeitfenster
+    "image_similarity_threshold": 5,        # Hamming-Distanz (0 = identisch)
+    "duplicate_time_window": 60,            # Kann gleiches Fenster wie mentions sein
 }
 
 RAID_ACTIONS = {
@@ -90,9 +104,36 @@ class RaidCase:
     until: Optional[datetime] = None
 
 
+# ===== HILFSFUNKTIONEN FÜR HASHING =====
+def normalize_text(text: str) -> str:
+    """Normalisiere Text für exakten Vergleich."""
+    text = text.lower()
+    text = re.sub(r'\s+', ' ', text)   # Mehrfach-Leerzeichen entfernen
+    return text.strip()
+
+
+async def get_image_hashes(attachment: discord.Attachment) -> list[imagehash.ImageHash]:
+    """
+    Lade ein Attachment herunter und berechne den average_hash (8×8 = 64 Bit).
+    Gibt eine Liste zurück (meist ein Hash pro Bild).
+    """
+    if not attachment.content_type or not attachment.content_type.startswith('image/'):
+        return []
+    try:
+        data = await attachment.read()
+        img = Image.open(io.BytesIO(data))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        return [imagehash.average_hash(img, hash_size=8)]
+    except Exception as e:
+        logger.debug(f"[raid] Bild-Hashing fehlgeschlagen für {attachment.filename}: {e}")
+        return []
+
+
 class RaidProtectionCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Watchlist speichert jetzt erweiterte Einträge
         self._watchlist: dict[int, dict[str, Any]] = {}
         self._ignored_cache: dict[str, dict[str, Any]] = {}
         self._persistent_registered = False
@@ -246,33 +287,124 @@ class RaidProtectionCog(commands.Cog):
         if message.author.is_timed_out():
             return
 
-        if await self._is_suspicious(message):
-            await self._handle_suspicious_user(message)
-
-    async def _is_suspicious(self, message: discord.Message) -> bool:
+        # Prüfe, ob der User ignoriert wird
         ignored_roles = await self._get_ignored_role_ids(message.guild)
         if any(str(role.id) in ignored_roles for role in message.author.roles):
-            return False
+            return
 
+        triggered, details = await self._is_suspicious(message)
+        if triggered:
+            await self._handle_suspicious_user(message, details)
+
+    # ===== NEUE ERWEITERTE _is_suspicious =====
+    async def _is_suspicious(self, message: discord.Message) -> tuple[bool, dict]:
+        """
+        Prüft, ob der User verdächtig ist (Mentions, Text-Duplikate, Bild-Duplikate).
+        Rückgabe: (True/False, Dict mit Details für die Verarbeitung)
+        """
         user_id = message.author.id
         now = datetime.now(timezone.utc)
-        mention_count = len(message.mentions) + len(message.role_mentions)
+        # Wir verwenden das gleiche Zeitfenster für alle (kann später getrennt werden)
+        time_window = CONFIG.get("duplicate_time_window", CONFIG["message_time_window"])
+        cutoff = now - timedelta(seconds=time_window)
+
+        # Eintrag holen oder neu anlegen
         entry = self._watchlist.get(user_id)
         if entry is None:
-            self._watchlist[user_id] = {
+            entry = {
                 "guild_id": message.guild.id,
-                "messages": [message],
-                "sum_mentions": mention_count,
+                "entries": [],
                 "first_seen": now,
             }
-            return False
+            self._watchlist[user_id] = entry
 
-        cutoff = now - timedelta(seconds=CONFIG["message_time_window"])
-        entry["messages"] = [m for m in entry["messages"] if m.created_at >= cutoff]
-        entry["messages"].append(message)
-        entry["sum_mentions"] = sum(len(m.mentions) + len(m.role_mentions) for m in entry["messages"])
-        entry["first_seen"] = min(entry.get("first_seen", now), now)
-        return entry["sum_mentions"] >= CONFIG["total_mention_threshold"]
+        # Alte Einträge entfernen (älter als Zeitfenster)
+        entry["entries"] = [
+            e for e in entry["entries"]
+            if e["msg"].created_at >= cutoff
+        ]
+
+        # Hashes für die neue Nachricht berechnen
+        text_hash = None
+        if message.content:
+            normalized = normalize_text(message.content)
+            if normalized:  # nicht nur Leerzeichen
+                text_hash = hash(normalized)
+
+        image_hashes = []
+        for att in message.attachments:
+            hashes = await get_image_hashes(att)
+            image_hashes.extend(hashes)
+
+        # Neuen Eintrag hinzufügen
+        entry["entries"].append({
+            "msg": message,
+            "text_hash": text_hash,
+            "image_hashes": image_hashes,
+        })
+
+        # ---- Zählungen innerhalb des Zeitfensters (nach Bereinigung) ----
+        # 1. Mentions (bestehend)
+        sum_mentions = 0
+        for e in entry["entries"]:
+            sum_mentions += len(e["msg"].mentions) + len(e["msg"].role_mentions)
+
+        # 2. Text-Duplikate (exakt gleicher normalisierter Text)
+        text_counts = {}
+        for e in entry["entries"]:
+            if e["text_hash"] is not None:
+                text_counts[e["text_hash"]] = text_counts.get(e["text_hash"], 0) + 1
+        max_text_count = max(text_counts.values(), default=0)
+
+        # 3. Bild-Duplikate (Ähnlichkeit über Hamming-Distanz)
+        # Sammle alle Bild-Hashes aus allen Einträgen
+        all_image_hashes = []
+        for e in entry["entries"]:
+            all_image_hashes.extend(e["image_hashes"])
+
+        max_similar_images = 0
+        if all_image_hashes:
+            # Zähle für jeden Hash, wie viele andere Hashes ähnlich sind (inkl. sich selbst)
+            threshold = CONFIG["image_similarity_threshold"]
+            for i, h in enumerate(all_image_hashes):
+                similar_count = 0
+                for j, h2 in enumerate(all_image_hashes):
+                    if h - h2 <= threshold:
+                        similar_count += 1
+                if similar_count > max_similar_images:
+                    max_similar_images = similar_count
+
+        # ---- Schwellwerte prüfen ----
+        triggered = False
+        trigger_reason = None
+        trigger_count = 0
+
+        if sum_mentions >= CONFIG["total_mention_threshold"]:
+            triggered = True
+            trigger_reason = "mentions"
+            trigger_count = sum_mentions
+        elif max_similar_images >= CONFIG["image_duplicate_threshold"]:
+            triggered = True
+            trigger_reason = "images"
+            trigger_count = max_similar_images
+        elif max_text_count >= CONFIG["text_duplicate_threshold"]:
+            triggered = True
+            trigger_reason = "text"
+            trigger_count = max_text_count
+
+        if triggered:
+            details = {
+                "reason": trigger_reason,
+                "count": trigger_count,
+                "sum_mentions": sum_mentions,
+                "max_text_count": max_text_count,
+                "max_similar_images": max_similar_images,
+                "entries": entry["entries"].copy(),  # für Beweissicherung
+            }
+        else:
+            details = {}
+
+        return triggered, details
 
     async def _send_user_embed(
         self,
@@ -298,7 +430,8 @@ class RaidProtectionCog(commands.Cog):
         except Exception as e:
             logger.warning(f"[raid] DM failed: {e}")
 
-    async def _handle_suspicious_user(self, message: discord.Message):
+    # ===== ERWEITERTE _handle_suspicious_user =====
+    async def _handle_suspicious_user(self, message: discord.Message, details: dict):
         user = message.author
         guild = message.guild
         log_channel = await self._get_log_channel(guild)
@@ -306,18 +439,31 @@ class RaidProtectionCog(commands.Cog):
             logger.warning(f"[raid] no moderation log channel configured for guild {guild.id}")
             return
 
+        # Entferne den User aus der Watchlist (er wird ja jetzt behandelt)
         entry = self._watchlist.pop(user.id, None)
         if not entry:
             return
 
-        messages_to_delete: list[discord.Message] = entry.get("messages", [])
-        sum_mentions = int(entry.get("sum_mentions", 0))
+        # Aus den Details die relevanten Daten holen
+        trigger_reason = details["reason"]
+        trigger_count = details["count"]
+        sum_mentions = details["sum_mentions"]
+        messages_to_delete: list[discord.Message] = [e["msg"] for e in details["entries"]]
+
         until = datetime.now(timezone.utc) + timedelta(hours=CONFIG["timeout_hours"])
 
+        # Timeout setzen
         try:
-            await user.timeout(until, reason="Raid-Verdacht - zu viele Erwaehnungen")
+            await user.timeout(until, reason="Raid-Verdacht - zu viele Erwaehnungen/Duplikate")
         except Exception as e:
             logger.warning(f"[raid] timeout failed for {user}: {e}")
+
+        # Log in die Datenbank
+        reason_text = {
+            "mentions": f"{trigger_count} Erwähnungen",
+            "text": f"{trigger_count} gleiche Textnachrichten",
+            "images": f"{trigger_count} ähnliche Bilder",
+        }.get(trigger_reason, "unbekannt")
 
         await self._log_moderation_action(
             guild_id=str(guild.id),
@@ -326,10 +472,11 @@ class RaidProtectionCog(commands.Cog):
             target_name=str(user),
             moderator_id=str(self.bot.user.id) if self.bot.user else None,
             moderator_name=str(self.bot.user) if self.bot.user else "System",
-            reason=f"Automatischer Timeout bei Raid-Verdacht ({sum_mentions} Erwaehnungen).",
+            reason=f"Automatischer Timeout bei Raid-Verdacht ({reason_text}).",
             until=until,
         )
 
+        # DM an den User
         await self._send_user_embed(
             user=user,
             title="Raid-Verdacht - Timeout verhaengt",
@@ -341,15 +488,23 @@ class RaidProtectionCog(commands.Cog):
             color=discord.Color.orange(),
             fields=[
                 ("Zeitraum", f"Bis {discord.utils.format_dt(until, 'F')}", False),
-                ("Grund", f"{sum_mentions} Erwaehnungen in {len(messages_to_delete)} Nachrichten", False),
+                ("Grund", reason_text, False),
+                ("Nachrichtenanzahl", str(len(messages_to_delete)), False),
             ],
         )
 
+        # Report-Embed
         is_new = bool(user.joined_at and (datetime.now(timezone.utc) - user.joined_at).days <= CONFIG["new_member_days"])
-        embed = self._build_report_embed(guild, user, until, is_new, messages_to_delete, sum_mentions)
+        embed = self._build_report_embed(
+            guild, user, until, is_new, messages_to_delete,
+            trigger_reason, trigger_count, sum_mentions
+        )
         await log_channel.send(embed=embed, view=RaidReportView(self, RaidCase(guild.id, user.id, until)))
+
+        # Evidence-Logs senden
         await self._send_evidence_logs(log_channel, messages_to_delete)
 
+        # Nachrichten löschen
         if messages_to_delete:
             await self._delete_messages_safely(messages_to_delete)
 
@@ -382,6 +537,7 @@ class RaidProtectionCog(commands.Cog):
                     logger.warning(f"[raid] message delete failed: {e}")
                 await asyncio.sleep(0.2)
 
+    # ===== ERWEITERTER _build_report_embed =====
     def _build_report_embed(
         self,
         guild: discord.Guild,
@@ -389,16 +545,26 @@ class RaidProtectionCog(commands.Cog):
         until: datetime,
         is_new: bool,
         messages: list[discord.Message],
+        trigger_reason: str,
+        trigger_count: int,
         sum_mentions: int,
     ) -> discord.Embed:
         joined_text = discord.utils.format_dt(user.joined_at, "F") if user.joined_at else "Unbekannt"
         case_id = f"{guild.id}-{user.id}-{int(datetime.now(timezone.utc).timestamp())}"
         attachment_count = sum(len(msg.attachments) for msg in messages)
         channel_count = len({msg.channel.id for msg in messages})
+
+        # Auslöser-Text
+        trigger_text = {
+            "mentions": f"**{trigger_count}** Erwähnungen",
+            "text": f"**{trigger_count}** gleiche Textnachrichten",
+            "images": f"**{trigger_count}** ähnliche Bilder",
+        }.get(trigger_reason, "unbekannt")
+
         embed = discord.Embed(
             title="Raid-Protection | Moderationsfall",
             description=(
-                "Automatischer Schutz hat eine Mention-Spitze erkannt, den User temporaer gestoppt "
+                "Automatischer Schutz hat eine verdächtige Aktivität erkannt, den User temporär gestoppt "
                 "und die Beweise unten im Log gesichert."
             ),
             color=discord.Color.orange(),
@@ -408,17 +574,18 @@ class RaidProtectionCog(commands.Cog):
         embed.add_field(name="Timeout", value=f"Bis {discord.utils.format_dt(until, 'F')}\n{discord.utils.format_dt(until, 'R')}", inline=True)
         embed.add_field(name="Risikoprofil", value="Neuer User (< 2 Tage)" if is_new else "Bestehender User", inline=True)
         embed.add_field(
-            name="Ausloeser",
+            name="Auslöser",
             value=(
-                f"**{sum_mentions}** Erwaehnungen in **{len(messages)}** Nachrichten\n"
-                f"**{attachment_count}** Anhaenge aus **{channel_count}** Kanal/Kanaelen"
+                f"{trigger_text}\n"
+                f"in **{len(messages)}** Nachrichten\n"
+                f"**{attachment_count}** Anhänge aus **{channel_count}** Kanal/Kanälen"
             ),
             inline=False,
         )
         embed.add_field(
             name="Beweise",
             value=(
-                "Alle verdaechtigen Nachrichten werden unter diesem Report einzeln protokolliert. "
+                "Alle verdächtigen Nachrichten werden unter diesem Report einzeln protokolliert. "
                 "Bilder, Videos und Dateien werden neu hochgeladen, sofern Discord sie noch bereitstellt."
             ),
             inline=False,
@@ -427,6 +594,9 @@ class RaidProtectionCog(commands.Cog):
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text=f"Fall-ID: {case_id} | Bis: {until.isoformat()}")
         return embed
+
+    # ===== UNVERÄNDERTE _send_evidence_logs, _build_evidence_embeds =====
+    # (Diese Methoden bleiben wie gehabt, da sie nur die Nachrichten verarbeiten)
 
     async def _send_evidence_logs(
         self,
@@ -580,6 +750,7 @@ class RaidProtectionCog(commands.Cog):
         embeds.append(current)
         return embeds
 
+    # ===== RESOLVE UND ACTION (unverändert) =====
     async def resolve_case(self, interaction: discord.Interaction, fallback: Optional[RaidCase]) -> Optional[RaidCase]:
         if fallback:
             return fallback
@@ -695,6 +866,7 @@ class RaidProtectionCog(commands.Cog):
 
         await interaction.followup.send(meta["feedback"], ephemeral=True)
 
+    # ===== SLASH-COMMANDS (unverändert) =====
     @app_commands.command(name="raid_ignore", description="Ignoriere eine Rolle bei der Raid-Erkennung")
     @app_commands.default_permissions(administrator=True)
     async def raid_ignore(self, interaction: discord.Interaction, role: discord.Role):
@@ -730,6 +902,7 @@ class RaidProtectionCog(commands.Cog):
         await interaction.response.send_message(f"Ignorierte Rollen: {mention_list}", ephemeral=True)
 
 
+# ===== VIEWS (unverändert) =====
 class RaidConfirmView(discord.ui.View):
     def __init__(
         self,
