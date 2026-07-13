@@ -35,7 +35,7 @@ CONFIG = {
     "total_mention_threshold": 6,
     "message_time_window": 60,
     "new_member_days": 2,
-    "timeout_hours": 24,
+    "timeout_hours": 72,
     "log_channel_override": None,
 
     # Neue Werte für Duplikaterkennung
