@@ -81,9 +81,11 @@ class DiscordIconDownloader:
                 self.log(f"Fehler beim Bilddownload: {img_response.status_code}")
                 return
 
-            # Dateinamen erstellen (Sonderzeichen entfernen)
-            safe_name = re.sub(r'[^a-zA-Z0-9 _.-]', '', f"{server_name}_{guild_id}")
+            # Dateinamen erstellen (Sonderzeichen entfernen, Pfad-Traversal verhindern)
+            safe_name = re.sub(r'[^a-zA-Z0-9_.-]', '', f"{server_name}_{guild_id}")
             filename = f"discord_icon_{safe_name}.{ext}"
+            # Sicherstellen dass kein Pfad-Traversal möglich ist
+            filename = os.path.basename(filename)
 
             with open(filename, 'wb') as f:
                 for chunk in img_response.iter_content(1024):

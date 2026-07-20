@@ -26,19 +26,21 @@ _ROOT       = _FLASK_DIR.parent.parent.parent.parent
 IMPORTS_DIR = _ROOT / "imports"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
-# Erlaubte Zeichen für Dateinamen – nur diese werden akzeptiert
-_SAFE_FILENAME_RE = re.compile(r'^[a-zA-Z0-9._\-äöüÄÖÜß ]+$')
+# Erlaubte Zeichen für Dateinamen – nur diese werden akzeptiert (keine Leerzeichen)
+_SAFE_FILENAME_RE = re.compile(r'^[a-zA-Z0-9._\-äöüÄÖÜß]+$')
 
 # ---- Job-Verwaltung ---------------------------------------------------------
 _import_jobs: dict[str, dict] = {}
+_import_jobs_lock = threading.Lock()
 _JOB_TTL = 3600
 
 
 def _prune_jobs():
     now = time.time()
-    for jid in list(_import_jobs.keys()):
-        if now - _import_jobs[jid].get("started_at", now) > _JOB_TTL:
-            del _import_jobs[jid]
+    with _import_jobs_lock:
+        for jid in list(_import_jobs.keys()):
+            if now - _import_jobs[jid].get("started_at", now) > _JOB_TTL:
+                del _import_jobs[jid]
 
 
 def _sanitize_filename(raw: str) -> str | None:
@@ -131,7 +133,8 @@ def _ensure_imports():
 # ---- Background-Jobs --------------------------------------------------------
 
 def _run_folder_import(job_id: str, server_id: str | None, all_mode: bool):
-    job = _import_jobs[job_id]
+    with _import_jobs_lock:
+        job = _import_jobs[job_id]
     job["status"] = "running"
     log_lines: list[str] = []
 
@@ -160,7 +163,8 @@ def _run_upload_import(
     import_type: str,
     module_name: str,
 ):
-    job = _import_jobs[job_id]
+    with _import_jobs_lock:
+        job = _import_jobs[job_id]
     job["status"] = "running"
     log_lines: list[str] = []
 
@@ -329,11 +333,12 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
                 })
 
         _prune_jobs()
-        active = [
-            {"job_id": jid, "status": j["status"], "server_id": j.get("server_id")}
-            for jid, j in _import_jobs.items()
-            if j["status"] in ("queued", "running")
-        ]
+        with _import_jobs_lock:
+            active = [
+                {"job_id": jid, "status": j["status"], "server_id": j.get("server_id")}
+                for jid, j in _import_jobs.items()
+                if j["status"] in ("queued", "running")
+            ]
         return jsonify({
             "imports_dir": str(IMPORTS_DIR),
             "servers":     servers,
@@ -409,18 +414,19 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
             return jsonify({"error": "Keine gueltigen Dateien gespeichert"}), 400
 
         job_id = str(uuid.uuid4())[:8]
-        _import_jobs[job_id] = {
-            "job_id":      job_id,
-            "server_id":   server_id,
-            "import_type": import_type,
-            "module_name": module_name,
-            "status":      "queued",
-            "log":         [],
-            "stats":       {},
-            "started_at":  time.time(),
-            "mode":        "upload",
-            "file_count":  len(saved_paths),
-        }
+        with _import_jobs_lock:
+            _import_jobs[job_id] = {
+                "job_id":      job_id,
+                "server_id":   server_id,
+                "import_type": import_type,
+                "module_name": module_name,
+                "status":      "queued",
+                "log":         [],
+                "stats":       {},
+                "started_at":  time.time(),
+                "mode":        "upload",
+                "file_count":  len(saved_paths),
+            }
 
         t = threading.Thread(
             target=_run_upload_import,
@@ -446,20 +452,21 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         if not server_id and not all_mode:
             return jsonify({"error": "server_id oder all=true erforderlich"}), 400
 
-        for j in _import_jobs.values():
-            if j.get("server_id") == server_id and j["status"] == "running":
-                return jsonify({"error": "Import laeuft bereits", "job_id": j["job_id"]}), 409
+        with _import_jobs_lock:
+            for j in _import_jobs.values():
+                if j.get("server_id") == server_id and j["status"] == "running":
+                    return jsonify({"error": "Import laeuft bereits", "job_id": j["job_id"]}), 409
 
-        job_id = str(uuid.uuid4())[:8]
-        _import_jobs[job_id] = {
-            "job_id":     job_id,
-            "server_id":  server_id,
-            "status":     "queued",
-            "log":        [],
-            "stats":      {},
-            "started_at": time.time(),
-            "mode":       "folder",
-        }
+            job_id = str(uuid.uuid4())[:8]
+            _import_jobs[job_id] = {
+                "job_id":     job_id,
+                "server_id":  server_id,
+                "status":     "queued",
+                "log":        [],
+                "stats":      {},
+                "started_at": time.time(),
+                "mode":       "folder",
+            }
 
         t = threading.Thread(
             target=_run_folder_import,
@@ -472,7 +479,8 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
     @app.route("/api/import/progress/<job_id>")
     @_mbl_only
     def api_import_progress(job_id):
-        job = _import_jobs.get(job_id)
+        with _import_jobs_lock:
+            job = _import_jobs.get(job_id)
         if not job:
             return jsonify({"error": "Job nicht gefunden"}), 404
         return jsonify({

@@ -58,6 +58,35 @@ if len(_SECRET_KEY) < 32:
 
 app.secret_key = _SECRET_KEY
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Rate Limiter (in-memory, pro IP)
+# ══════════════════════════════════════════════════════════════════════════════
+_rate_limits: dict[str, list[float]] = {}
+_rate_limit_lock = threading.Lock()
+RATE_LIMIT_WINDOW = 60  # Sekunden
+RATE_LIMIT_MAX_REQUESTS = 120  # pro Fenster
+
+def _check_rate_limit(ip: str) -> bool:
+    """Prüft ob die IP das Rate-Limit überschritten hat. Gibt True zurück wenn erlaubt."""
+    now = time.time()
+    with _rate_limit_lock:
+        timestamps = _rate_limits.get(ip, [])
+        # Alte Einträge entfernen
+        timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+        if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+            return False
+        timestamps.append(now)
+        _rate_limits[ip] = timestamps
+    return True
+
+@app.before_request
+def _enforce_rate_limit():
+    if request.path.startswith("/static/"):
+        return
+    ip = request.remote_addr or "unknown"
+    if not _check_rate_limit(ip):
+        return jsonify({"error": "Zu viele Anfragen. Bitte später erneut versuchen."}), 429
+
 DISCORD_API   = "https://discord.com/api/v10"
 CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
@@ -181,7 +210,7 @@ def _member_avatar(member: dict | None, uid: str = "") -> str | None:
     u   = member.get("user", {})
     id_ = u.get("id") or uid
     av  = u.get("avatar")
-    if av and id_:
+    if av and id_ and id_.isdigit():
         return f"https://cdn.discordapp.com/avatars/{id_}/{av}.png?size=64"
     return None
 
@@ -1173,6 +1202,10 @@ def api_application_detail(app_id):
 @login_required
 def api_member(user_id):
     server_id = request.args.get("server_id") or _first_accessible_server(session["user"])
+    if not server_id:
+        return jsonify({"id": user_id, "name": None, "avatar": None})
+    if not _is_mbl(session["user"]) and server_id not in (session["user"].get("server_roles") or {}):
+        return jsonify({"id": user_id, "name": None, "avatar": None})
     member    = _cached_member(server_id, user_id) if server_id else None
     return jsonify({
         "id":     user_id,
@@ -1183,11 +1216,15 @@ def api_member(user_id):
 @app.route("/api/members/search")
 @login_required
 def api_members_search():
+    from urllib.parse import quote
     q         = request.args.get("q", "").strip()
     server_id = request.args.get("server_id") or _first_accessible_server(session["user"])
     if len(q) < 2 or not server_id:
         return jsonify([])
-    data = _bot_get(f"/guilds/{server_id}/members/search?query={q}&limit=12")
+    if not _is_mbl(session["user"]) and server_id not in (session["user"].get("server_roles") or {}):
+        return jsonify([])
+    encoded_q = quote(q, safe="")
+    data = _bot_get(f"/guilds/{server_id}/members/search?query={encoded_q}&limit=12")
     if not isinstance(data, list):
         return jsonify([])
     return jsonify([{
@@ -1256,7 +1293,7 @@ def api_refresh_roles():
     with _cache_lock:
         for sid in (user.get("server_roles") or {}):
             _member_cache.pop(f"{sid}:{uid}", None)
-    _perm_cache.pop("all_server_ids", None)
+        _perm_cache.pop("all_server_ids", None)
 
     new_server_roles = _build_server_roles(uid)
     session["user"] = {

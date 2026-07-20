@@ -46,7 +46,11 @@ from flask import (
     jsonify, render_template_string, request, redirect, session, Response
 )
 
-VOTER_SALT   = os.getenv("VOTER_SALT", secrets.token_hex(16))
+VOTER_SALT   = os.getenv("VOTER_SALT", "")
+if not VOTER_SALT:
+    log.warning("[voting] VOTER_SALT nicht gesetzt! Verwende stabilen Fallback. "
+                "Setze VOTER_SALT in der .env für Produktion.")
+    VOTER_SALT = "insel-bot-voter-salt-fallback-2024"
 MBL_ID       = os.getenv("MBL", "")
 BOT_TOKEN    = os.getenv("DISCORD_TOKEN", "")
 DISCORD_API  = "https://discord.com/api/v10"

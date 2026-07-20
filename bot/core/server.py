@@ -49,6 +49,7 @@ FEATURE_COGS = [
     "bot.features.levels.cog",
     "bot.features.voting.cog",
     "bot.features.moderation.cog",
+    "bot.features.stream_notifications.cog",
     "bot.features.faq.cog",
     "bot.features.backups.cog",
     "bot.features.moderation.raid_protection"
@@ -98,13 +99,12 @@ async def Ping(ctx):
     await ctx.send("Pong!")
 
 @bot.command()
-async def Sync(self, ctx: commands.Context):
+async def Sync(ctx: commands.Context):
     """Synchronisiert die Slash-Commands global."""
     from bot.utils.permissions import has_admin_rights
     if has_admin_rights(ctx.author):
         await ctx.bot.tree.sync()
         await ctx.send("✅ Slash-Commands wurden global synchronisiert.")
-    else: pass
 
 
 async def main():
@@ -132,8 +132,6 @@ async def main():
                 else:
                     logger.error("Discord nach 5 Versuchen nicht erreichbar. Abbruch.")
                     raise
-            except KeyboardInterrupt as e:
-                logger.info("Bot heruntergefahren")
 
 
 if __name__ == "__main__":

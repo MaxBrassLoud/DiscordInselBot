@@ -63,7 +63,10 @@ _MBL_ID = os.getenv("MBL", "")
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000")
 
 # Salt für anonymen Voter-Hash – sollte in .env gesetzt sein
-VOTER_SALT = os.getenv("VOTER_SALT", secrets.token_hex(16))
+VOTER_SALT = os.getenv("VOTER_SALT", "")
+if not VOTER_SALT:
+    logger.warning("[voting] VOTER_SALT nicht gesetzt! Verwende stabilen Fallback.")
+    VOTER_SALT = "insel-bot-voter-salt-fallback-2024"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
