@@ -63,8 +63,8 @@ app.secret_key = _SECRET_KEY
 # ══════════════════════════════════════════════════════════════════════════════
 _rate_limits: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
-RATE_LIMIT_WINDOW = 60  # Sekunden
-RATE_LIMIT_MAX_REQUESTS = 120  # pro Fenster
+RATE_LIMIT_WINDOW = 30  # Sekunden
+RATE_LIMIT_MAX_REQUESTS = 480  # pro Fenster
 
 def _check_rate_limit(ip: str) -> bool:
     """Prüft ob die IP das Rate-Limit überschritten hat. Gibt True zurück wenn erlaubt."""
