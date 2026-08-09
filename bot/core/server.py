@@ -52,7 +52,8 @@ FEATURE_COGS = [
     "bot.features.stream_notifications.cog",
     "bot.features.faq.cog",
     "bot.features.backups.cog",
-    "bot.features.moderation.raid_protection"
+    "bot.features.moderation.raid_protection",
+    "bot.features.moderation.link_protection"
 ]
 
 

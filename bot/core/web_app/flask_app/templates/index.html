@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Insel Bot – Der Discord-Bot für deinen Minecraft-Clan</title>
   <meta name="description" content="Tickets, Bewerbungen, Events, Spieleabende und mehr – alles für den Insel-Clan.">
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body class="home-body">
@@ -18,7 +18,8 @@
 <!-- Nav -->
 <nav class="home-nav">
   <a href="{{ url_for('index') }}" class="nav-logo">
-    <div class="nav-logo-mark">
+    <img src="{{ url_for('static', filename='assets/logo.jpg') }}" alt="Insel Bot" class="nav-logo-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <div class="nav-logo-mark" style="display:none">
       <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
         <rect width="34" height="34" rx="9" fill="#4ade80"/>
         <path d="M10 22c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2" stroke-linecap="round"/>
@@ -28,6 +29,11 @@
     </div>
     Insel <span class="g">Bot</span>
   </a>
+  <button class="nav-mobile-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menü">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
   <div class="nav-links">
     <a href="#features" class="nav-link">Features</a>
     <a href="#dashboard" class="nav-link">Dashboard</a>
@@ -76,7 +82,7 @@
 <!-- Stats -->
 <div class="stats-row">
   <div class="stat-item">
-    <div class="stat-num">9+</div>
+    <div class="stat-num">13</div>
     <div class="stat-label">Module</div>
   </div>
   <div class="stat-item">
@@ -125,12 +131,39 @@
     </div>
 
     <div class="feature-card">
+      <div class="feature-icon">🛡️</div>
+      <div class="feature-name">Moderation</div>
+      <div class="feature-desc">
+        Timeout, Warn und Log-System. Moderations-Aktionen werden automatisch
+        geloggt. Raid-Schutz erkennt verdächtige Aktivitäten und schützt den Server.
+      </div>
+    </div>
+
+    <div class="feature-card">
       <div class="feature-icon">⛏️</div>
       <div class="feature-name">Minecraft-Namen</div>
       <div class="feature-desc">
         Mitglieder registrieren ihren Minecraft-Namen. Der Bot setzt automatisch
         den Discord-Nickname und aktualisiert einen dedizierten Log-Kanal mit
         Skin-Preview.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🎙️</div>
+      <div class="feature-name">Voice Channel Creator</div>
+      <div class="feature-desc">
+        Automatische Voice-Kanäle on demand. Benutzer erstellen eigene Kanäle
+        mit Privat-Modus, Warteraum und Limit – leere Kanäle werden automatisch gelöscht.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">⭐</div>
+      <div class="feature-name">Level-System</div>
+      <div class="feature-desc">
+        XP-System für aktive Mitglieder. Leaderboard mit Top-10, automatische
+        Level-Up-Benachrichtigungen und Admin-Befehle zum Zurücksetzen.
       </div>
     </div>
 
@@ -154,20 +187,20 @@
     </div>
 
     <div class="feature-card">
-      <div class="feature-icon">🖥️</div>
-      <div class="feature-name">Web-Dashboard</div>
+      <div class="feature-icon">📺</div>
+      <div class="feature-name">Stream-Benachrichtigungen</div>
       <div class="feature-desc">
-        Vollständiges Dashboard mit Discord-OAuth2-Login. Einsicht in Tickets
-        und Bewerbungen mit rollenbasiertem Zugriff – auch auf dem Handy.
+        YouTube & Twitch Accounts registrieren. Bei neuen Videos oder Streams
+        werden automatisch Benachrichtigungen im konfigurierten Kanal gesendet.
       </div>
     </div>
 
     <div class="feature-card">
-      <div class="feature-icon">📷</div>
-      <div class="feature-name">Medien-Weiterleitung</div>
+      <div class="feature-icon">🎂</div>
+      <div class="feature-name">Geburtstage</div>
       <div class="feature-desc">
-        Bilder, Videos, YouTube- und Twitch-Links werden automatisch in einen
-        Medienkanal weitergeleitet. Jede Funktion einzeln an- oder abschaltbar.
+        Mitglieder tragen ihren Geburtstag ein. Der Bot gratuliert automatisch
+        im konfigurierten Kanal und zeigt eine Geburtstags-Liste an.
       </div>
     </div>
 
@@ -186,6 +219,24 @@
       <div class="feature-desc">
         Begrüßt neue Mitglieder mit zufälligen personalisierten Nachrichten
         und verabschiedet austretende Mitglieder – kanalbasiert konfigurierbar.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">📷</div>
+      <div class="feature-name">Medien-Weiterleitung</div>
+      <div class="feature-desc">
+        Bilder, Videos, YouTube- und Twitch-Links werden automatisch in einen
+        Medienkanal weitergeleitet. Jede Funktion einzeln an- oder abschaltbar.
+      </div>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🖥️</div>
+      <div class="feature-name">Web-Dashboard</div>
+      <div class="feature-desc">
+        Vollständiges Dashboard mit Discord-OAuth2-Login. Einsicht in Tickets
+        und Bewerbungen mit rollenbasiertem Zugriff – auch auf dem Handy.
       </div>
     </div>
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Login – Insel Bot Dashboard</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body class="login-body">
@@ -15,7 +15,8 @@
 </div>
 
 <div class="login-card">
-  <div class="login-icon">🏝️</div>
+  <img src="{{ url_for('static', filename='assets/logo.jpg') }}" alt="Insel Bot" class="nav-logo-img" style="height:52px;margin:0 auto 14px;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+  <div class="login-icon" style="display:none">🏝️</div>
   <h1 class="login-title">Insel <span class="g">Bot</span></h1>
   <p class="login-sub">Dashboard · Nur für autorisierte Mitglieder</p>
 

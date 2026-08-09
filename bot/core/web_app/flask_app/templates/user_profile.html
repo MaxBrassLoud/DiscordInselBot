@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nutzer-Profil – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .profile-body { max-width: 1100px; margin: 0 auto; padding: 22px; }
+    @media(max-width:768px){ .profile-body { padding: 14px; } }
+
+    /* Search */
+    .search-box { display:flex; gap:10px; margin-bottom:24px; flex-wrap:wrap; }
+    .search-input-wrap { flex:1; min-width:250px; position:relative; }
+    .search-input-wrap input {
+      width:100%; background:var(--bg-surface); border:1px solid var(--border); color:var(--text);
+      font-family:'Outfit',sans-serif; font-size:0.88rem; padding:11px 14px 11px 40px;
+      border-radius:var(--r); outline:none; transition:border-color var(--fast);
+    }
+    .search-input-wrap input:focus { border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12); }
+    .search-input-wrap .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text3); pointer-events:none; display:flex; }
+    .search-btn { padding:11px 24px; border-radius:var(--r); font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.92rem; background:var(--green2); color:#000; border:none; cursor:pointer; transition:all var(--mid); white-space:nowrap; }
+    .search-btn:hover { filter:brightness(1.1); transform:translateY(-1px); }
+    .search-btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .search-hint { font-size:0.78rem; color:var(--text3); margin-top:6px; }
+
+    /* Results dropdown */
+    .search-results { position:absolute; top:100%; left:0; right:0; background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); margin-top:4px; max-height:240px; overflow-y:auto; z-index:50; display:none; box-shadow:var(--shadow); }
+    .search-results.open { display:block; }
+    .search-result-item { display:flex; align-items:center; gap:10px; padding:9px 14px; cursor:pointer; transition:background var(--fast); border-bottom:1px solid var(--border); }
+    .search-result-item:last-child { border-bottom:none; }
+    .search-result-item:hover { background:var(--bg-hover); }
+    .search-result-item img { width:28px; height:28px; border-radius:50%; flex-shrink:0; }
+    .search-result-item .name { font-size:0.85rem; font-weight:600; color:var(--text); }
+    .search-result-item .sub { font-size:0.72rem; color:var(--text3); }
+
+    /* Profile card */
+    .profile-hero { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-xl); padding:28px; margin-bottom:20px; display:none; }
+    .profile-hero.show { display:block; }
+    .profile-hero-inner { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+    .profile-avatar { width:80px; height:80px; border-radius:50%; border:3px solid var(--green2); object-fit:cover; flex-shrink:0; }
+    .profile-info { flex:1; min-width:200px; }
+    .profile-name { font-family:'Rajdhani',sans-serif; font-size:1.6rem; font-weight:700; color:var(--text); margin-bottom:2px; }
+    .profile-username { font-size:0.85rem; color:var(--text3); margin-bottom:8px; }
+    .profile-id { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--text4); }
+    .profile-stats { display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; }
+    .profile-stat { text-align:center; }
+    .profile-stat-num { font-family:'Rajdhani',sans-serif; font-size:1.3rem; font-weight:700; color:var(--green); }
+    .profile-stat-label { font-size:0.66rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+
+    /* Server chips */
+    .server-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+    .server-chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; font-size:0.78rem; color:var(--text2); }
+    .server-chip img { width:18px; height:18px; border-radius:50%; }
+    .server-chip .nick { color:var(--green); font-weight:600; }
+
+    /* Sections */
+    .profile-section { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-lg); margin-bottom:16px; display:none; }
+    .profile-section.show { display:block; }
+    .section-header { display:flex; align-items:center; gap:8px; padding:14px 18px; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
+    .section-header:hover { background:var(--bg-hover); }
+    .section-icon { font-size:1rem; }
+    .section-title { font-family:'Rajdhani',sans-serif; font-size:0.95rem; font-weight:700; color:var(--text); flex:1; }
+    .section-count { font-family:'JetBrains Mono',monospace; font-size:0.74rem; color:var(--text3); background:var(--bg-surface); padding:2px 8px; border-radius:10px; }
+    .section-chevron { color:var(--text3); transition:transform var(--fast); font-size:0.8rem; }
+    .section-header.open .section-chevron { transform:rotate(90deg); }
+    .section-body { display:none; padding:0; }
+    .section-body.open { display:block; }
+
+    /* Table inside sections */
+    .data-table { width:100%; border-collapse:collapse; font-size:0.83rem; }
+    .data-table thead th { padding:8px 14px; text-align:left; background:var(--bg-surface); color:var(--text3); font-size:0.6rem; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; border-bottom:1px solid var(--border); }
+    .data-table tbody td { padding:9px 14px; border-bottom:1px solid var(--border); vertical-align:middle; }
+    .data-table tbody tr:last-child td { border-bottom:none; }
+    .data-table tbody tr:hover td { background:rgba(74,222,128,0.03); }
+
+    .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:20px; font-size:0.68rem; font-weight:700; border:1px solid transparent; white-space:nowrap; }
+    .badge-dot { width:5px; height:5px; border-radius:50%; background:currentColor; flex-shrink:0; }
+    .badge-open     { background:rgba(74,222,128,0.10); color:var(--green); border-color:rgba(74,222,128,0.22); }
+    .badge-closed   { background:rgba(86,100,126,0.12); color:var(--text3); border-color:rgba(86,100,126,0.2); }
+    .badge-accepted { background:rgba(74,222,128,0.10); color:var(--green); border-color:rgba(74,222,128,0.22); }
+    .badge-rejected { background:var(--red-bg); color:var(--red); border-color:var(--red-border); }
+    .badge-pending  { background:var(--orange-bg); color:var(--orange); border-color:rgba(251,146,60,0.25); }
+    .badge-timeout  { background:rgba(251,146,60,0.10); color:var(--orange); border-color:rgba(251,146,60,0.25); }
+    .badge-warn     { background:rgba(250,204,21,0.10); color:#facc15; border-color:rgba(250,204,21,0.25); }
+    .badge-ban      { background:var(--red-bg); color:var(--red); border-color:var(--red-border); }
+    .badge-kick     { background:rgba(168,85,247,0.10); color:#a855f7; border-color:rgba(168,85,247,0.25); }
+
+    .mono { font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:var(--text3); }
+    .muted { color:var(--text3); }
+    .empty-msg { text-align:center; padding:28px; color:var(--text3); font-size:0.85rem; }
+
+    .loading-state { text-align:center; padding:40px; color:var(--text3); }
+    .no-profile { text-align:center; padding:60px 20px; color:var(--text3); }
+    .no-profile-icon { font-size:2.5rem; margin-bottom:12px; opacity:0.3; }
+    .no-profile h3 { font-family:'Rajdhani',sans-serif; font-size:1.1rem; color:var(--text2); margin-bottom:4px; }
+  </style>
+</head>
+<body class="dash-body">
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <a href="/" style="text-decoration:none;">
+      <img src="{{ url_for('static', filename='assets/logo.jpg') }}" alt="Insel Bot" class="brand-logo-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="brand-logo" style="display:none">
+        <svg width="18" height="18" viewBox="0 0 34 34" fill="none">
+          <path d="M7 21c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="11" cy="11" r="2" fill="#000"/><circle cx="23" cy="11" r="2" fill="#000"/>
+        </svg>
+      </div>
+    </a>
+    <div class="brand-name">Insel <span class="g">Bot</span></div>
+    <div class="online-badge"><span class="dot"></span></div>
+  </div>
+  <nav class="sidebar-nav">
+    <span class="nav-section-lbl">Navigation</span>
+    <a href="/dashboard/tickets" class="nav-item"><span class="nav-icon">🎫</span> Tickets</a>
+    <a href="/dashboard/applications" class="nav-item"><span class="nav-icon">📋</span> Bewerbungen</a>
+    <a href="/dashboard/user" class="nav-item active"><span class="nav-icon">👤</span> Nutzer</a>
+    <a href="/dashboard/setup" class="nav-item"><span class="nav-icon">⚙️</span> System Setup</a>
+    <a href="/" class="nav-item"><span class="nav-icon">🏝️</span> Startseite</a>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="user-chip">
+      <img src="{{ user.avatar }}" alt="{{ user.username }}">
+      <div class="user-chip-info">
+        <div class="chip-name">{{ user.display_name or user.username }}</div>
+        <div class="chip-tag">@{{ user.username }}</div>
+      </div>
+      <a href="/logout" class="logout-btn" title="Abmelden">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+        </svg>
+      </a>
+    </div>
+  </div>
+</aside>
+
+<!-- Main -->
+<div class="main-wrap">
+  <div class="topbar">
+    <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menü">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <div class="topbar-left">
+      <div class="topbar-title">👤 Nutzer-Profil</div>
+      <div class="topbar-sub">Alle Daten eines Nutzers über alle Server</div>
+    </div>
+    <div class="tabs">
+      <a href="/dashboard/tickets" class="tab">🎫 Tickets</a>
+      <a href="/dashboard/applications" class="tab">📋 Bewerbungen</a>
+      <a href="/dashboard/user" class="tab active">👤 Nutzer</a>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- Search -->
+    <div class="search-box">
+      <div class="search-input-wrap">
+        <span class="search-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+        </span>
+        <input type="text" id="searchInput" placeholder="Discord-ID oder Name eingeben..." autocomplete="off">
+        <div class="search-results" id="searchResults"></div>
+      </div>
+      <button class="search-btn" id="searchBtn" onclick="searchUser()">🔍 Suchen</button>
+    </div>
+    <div class="search-hint">Gib eine Discord-ID (z.B. 123456789) oder einen Benutzernamen ein und klicke auf Suchen.</div>
+
+    <!-- Loading -->
+    <div class="loading-state" id="loadingState" style="display:none;">
+      <div class="dot" style="margin:0 auto 12px;"></div>
+      Lade Nutzer-Daten über alle Server...
+    </div>
+
+    <!-- No profile -->
+    <div class="no-profile" id="noProfile">
+      <div class="no-profile-icon">👤</div>
+      <h3>Kein Nutzer ausgewählt</h3>
+      <p style="font-size:0.83rem;">Gib oben eine Discord-ID oder einen Benutzernamen ein um ein Profil anzuzeigen.</p>
+    </div>
+
+    <!-- Profile content -->
+    <div id="profileContent" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+let _searchTimeout = null;
+
+// ── Search input ────────────────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('input', function(e) {
+  clearTimeout(_searchTimeout);
+  const val = e.target.value.trim();
+  if (val.length < 2) { closeSearchResults(); return; }
+  _searchTimeout = setTimeout(() => searchMembers(val), 250);
+});
+
+document.getElementById('searchInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { closeSearchResults(); searchUser(); }
+  if (e.key === 'Escape') { closeSearchResults(); }
+});
+
+// Close autocomplete on click outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-input-wrap')) closeSearchResults();
+});
+
+function closeSearchResults() {
+  document.getElementById('searchResults').classList.remove('open');
+}
+
+async function searchMembers(query) {
+  try {
+    const r = await fetch(`/api/members/search?q=${encodeURIComponent(query)}`);
+    const data = await r.json();
+    const box = document.getElementById('searchResults');
+    if (!data.length) { box.classList.remove('open'); return; }
+    box.innerHTML = data.map(m =>
+      `<div class="search-result-item" onclick="selectUser('${esc(m.id)}', '${esc(m.display)}')">
+        ${m.avatar ? `<img src="${esc(m.avatar)}" alt="">` : '<div style="width:28px;height:28px;border-radius:50%;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:var(--text3);">${esc((m.display||'?')[0])}</div>'}
+        <div><div class="name">${esc(m.display)}</div><div class="sub">${esc(m.id)}</div></div>
+      </div>`
+    ).join('');
+    box.classList.add('open');
+  } catch(e) { console.error(e); }
+}
+
+function selectUser(id, name) {
+  document.getElementById('searchInput').value = name;
+  closeSearchResults();
+  loadProfile(id);
+}
+
+function searchUser() {
+  const val = document.getElementById('searchInput').value.trim();
+  if (!val) return;
+  // If it's a Discord ID (pure digits)
+  if (/^\d{17,20}$/.test(val)) {
+    loadProfile(val);
+  } else {
+    searchMembers(val);
+  }
+}
+
+// ── Load profile ────────────────────────────────────────────────────────────
+async function loadProfile(userId) {
+  document.getElementById('noProfile').style.display = 'none';
+  document.getElementById('profileContent').style.display = 'none';
+  document.getElementById('loadingState').style.display = '';
+
+  try {
+    const r = await fetch(`/api/user/profile?user_id=${userId}`);
+    const d = await r.json();
+    document.getElementById('loadingState').style.display = 'none';
+
+    if (d.error) {
+      document.getElementById('noProfile').innerHTML = `<div class="no-profile-icon">⚠️</div><h3>${esc(d.error)}</h3>`;
+      document.getElementById('noProfile').style.display = '';
+      return;
+    }
+    renderProfile(d);
+  } catch(e) {
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('noProfile').innerHTML = `<div class="no-profile-icon">❌</div><h3>Netzwerkfehler</h3><p style="font-size:0.83rem;">${esc(e.message)}</p>`;
+    document.getElementById('noProfile').style.display = '';
+  }
+}
+
+// ── Render profile ──────────────────────────────────────────────────────────
+function renderProfile(d) {
+  const tc = d.tickets_created || [];
+  const tp = d.tickets_participated || [];
+  const apps = d.applications || [];
+  const mod = d.moderation || [];
+  const lvls = d.levels || [];
+  const bdays = d.birthdays || [];
+  const mc = d.mc_names || [];
+  const servers = d.servers || [];
+
+  let html = '';
+
+  // Hero
+  html += `<div class="profile-hero show">
+    <div class="profile-hero-inner">
+      <img class="profile-avatar" src="${esc(d.avatar || '')}" alt="" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+      <div class="profile-info">
+        <div class="profile-name">${esc(d.name || 'Unbekannt')}</div>
+        <div class="profile-username">@${esc(d.username || '')} · ${esc(d.global_name || '')}</div>
+        <div class="profile-id">ID: ${esc(d.id)}</div>
+        <div class="profile-stats">
+          <div class="profile-stat"><div class="profile-stat-num">${tc.length}</div><div class="profile-stat-label">Tickets</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${apps.length}</div><div class="profile-stat-label">Bewerbungen</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${mod.length}</div><div class="profile-stat-label">Moderation</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${servers.length}</div><div class="profile-stat-label">Server</div></div>
+        </div>
+        ${servers.length ? `<div class="server-chips">${servers.map(s =>
+          `<div class="server-chip">
+            ${s.server_icon ? `<img src="${esc(s.server_icon)}" alt="">` : ''}
+            ${esc(s.server_name)}${s.nick ? ` <span class="nick">(${esc(s.nick)})</span>` : ''}
+          </div>`
+        ).join('')}</div>` : ''}
+      </div>
+    </div>
+  </div>`;
+
+  // ── Tickets erstellt ──────────────────────────────────────────────────────
+  html += renderSection('🎫', 'Erstellte Tickets', tc.length, `
+    ${tc.length === 0 ? '<div class="empty-msg">Keine Tickets erstellt.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>#</th><th>Titel</th><th>Modul</th><th>Server</th><th>Status</th><th>Erstellt</th></tr></thead>
+      <tbody>${tc.map(t => `<tr>
+        <td><span class="mono">#${t.ticket_id}</span></td>
+        <td>${esc(t.title || 'Ticket #'+t.ticket_id)}</td>
+        <td>${esc(t.module || '–')}</td>
+        <td>${esc(t._server_name)}</td>
+        <td>${statusBadge(t.status)}</td>
+        <td><span class="mono">${(t.created_at||'').slice(0,10)}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Tickets Beteiligung ───────────────────────────────────────────────────
+  html += renderSection('🤝', 'Ticket-Beteiligungen', tp.length, `
+    ${tp.length === 0 ? '<div class="empty-msg">An keinem Ticket beteiligt.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>#</th><th>Titel</th><th>Erstellt von</th><th>Server</th><th>Status</th></tr></thead>
+      <tbody>${tp.map(t => `<tr>
+        <td><span class="mono">#${t.ticket_id}</span></td>
+        <td>${esc(t.title || 'Ticket #'+t.ticket_id)}</td>
+        <td>${esc(t.creator_name || '?')}</td>
+        <td>${esc(t._server_name)}</td>
+        <td>${statusBadge(t.status)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Bewerbungen ───────────────────────────────────────────────────────────
+  html += renderSection('📋', 'Bewerbungen', apps.length, `
+    ${apps.length === 0 ? '<div class="empty-msg">Keine Bewerbungen eingereicht.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>#</th><th>MC-Name</th><th>Server</th><th>Status</th><th>Eingereicht</th></tr></thead>
+      <tbody>${apps.map(a => `<tr>
+        <td><span class="mono">#${a.app_id}</span></td>
+        <td>${a.minecraft_name ? `<span style="color:var(--green);">⛏ ${esc(a.minecraft_name)}</span>` : '<span class="muted">–</span>'}</td>
+        <td>${esc(a._server_name)}</td>
+        <td>${statusBadgeApp(a.status)}</td>
+        <td><span class="mono">${(a.created_at||'').slice(0,10)}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Moderation ────────────────────────────────────────────────────────────
+  html += renderSection('🛡️', 'Moderation', mod.length, `
+    ${mod.length === 0 ? '<div class="empty-msg">Keine Moderations-Aktionen.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>Aktion</th><th>Moderator</th><th>Grund</th><th>Server</th><th>Datum</th></tr></thead>
+      <tbody>${mod.map(m => `<tr>
+        <td>${modBadge(m.action)}</td>
+        <td>${esc(m.moderator_name || '?')}</td>
+        <td>${esc(m.reason || '–')}</td>
+        <td>${esc(m._server_name)}</td>
+        <td><span class="mono">${(m.created_at||'').slice(0,16).replace('T',' ')}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Level ─────────────────────────────────────────────────────────────────
+  html += renderSection('⭐', 'Level-Daten', lvls.length, `
+    ${lvls.length === 0 ? '<div class="empty-msg">Keine Level-Daten vorhanden.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>Server</th><th>Level</th><th>XP</th><th>Nachrichten</th><th>Voice (Min)</th></tr></thead>
+      <tbody>${lvls.map(l => `<tr>
+        <td>${esc(l._server_name)}</td>
+        <td><span style="color:var(--green);font-weight:700;">${l.level || 0}</span></td>
+        <td><span class="mono">${(l.xp || 0).toLocaleString()}</span></td>
+        <td>${l.messages || 0}</td>
+        <td>${l.voice_minutes || 0}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Geburtstage ───────────────────────────────────────────────────────────
+  html += renderSection('🎂', 'Geburtstage', bdays.length, `
+    ${bdays.length === 0 ? '<div class="empty-msg">Kein Geburtstag hinterlegt.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>Server</th><th>Geburtstag</th></tr></thead>
+      <tbody>${bdays.map(b => `<tr>
+        <td>${esc(b._server_name)}</td>
+        <td><span style="color:var(--green);">${esc(b.birthday || '?')}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  // ── Minecraft-Namen ───────────────────────────────────────────────────────
+  html += renderSection('⛏️', 'Minecraft-Namen', mc.length, `
+    ${mc.length === 0 ? '<div class="empty-msg">Kein Minecraft-Name registriert.</div>' : `
+    <div style="overflow-x:auto;"><table class="data-table">
+      <thead><tr><th>Server</th><th>Minecraft-Name</th><th>Registriert</th></tr></thead>
+      <tbody>${mc.map(m => `<tr>
+        <td>${esc(m._server_name)}</td>
+        <td><span style="color:var(--green);font-weight:600;">⛏ ${esc(m.minecraft_name || '?')}</span></td>
+        <td><span class="mono">${(m.created_at||'').slice(0,10)}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}`);
+
+  document.getElementById('profileContent').innerHTML = html;
+  document.getElementById('profileContent').style.display = '';
+
+  // Add toggle behavior
+  document.querySelectorAll('.section-header').forEach(el => {
+    el.addEventListener('click', () => {
+      el.classList.toggle('open');
+      el.nextElementSibling.classList.toggle('open');
+    });
+  });
+}
+
+function renderSection(icon, title, count, body) {
+  return `<div class="profile-section show">
+    <div class="section-header">
+      <span class="section-icon">${icon}</span>
+      <span class="section-title">${title}</span>
+      <span class="section-count">${count}</span>
+      <span class="section-chevron">▶</span>
+    </div>
+    <div class="section-body">${body}</div>
+  </div>`;
+}
+
+function statusBadge(s) {
+  const m = {
+    open: '<span class="badge badge-open"><span class="badge-dot"></span>Offen</span>',
+    closed: '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
+  };
+  return m[s] || `<span class="badge badge-pending"><span class="badge-dot"></span>${esc(s)}</span>`;
+}
+function statusBadgeApp(s) {
+  const m = {
+    pending: '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    open: '<span class="badge badge-pending"><span class="badge-dot"></span>Ausstehend</span>',
+    accepted: '<span class="badge badge-accepted"><span class="badge-dot"></span>Angenommen</span>',
+    rejected: '<span class="badge badge-rejected"><span class="badge-dot"></span>Abgelehnt</span>',
+    closed: '<span class="badge badge-closed"><span class="badge-dot"></span>Geschlossen</span>',
+  };
+  return m[s] || `<span class="badge badge-pending"><span class="badge-dot"></span>${esc(s)}</span>`;
+}
+function modBadge(action) {
+  const m = {
+    timeout: '<span class="badge badge-timeout"><span class="badge-dot"></span>Timeout</span>',
+    timeout_native: '<span class="badge badge-timeout"><span class="badge-dot"></span>Timeout</span>',
+    untimeout: '<span class="badge badge-open"><span class="badge-dot"></span>Timeout aufgehoben</span>',
+    untimeout_native: '<span class="badge badge-open"><span class="badge-dot"></span>Timeout aufgehoben</span>',
+    warn: '<span class="badge badge-warn"><span class="badge-dot"></span>Warnung</span>',
+    kick: '<span class="badge badge-kick"><span class="badge-dot"></span>Kick</span>',
+    ban: '<span class="badge badge-ban"><span class="badge-dot"></span>Ban</span>',
+    unban: '<span class="badge badge-open"><span class="badge-dot"></span>Ban aufgehoben</span>',
+  };
+  return m[action] || `<span class="badge badge-pending"><span class="badge-dot"></span>${esc(action)}</span>`;
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('active');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('active');
+}
+</script>
+</body>
+</html>

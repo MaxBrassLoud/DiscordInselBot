@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rollenvergabe Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .setup-body { max-width: 900px; margin: 0 auto; padding: 24px 22px; }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
+    .panel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-lg); padding:24px 26px; margin-bottom:18px; }
+    .panel-title { font-family:'Rajdhani',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .panel-sub { font-size:0.82rem; color:var(--text3); margin-bottom:20px; }
+    .field { margin-bottom:16px; }
+    .field label { display:block; font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:5px; }
+    .field select, .field input[type=text] { width:100%; background:var(--bg-surface); border:1px solid var(--border); color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem; padding:9px 12px; border-radius:var(--r-sm); outline:none; transition:border-color var(--fast); }
+    .field select:focus, .field input:focus { border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12); }
+    .field select option { background:#1d2128; }
+    .field-hint { font-size:0.70rem; color:var(--text3); margin-top:4px; }
+    .field-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    @media(max-width:600px){ .field-row { grid-template-columns:1fr; } }
+    .module-list { display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
+    .module-item { background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r); padding:13px 15px; display:flex; align-items:center; gap:12px; }
+    .module-item-icon { font-size:1.2rem; flex-shrink:0; }
+    .module-item-info { flex:1; min-width:0; }
+    .module-item-name { font-weight:700; color:var(--text); font-size:0.88rem; margin-bottom:2px; }
+    .module-item-meta { font-size:0.72rem; color:var(--text3); }
+    .module-item-actions { display:flex; gap:6px; flex-shrink:0; }
+    .icon-btn { width:28px; height:28px; border-radius:var(--r-sm); display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid var(--border); background:var(--bg-card); color:var(--text3); font-size:0.9rem; transition:all var(--fast); }
+    .icon-btn:hover { border-color:var(--red-border); color:var(--red); }
+    .btn-group { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:9px 20px; border-radius:var(--r-sm); font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.88rem; cursor:pointer; border:none; transition:all var(--mid); }
+    .btn-primary { background:var(--green2); color:#000; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn-outline { background:transparent; color:var(--text2); border:1px solid var(--border2); }
+    .btn-outline:hover:not(:disabled) { border-color:var(--green2); color:var(--green2); }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9998; display:none; align-items:center; justify-content:center; }
+    .modal-overlay.open { display:flex; }
+    .modal-box { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r-xl); padding:28px 30px; width:100%; max-width:500px; max-height:90vh; overflow-y:auto; box-shadow:var(--shadow-xl); animation:fadeUp .2s ease both; }
+    .modal-title { font-family:'Rajdhani',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; }
+    .modal-close { background:none; border:none; color:var(--text3); cursor:pointer; font-size:1.2rem; padding:2px 6px; border-radius:4px; transition:color var(--fast); }
+    .modal-close:hover { color:var(--text); }
+    .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:200px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
+    .toast.ok  { border-left:3px solid var(--green2); }
+    .toast.err { border-left:3px solid var(--red); }
+  </style>
+</head>
+<body class="detail-body">
+<div class="toast-container" id="toastContainer"></div>
+<div class="modal-overlay" id="moduleModal">
+  <div class="modal-box">
+    <div class="modal-title"><span id="modalTitle">Neues Modul</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    System Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">🏷️ Rollenvergabe</span>
+  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
+</div>
+
+<div class="setup-body">
+  <div class="panel-card">
+    <div class="panel-title">Rollenvergabe einrichten</div>
+    <div class="panel-sub">Erstelle Module mit Rollen die sich Mitglieder selbst holen können.</div>
+
+    <div class="module-list" id="moduleList">
+      <div style="color:var(--text3);font-size:0.83rem;padding:8px 0;">Noch keine Module. Füge das erste Modul hinzu.</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="openAddModal()">➕ Modul hinzufügen</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_ID = {{ server_id | tojson }};
+let _modules = [];
+let _roles = [];
+
+async function init() {
+  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
+  try {
+    const rr = await fetch(`/api/setup/guild/${SERVER_ID}/roles`);
+    const rd = await rr.json();
+    _roles = rd.roles || [];
+    await loadModules();
+  } catch(e) { toast('Fehler beim Laden', 'err'); console.error('init:', e); }
+}
+
+async function loadModules() {
+  try {
+    const r = await fetch(`/api/setup/rollen/${SERVER_ID}`);
+    const d = await r.json();
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+    _modules = d.modules || [];
+    renderModules();
+  } catch(e) { console.error('loadModules:', e); }
+}
+
+function renderModules() {
+  const list = document.getElementById('moduleList');
+  if (!_modules.length) { list.innerHTML = '<div style="color:var(--text3);font-size:0.83rem;padding:8px 0;">Noch keine Module. Füge das erste Modul hinzu.</div>'; return; }
+  list.innerHTML = _modules.map(m => {
+    const role = _roles.find(r => r.id === m.role_id);
+    return `<div class="module-item">
+      <div class="module-item-icon">🏷️</div>
+      <div class="module-item-info">
+        <div class="module-item-name">${esc(m.display_name || m.role_name)}</div>
+        <div class="module-item-meta">Rolle: @${esc(role?.name || m.role_id)} · ${esc(m.role_desc || '')}</div>
+      </div>
+      <div class="module-item-actions">
+        <button class="icon-btn" onclick="deleteModule(${m.id})">🗑️</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openAddModal() {
+  document.getElementById('modalTitle').textContent = '➕ Neues Modul';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="field-row">
+      <div class="field"><label>Anzeige-Name *</label><input type="text" id="mod_display" placeholder="z.B. Gaming"></div>
+      <div class="field"><label>Rolle *</label><select id="mod_role"><option value="">Rolle wählen...</option>${_roles.map(r => `<option value="${esc(r.id)}">@${esc(r.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>Beschreibung</label><input type="text" id="mod_desc" placeholder="z.B. Für Gaming-Interessierte"></div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="saveModule()">💾 Speichern</button>
+      <button class="btn btn-outline" onclick="closeModal()">Abbrechen</button>
+    </div>`;
+  document.getElementById('moduleModal').classList.add('open');
+}
+
+function closeModal() { document.getElementById('moduleModal').classList.remove('open'); }
+
+async function saveModule() {
+  const display = document.getElementById('mod_display')?.value.trim();
+  const role_id = document.getElementById('mod_role')?.value;
+  if (!display) { toast('Anzeige-Name fehlt', 'err'); return; }
+  if (!role_id) { toast('Rolle fehlt', 'err'); return; }
+  const body = {
+    role_id, role_name: display, display_name: display,
+    role_desc: document.getElementById('mod_desc')?.value.trim() || '',
+    channel_id: '',
+  };
+  try {
+    const r = await fetch(`/api/setup/rollen/${SERVER_ID}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: '+(d.error||'?'), 'err'); return; }
+    toast('Modul hinzugefügt ✓', 'ok');
+    closeModal(); await loadModules();
+  } catch(e) { toast('Netzwerkfehler: '+e.message, 'err'); }
+}
+
+async function deleteModule(id) {
+  if (!confirm('Modul wirklich löschen?')) return;
+  try {
+    const r = await fetch(`/api/setup/rollen/${SERVER_ID}/${id}`, { method:'DELETE' });
+    if (r.ok) { toast('Modul gelöscht', 'ok'); await loadModules(); }
+    else { const d = await r.json(); toast('Fehler: '+(d.error||'?'), 'err'); }
+  } catch(e) { toast('Netzwerkfehler: '+e.message, 'err'); }
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type='ok') {
+  const t = document.createElement('div'); t.className = `toast ${type}`;
+  t.innerHTML = `<span>${type==='ok'?'✅':'❌'}</span><span>${esc(msg)}</span>`;
+  document.getElementById('toastContainer').appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+init();
+</script>
+</body>
+</html>

@@ -114,7 +114,7 @@ def normalize_text(text: str) -> str:
 
 async def get_image_hashes(attachment: discord.Attachment) -> list[imagehash.ImageHash]:
     """
-    Lade ein Attachment herunter und berechne den average_hash (8×8 = 64 Bit).
+    Lade ein Attachment herunter und berechne den average_hash (16×16 = 256 Bit).
     Gibt eine Liste zurück (meist ein Hash pro Bild).
     """
     if not attachment.content_type or not attachment.content_type.startswith('image/'):
@@ -124,7 +124,7 @@ async def get_image_hashes(attachment: discord.Attachment) -> list[imagehash.Ima
         img = Image.open(io.BytesIO(data))
         if img.mode != 'RGB':
             img = img.convert('RGB')
-        return [imagehash.average_hash(img, hash_size=8)]
+        return [imagehash.average_hash(img, hash_size=16)]
     except Exception as e:
         logger.debug(f"[raid] Bild-Hashing fehlgeschlagen für {attachment.filename}: {e}")
         return []
@@ -867,7 +867,11 @@ class RaidProtectionCog(commands.Cog):
         await interaction.followup.send(meta["feedback"], ephemeral=True)
 
     # ===== SLASH-COMMANDS (unverändert) =====
-    @app_commands.command(name="raid_ignore", description="Ignoriere eine Rolle bei der Raid-Erkennung")
+    raid = app_commands.Group(
+        name="raid",
+        description="raid protection System"
+    )
+    @raid.command(name="ignore", description="Ignoriere eine Rolle bei der Raid-Erkennung")
     @app_commands.default_permissions(administrator=True)
     async def raid_ignore(self, interaction: discord.Interaction, role: discord.Role):
         if not interaction.guild:
@@ -877,7 +881,7 @@ class RaidProtectionCog(commands.Cog):
         msg = f"{role.mention} wird ignoriert." if success else f"{role.mention} wird bereits ignoriert oder es gab einen Fehler."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="raid_unignore", description="Hebe die Ignorierung auf")
+    @raid.command(name="unignore", description="Hebe die Ignorierung auf")
     @app_commands.default_permissions(administrator=True)
     async def raid_unignore(self, interaction: discord.Interaction, role: discord.Role):
         if not interaction.guild:
@@ -887,7 +891,7 @@ class RaidProtectionCog(commands.Cog):
         msg = f"{role.mention} wird nun wieder ueberprueft." if success else f"{role.mention} war nicht in der Ignorierliste."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="raid_list_ignored", description="Zeige alle ignorierten Rollen")
+    @raid.command(name="list_ignored", description="Zeige alle ignorierten Rollen")
     @app_commands.default_permissions(administrator=True)
     async def raid_list_ignored(self, interaction: discord.Interaction):
         if not interaction.guild:

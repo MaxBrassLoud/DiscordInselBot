@@ -4,14 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>System Setup – Insel Bot</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
-  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
     .setup-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 18px;
       margin-top: 28px;
+    }
+    @media (max-width: 600px) {
+      .setup-grid { grid-template-columns: 1fr; }
+      .server-selector { flex-direction: column; align-items: stretch; }
+      .server-selector label { margin-bottom: 4px; }
+      .page-hero-title { font-size: 1.3rem; }
     }
     .setup-card {
       background: var(--bg-card);
@@ -127,7 +133,8 @@
   <div class="page-hero">
     <div class="page-hero-title">⚙️ System Setup</div>
     <div class="page-hero-sub">Konfiguriere alle Bot-Systeme direkt im Browser – kein Discord-Command nötig.<br>
-      <span style="color:var(--orange);font-size:0.78rem;">⚠️ Nur Server auf denen du <strong>Administrator-Rechte</strong> hast werden angezeigt.</span>
+      <span style="color:var(--orange);font-size:0.78rem;">⚠️ Nur Server auf denen du <strong>Administrator-Rechte</strong> hast werden angezeigt.</span><br>
+      <a href="/api/debug/servers" target="_blank" style="color:var(--text3);font-size:0.72rem;">🔧 Debug: Server-Zustand anzeigen</a>
     </div>
   </div>
 
@@ -136,6 +143,7 @@
     <select id="serverSelect" onchange="onServerChange(this.value)">
       <option value="">Lade Server...</option>
     </select>
+    <button onclick="refreshServers()" style="background:var(--bg-surface);border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;font-size:0.78rem;font-family:'Outfit',sans-serif;">↻ Aktualisieren</button>
   </div>
 
   <div id="noAdminNotice" style="display:none;" class="no-admin-notice">
@@ -145,13 +153,23 @@
   </div>
 
   <div id="setupContent" style="display:none;">
-    <div class="section-divider">Bot-Systeme</div>
+    <div class="section-divider">Web-Setup (5 Module)</div>
     <div class="setup-grid" id="setupGrid"></div>
+    <div class="section-divider" style="margin-top:32px;">Discord-Setup (8 Module)</div>
+    <div class="setup-grid" id="setupGridDiscord"></div>
   </div>
 </div>
 
 <script>
 let _serverId = '';
+
+async function refreshServers() {
+  // Cache leeren durch Session-Refresh
+  try {
+    await fetch('/api/debug/refresh_roles');
+  } catch(e) {}
+  await loadServers();
+}
 
 async function loadServers() {
   const sel = document.getElementById('serverSelect');
@@ -196,6 +214,7 @@ function onServerChange(sid) {
 }
 
 function renderSetupGrid(sid) {
+  // Web-Setup Karten (verfügbar)
   document.getElementById('setupGrid').innerHTML = `
     <a href="/dashboard/setup/tickets?server_id=${esc(sid)}" class="setup-card">
       <div class="setup-card-icon">🎫</div>
@@ -246,13 +265,89 @@ function renderSetupGrid(sid) {
       </div>
       <span class="setup-card-status status-ok">● Verfügbar</span>
     </a>
+  `;
 
-    <div class="setup-card disabled">
+  // Discord-Setup Karten (jetzt alle als Web-Setup verfügbar)
+  document.getElementById('setupGridDiscord').innerHTML = `
+    <a href="/dashboard/setup/moderation?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🛡️</div>
+      <div class="setup-card-title">Moderation</div>
+      <div class="setup-card-desc">
+        Moderations-Log-Kanal einrichten. Timeout, Warn und
+        Log-System konfigurieren.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/spieleabend?server_id=${esc(sid)}" class="setup-card">
       <div class="setup-card-icon">🎮</div>
       <div class="setup-card-title">Spieleabende</div>
-      <div class="setup-card-desc">Spieleabend-Kanal und Rollen konfigurieren.</div>
-      <span class="setup-card-status status-none">Bald verfügbar</span>
-    </div>
+      <div class="setup-card-desc">
+        Ping-Rolle, Kanal und Lösch-Rollen konfigurieren.
+        Spieleabende mit Erinnerungen erstellen.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/events?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">📅</div>
+      <div class="setup-card-title">Event-System</div>
+      <div class="setup-card-desc">
+        Ankündigungs-Kanal und berechtigte Rollen festlegen.
+        Events mit Live-Status verwalten.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/rollen?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🏷️</div>
+      <div class="setup-card-title">Rollenvergabe</div>
+      <div class="setup-card-desc">
+        Module mit Rollen erstellen. Mitglieder holen sich
+        Rollen selbst über Buttons.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/level?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">⭐</div>
+      <div class="setup-card-title">Level-System</div>
+      <div class="setup-card-desc">
+        XP-System konfigurieren, Level-Update-Kanal und
+        Leaderboard einrichten.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/streamnotifications?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">📺</div>
+      <div class="setup-card-title">Stream-Benachrichtigungen</div>
+      <div class="setup-card-desc">
+        YouTube & Twitch Accounts registrieren. Benachrichtigungen
+        bei neuen Streams/Videos senden.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/geburtstage?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🎂</div>
+      <div class="setup-card-title">Geburtstage</div>
+      <div class="setup-card-desc">
+        Geburtstags-Kanal konfigurieren. Automatische
+        Glückwünsche für Mitglieder.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
+
+    <a href="/dashboard/setup/webdashboard?server_id=${esc(sid)}" class="setup-card">
+      <div class="setup-card-icon">🌐</div>
+      <div class="setup-card-title">Web-Dashboard</div>
+      <div class="setup-card-desc">
+        WebAdmin-Rollen für Dashboard-Zugriff auf Tickets
+        und Bewerbungen konfigurieren.
+      </div>
+      <span class="setup-card-status status-ok">● Verfügbar</span>
+    </a>
   `;
 }
 

@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Welcomer Setup – Insel Bot</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
-  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
     .setup-body { max-width: 700px; margin: 0 auto; padding: 24px 22px; }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
     .panel-card {
       background: var(--bg-card); border: 1px solid var(--border);
       border-radius: var(--r-lg); padding: 24px 26px; margin-bottom: 18px;
@@ -58,6 +59,7 @@
     .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:200px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
     .toast.ok  { border-left:3px solid var(--green2); }
     .toast.err { border-left:3px solid var(--red); }
+    .toast.warn { border-left:3px solid var(--orange); }
   </style>
 </head>
 <body class="detail-body">
@@ -128,11 +130,16 @@ let _channels = [];
 
 async function init() {
   if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
-  const [cr] = await Promise.all([fetch(`/api/setup/guild/${SERVER_ID}/channels`)]);
-  const cd = await cr.json();
-  _channels = (cd.channels || []).filter(c => c.type === 0);
-  fillChannels();
-  await loadConfig();
+  try {
+    const cr = await fetch(`/api/setup/guild/${SERVER_ID}/channels`);
+    const cd = await cr.json();
+    _channels = (cd.channels || []).filter(c => c.type === 0);
+    fillChannels();
+    await loadConfig();
+  } catch(e) {
+    toast('Fehler beim Laden der Kanäle', 'err');
+    console.error('init:', e);
+  }
 }
 
 function fillChannels() {
@@ -144,21 +151,31 @@ function fillChannels() {
   document.getElementById('cfg_goodbye_channel').innerHTML = opts;
 }
 
+function setSelectValue(id, val) {
+  if (!val) return;
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const trySet = () => { sel.value = val; };
+  trySet(); setTimeout(trySet, 200); setTimeout(trySet, 500);
+}
+
 async function loadConfig() {
-  const r = await fetch(`/api/setup/welcomer/${SERVER_ID}`);
-  const d = await r.json();
-  if (d.guild) {
-    const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
-    document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
-  }
-  if (d.config) {
-    const c = d.config;
-    setTimeout(() => {
-      if (c.welcome_channel_id) document.getElementById('cfg_welcome_channel').value = c.welcome_channel_id;
-      if (c.goodbye_channel_id) document.getElementById('cfg_goodbye_channel').value = c.goodbye_channel_id;
-      document.getElementById('cfg_welcome_enabled').checked = c.welcome_enabled !== false;
-      document.getElementById('cfg_goodbye_enabled').checked = c.goodbye_enabled !== false;
-    }, 100);
+  try {
+    const r = await fetch(`/api/setup/welcomer/${SERVER_ID}`);
+    const d = await r.json();
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+    if (d.config) {
+      const c = d.config;
+      setSelectValue('cfg_welcome_channel', c.welcome_channel_id);
+      setSelectValue('cfg_goodbye_channel', c.goodbye_channel_id);
+      if (c.welcome_enabled !== undefined) document.getElementById('cfg_welcome_enabled').checked = c.welcome_enabled !== false;
+      if (c.goodbye_enabled !== undefined) document.getElementById('cfg_goodbye_enabled').checked = c.goodbye_enabled !== false;
+    }
+  } catch(e) {
+    console.error('loadConfig:', e);
   }
 }
 
@@ -169,12 +186,16 @@ async function saveConfig() {
     welcome_enabled:    document.getElementById('cfg_welcome_enabled').checked,
     goodbye_enabled:    document.getElementById('cfg_goodbye_enabled').checked,
   };
-  const r = await fetch(`/api/setup/welcomer/${SERVER_ID}`, {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  toast('Einstellungen gespeichert ✓', 'ok');
+  try {
+    const r = await fetch(`/api/setup/welcomer/${SERVER_ID}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+    toast('Einstellungen gespeichert ✓', 'ok');
+  } catch(e) {
+    toast('Netzwerkfehler: ' + e.message, 'err');
+  }
 }
 
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }

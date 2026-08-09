@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voice Channel Creator Setup – Insel Bot</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
-  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
     .setup-body { max-width: 900px; margin: 0 auto; padding: 24px 22px; }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
 
     /* ── Info Banner ─────────────────────────────────── */
     .perm-banner {
@@ -326,6 +327,14 @@ function fillSelects() {
     `<option value="">+ Panel-Rolle hinzufügen...</option>${roleOpts}`;
 }
 
+function setSelectValue(id, val) {
+  if (!val) return;
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const trySet = () => { sel.value = val; };
+  trySet(); setTimeout(trySet, 200); setTimeout(trySet, 500);
+}
+
 // ── Load Config ────────────────────────────────────────────────────────────
 async function loadConfig() {
   try {
@@ -341,11 +350,9 @@ async function loadConfig() {
     if (d.config) {
       _hasConfig = true;
       const c = d.config;
-      setTimeout(() => {
-        if (c.category_id) document.getElementById('cfg_category').value = c.category_id;
-        if (c.channel_name) document.getElementById('cfg_channel_name').value = c.channel_name;
-        if (c.empty_timeout != null) document.getElementById('cfg_timeout').value = c.empty_timeout;
-      }, 150);
+      setSelectValue('cfg_category', c.category_id);
+      if (c.channel_name) document.getElementById('cfg_channel_name').value = c.channel_name;
+      if (c.empty_timeout != null) document.getElementById('cfg_timeout').value = c.empty_timeout;
 
       // Creator Rollen
       _creatorRoleIds = parseCsv(c.creator_role_ids);
@@ -458,12 +465,15 @@ async function saveConfig() {
 // ── Delete Config ──────────────────────────────────────────────────────────
 async function deleteConfig() {
   if (!confirm('Voice Creator wirklich deaktivieren?\n\nDer Erstell-Kanal und alle aktiven Voice-Kanäle werden gelöscht.')) return;
-
-  const r = await fetch(`/api/setup/voice/${SERVER_ID}`, { method: 'DELETE' });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  toast('Voice Creator deaktiviert', 'ok');
-  location.reload();
+  try {
+    const r = await fetch(`/api/setup/voice/${SERVER_ID}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+    toast('Voice Creator deaktiviert', 'ok');
+    location.reload();
+  } catch(e) {
+    toast('Netzwerkfehler: ' + e.message, 'err');
+  }
 }
 
 // ── Active VCs ─────────────────────────────────────────────────────────────

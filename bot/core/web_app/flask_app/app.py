@@ -160,12 +160,35 @@ _http = requests.Session()
 
 def _bot_get(path: str) -> dict | list | None:
     if not BOT_TOKEN:
+        log.warning(f"[bot_get] BOT_TOKEN fehlt – überspringe {path}")
         return None
     try:
         r = _http.get(f"{DISCORD_API}{path}",
                       headers={"Authorization": f"Bot {BOT_TOKEN}"}, timeout=5)
-        return r.json() if r.ok else None
-    except Exception:
+        if r.status_code == 429:
+            # Rate Limited – warten und nochmal versuchen
+            data = r.json()
+            wait = data.get("retry_after", 1.0)
+            log.warning(f"[bot_get] Rate Limited – warte {wait}s für {path}")
+            import time
+            time.sleep(wait)
+            r = _http.get(f"{DISCORD_API}{path}",
+                          headers={"Authorization": f"Bot {BOT_TOKEN}"}, timeout=5)
+        if r.status_code == 404:
+            # Guild nicht gefunden – zur Invalid-Liste hinzufügen
+            if "/guilds/" in path and "/members/" in path:
+                parts = path.split("/guilds/")
+                if len(parts) > 1:
+                    guild_id = parts[1].split("/")[0]
+                    _invalid_guilds.add(guild_id)
+                    log.debug(f"[bot_get] Guild {guild_id} nicht gefunden – zur Invalid-Liste hinzugefügt")
+            return None
+        if not r.ok:
+            log.warning(f"[bot_get] {path} -> {r.status_code}: {r.text[:200]}")
+            return None
+        return r.json()
+    except Exception as e:
+        log.error(f"[bot_get] {path} -> Exception: {e}")
         return None
 
 def _discord_post(path: str, data: dict) -> dict | None:
@@ -214,21 +237,47 @@ def _member_avatar(member: dict | None, uid: str = "") -> str | None:
         return f"https://cdn.discordapp.com/avatars/{id_}/{av}.png?size=64"
     return None
 
+_invalid_guilds: set[str] = set()
+
 def _cached_member(guild_id: str, user_id: str) -> dict | None:
+    # Überspringe Guilds die wir wissen dass sie nicht existieren
+    if guild_id in _invalid_guilds:
+        return None
     key = f"{guild_id}:{user_id}"
     hit = _cget(_member_cache, key, MEMBER_CACHE_TTL)
     if hit is not _MISS:
         return hit
-    return _cset(_member_cache, key, _bot_get(f"/guilds/{guild_id}/members/{user_id}"))
+    try:
+        data = _bot_get(f"/guilds/{guild_id}/members/{user_id}")
+        return _cset(_member_cache, key, data)
+    except Exception as e:
+        log.error(f"[member] Fehler beim Laden von Member {user_id} auf Guild {guild_id}: {e}")
+        return _cset(_member_cache, key, None)
 
 def _cached_guild(guild_id: str) -> dict | None:
+    # Überspringe Guilds die wir wissen dass sie nicht existieren
+    if guild_id in _invalid_guilds:
+        return None
     hit = _cget(_guild_cache, guild_id, GUILD_CACHE_TTL)
     if hit is not _MISS:
         return hit
-    data = _bot_get(f"/guilds/{guild_id}")
-    if data:
-        _cset(_guild_cache, guild_id, data)
-    return data
+    try:
+        r = _http.get(f"{DISCORD_API}/guilds/{guild_id}",
+                      headers={"Authorization": f"Bot {BOT_TOKEN}"}, timeout=5)
+        if r.status_code == 404:
+            # Guild existiert nicht für diesen Bot – in Invalid-Liste setzen
+            _invalid_guilds.add(guild_id)
+            log.debug(f"[guild] Guild {guild_id} nicht gefunden (404) – zur Invalid-Liste hinzugefügt")
+            return _cset(_guild_cache, guild_id, None)
+        if r.ok:
+            data = r.json()
+            _cset(_guild_cache, guild_id, data)
+            return data
+        log.warning(f"[guild] Guild {guild_id} -> {r.status_code}")
+        return None
+    except Exception as e:
+        log.error(f"[guild] Fehler beim Laden von Guild {guild_id}: {e}")
+        return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Daten-Parsing
@@ -258,19 +307,61 @@ def _load_all_server_ids() -> list[str]:
     if hit is not _MISS:
         return hit
     ids: set[str] = set()
-    try:
-        for row in (sb("ticket_servers").select("server_id").execute().data or []):
-            if row.get("server_id"):
-                ids.add(row["server_id"])
-    except Exception as e:
-        log.error(f"[db] ticket_servers: {e}")
-    try:
-        for row in (sb("application_servers").select("server_id").execute().data or []):
-            if row.get("server_id"):
-                ids.add(row["server_id"])
-    except Exception as e:
-        log.error(f"[db] application_servers: {e}")
+
+    # 1. Bot-Guilds direkt von Discord laden
+    bot_guild_ids = set()
+    if BOT_TOKEN:
+        try:
+            guilds = _bot_get("/users/@me/guilds")
+            if isinstance(guilds, list):
+                for g in guilds:
+                    gid = g.get("id")
+                    if gid:
+                        bot_guild_ids.add(gid)
+                        ids.add(gid)
+                log.info(f"[db] Bot ist auf {len(bot_guild_ids)} Guilds (Discord API)")
+            else:
+                log.warning(f"[db] Bot-Guilds API lieferte keine Liste: {type(guilds)}")
+        except Exception as e:
+            log.error(f"[db] Bot-Guilds laden fehlgeschlagen: {e}")
+    else:
+        log.warning("[db] BOT_TOKEN fehlt – kann Guilds nicht von Discord laden")
+
+    # 2. DB-Tabellen durchsuchen – aber nur Server die der Bot kennt
+    server_id_tables = [
+        "ticket_servers", "application_servers",
+        "voice_creator_config", "raid_ignored_roles",
+        "birthdays", "minecraft_names",
+    ]
+    guild_id_tables = [
+        "settings", "stream_notifications_config",
+    ]
+    db_ids = set()
+    for table in server_id_tables:
+        try:
+            for row in (sb(table).select("server_id").execute().data or []):
+                sid = row.get("server_id")
+                if sid:
+                    db_ids.add(sid)
+        except Exception:
+            pass
+    for table in guild_id_tables:
+        try:
+            for row in (sb(table).select("guild_id").execute().data or []):
+                gid = row.get("guild_id")
+                if gid:
+                    db_ids.add(gid)
+        except Exception:
+            pass
+
+    # Nur Server hinzufügen die der Bot auch tatsächlich kennt
+    unknown_servers = db_ids - bot_guild_ids
+    if unknown_servers:
+        log.warning(f"[db] {len(unknown_servers)} Server in DB aber Bot ist nicht drauf: {unknown_servers}")
+    ids.update(db_ids)  # Trotzdem alle hinzufügen (MBL braucht sie für Setup)
+
     result = sorted(ids)
+    log.info(f"[db] Gesamt {len(result)} Server-IDs gefunden ({len(bot_guild_ids)} vom Bot, {len(db_ids)} aus DB)")
     return _cset(_perm_cache, "all_server_ids", result)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -344,17 +435,32 @@ def _build_server_roles(uid: str) -> dict[str, list[str]]:
     db_server_ids = _load_all_server_ids()
     result: dict[str, list[str]] = {}
 
+    # MBL hat automatisch Zugriff auf ALLE Server
+    if MBL_ID and uid == MBL_ID:
+        log.info(f"[auth] MBL erkannt – gebe Zugriff auf alle {len(db_server_ids)} Server")
+        for sid in db_server_ids:
+            result[sid] = ["MBL_FULL_ACCESS"]
+        return result
+
     if not BOT_TOKEN:
         log.warning("[auth] BOT_TOKEN fehlt — keine Rollen ladbar")
         return result
 
     for sid in db_server_ids:
-        member = _bot_get(f"/guilds/{sid}/members/{uid}")
-        if member and isinstance(member.get("roles"), list):
-            roles = [str(r) for r in member["roles"]]
-            result[sid] = roles
-        else:
-            log.debug(f"[auth] User {uid} nicht auf Server {sid}")
+        try:
+            # Zuerst prüfen ob der Bot auf dem Server ist
+            guild = _cached_guild(sid)
+            if guild is None:
+                log.debug(f"[auth] Überspringe Server {sid} – Bot ist nicht auf diesem Server")
+                continue
+            member = _bot_get(f"/guilds/{sid}/members/{uid}")
+            if member and isinstance(member.get("roles"), list):
+                roles = [str(r) for r in member["roles"]]
+                result[sid] = roles
+            else:
+                log.debug(f"[auth] User {uid} nicht auf Server {sid} oder keine Member-Daten")
+        except Exception as e:
+            log.error(f"[auth] Fehler beim Laden der Member-Daten für Server {sid}: {e}")
 
     log.info(f"[auth] User {uid} ist auf {len(result)}/{len(db_server_ids)} konfigurierten Servern")
     return result
@@ -498,7 +604,11 @@ def ensure_fresh_roles():
     roles_empty  = not user.get("server_roles")
     roles_stale  = (time.time() - roles_loaded) > ROLES_REFRESH
 
-    if not uid or not BOT_TOKEN:
+    if not uid:
+        return
+    # MBL: Immer Rollen laden (auch ohne BOT_TOKEN)
+    is_mbl = MBL_ID and uid == MBL_ID
+    if not is_mbl and not BOT_TOKEN:
         return
     if not (roles_empty or roles_stale):
         return
@@ -660,6 +770,12 @@ def application_detail(app_id):
     server_id = request.args.get("server_id") or _first_accessible_server(user)
     return render_template("application_view.html",
         user=user, app_id=app_id, server_id=server_id)
+
+@app.route("/dashboard/user")
+@login_required
+def user_profile_page():
+    user = session["user"]
+    return render_template("user_profile.html", user=user)
 
 def _first_accessible_server(user: dict) -> str:
     server_roles = user.get("server_roles") or {}
@@ -1311,6 +1427,209 @@ def api_refresh_roles():
         },
     })
 
+@app.route("/api/debug/servers")
+@login_required
+def api_debug_servers():
+    user = session["user"]
+    uid  = user.get("id", "")
+
+    # Cache leeren für frische Daten
+    with _cache_lock:
+        _perm_cache.pop("all_server_ids", None)
+        for sid in (user.get("server_roles") or {}):
+            _member_cache.pop(f"{sid}:{uid}", None)
+            _guild_cache.pop(sid, None)
+
+    all_ids = _load_all_server_ids()
+    server_roles = user.get("server_roles") or {}
+    bot_guilds = []
+    if BOT_TOKEN:
+        try:
+            guilds = _bot_get("/users/@me/guilds")
+            if isinstance(guilds, list):
+                bot_guilds = [{"id": g.get("id"), "name": g.get("name"), "icon": g.get("icon")} for g in guilds]
+        except Exception:
+            pass
+
+    return jsonify({
+        "user_id": uid,
+        "username": user.get("username"),
+        "db_server_count": len(all_ids),
+        "db_server_ids": all_ids,
+        "session_server_count": len(server_roles),
+        "session_server_ids": list(server_roles.keys()),
+        "bot_guild_count": len(bot_guilds),
+        "bot_guilds": bot_guilds,
+    })
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API: /api/user/profile – Komplettes Nutzer-Profil über alle Server
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/user/profile")
+@login_required
+def api_user_profile():
+    user      = session["user"]
+    target_id = request.args.get("user_id", "").strip()
+    if not target_id:
+        return jsonify({"error": "user_id fehlt"}), 400
+
+    # Basis-Discord-Daten laden
+    target_member = None
+    target_user_data = {"id": target_id, "name": None, "avatar": None, "servers": []}
+
+    all_server_ids = _load_all_server_ids()
+    server_roles = user.get("server_roles") or {}
+    accessible = set(server_roles.keys())
+    if _is_mbl(user):
+        accessible = set(all_server_ids)
+
+    for sid in all_server_ids:
+        if sid not in accessible:
+            continue
+        member = _cached_member(sid, target_id)
+        if member:
+            if not target_member:
+                target_member = member
+                u = member.get("user", {})
+                av = u.get("avatar")
+                disc = int(u.get("discriminator") or 0) % 5
+                target_user_data["name"] = member.get("nick") or u.get("global_name") or u.get("username", "Unbekannt")
+                target_user_data["avatar"] = (
+                    f"https://cdn.discordapp.com/avatars/{target_id}/{av}.png?size=128"
+                    if av else f"https://cdn.discordapp.com/embed/avatars/{disc}.png"
+                )
+                target_user_data["username"] = u.get("username", "")
+                target_user_data["global_name"] = u.get("global_name", "")
+            g = _cached_guild(sid)
+            roles_on_server = [str(r) for r in (member.get("roles") or []) if str(r) != sid]
+            role_names = []
+            guild_roles = _bot_get(f"/guilds/{sid}/roles") or []
+            role_map = {str(r["id"]): r["name"] for r in guild_roles}
+            for rid in roles_on_server:
+                rn = role_map.get(rid)
+                if rn and rn != "@everyone":
+                    role_names.append(rn)
+            target_user_data["servers"].append({
+                "server_id":  sid,
+                "server_name": g.get("name", sid) if g else sid,
+                "server_icon": _guild_icon_url(g) if g else None,
+                "nick":       member.get("nick"),
+                "roles":      role_names[:15],
+                "joined_at":  member.get("joined_at", "")[:10],
+            })
+
+    # ── Tickets (alle Server) ────────────────────────────────────────────────
+    tickets_created = []
+    tickets_participated = []
+    try:
+        for sid in accessible:
+            # Erstellte Tickets
+            rows = sb("tickets").select(
+                "ticket_id,title,module,status,creator_id,creator_name,created_at,closed_at,server_id"
+            ).eq("server_id", sid).eq("creator_id", target_id).execute().data or []
+            for t in rows:
+                g = _cached_guild(sid)
+                t["_server_name"] = g.get("name", sid) if g else sid
+                tickets_created.append(t)
+            # Hinzugefügte Tickets
+            rows2 = sb("tickets").select(
+                "ticket_id,title,module,status,creator_id,creator_name,added_users,created_at,server_id"
+            ).eq("server_id", sid).not_.is_("added_users", "null").execute().data or []
+            for t in rows2:
+                added = t.get("added_users") or []
+                if isinstance(added, str):
+                    added = [a.strip() for a in added.split(",") if a.strip()]
+                if target_id in added:
+                    g = _cached_guild(sid)
+                    t["_server_name"] = g.get("name", sid) if g else sid
+                    tickets_participated.append(t)
+    except Exception as e:
+        log.error(f"[user_profile] tickets: {e}")
+
+    # ── Bewerbungen (alle Server) ────────────────────────────────────────────
+    applications = []
+    try:
+        for sid in accessible:
+            rows = sb("applications").select(
+                "app_id,creator_id,creator_name,minecraft_name,status,created_at,closed_at,server_id"
+            ).eq("server_id", sid).eq("creator_id", target_id).execute().data or []
+            for a in rows:
+                g = _cached_guild(sid)
+                a["_server_name"] = g.get("name", sid) if g else sid
+                applications.append(a)
+    except Exception as e:
+        log.error(f"[user_profile] applications: {e}")
+
+    # ── Moderation (alle Server) ─────────────────────────────────────────────
+    moderation = []
+    try:
+        for sid in accessible:
+            rows = sb("moderation_logs").select(
+                "id,server_id,action,target_id,target_name,moderator_id,moderator_name,reason,duration_seconds,until,created_at"
+            ).eq("server_id", sid).eq("target_id", target_id).order("created_at", desc=True).limit(50).execute().data or []
+            for m in rows:
+                g = _cached_guild(sid)
+                m["_server_name"] = g.get("name", sid) if g else sid
+                moderation.append(m)
+    except Exception as e:
+        log.error(f"[user_profile] moderation: {e}")
+
+    # ── Level (alle Server) ──────────────────────────────────────────────────
+    levels = []
+    try:
+        for sid in accessible:
+            row = sb("user_levels").select(
+                "user_id,server_id,xp,level,messages,voice_minutes,reactions,updated_at"
+            ).eq("user_id", target_id).eq("server_id", sid).execute().data
+            if row:
+                g = _cached_guild(sid)
+                lvl = row[0]
+                lvl["_server_name"] = g.get("name", sid) if g else sid
+                levels.append(lvl)
+    except Exception as e:
+        log.error(f"[user_profile] levels: {e}")
+
+    # ── Geburtstage ──────────────────────────────────────────────────────────
+    birthdays = []
+    try:
+        for sid in accessible:
+            row = sb("birthdays").select(
+                "user_id,server_id,birthday"
+            ).eq("user_id", target_id).eq("server_id", sid).execute().data
+            if row:
+                g = _cached_guild(sid)
+                bday = row[0]
+                bday["_server_name"] = g.get("name", sid) if g else sid
+                birthdays.append(bday)
+    except Exception as e:
+        log.error(f"[user_profile] birthdays: {e}")
+
+    # ── Minecraft-Namen ──────────────────────────────────────────────────────
+    mc_names = []
+    try:
+        for sid in accessible:
+            row = sb("minecraft_names").select(
+                "user_id,server_id,minecraft_name,created_at"
+            ).eq("user_id", target_id).eq("server_id", sid).execute().data
+            if row:
+                g = _cached_guild(sid)
+                mc = row[0]
+                mc["_server_name"] = g.get("name", sid) if g else sid
+                mc_names.append(mc)
+    except Exception as e:
+        log.error(f"[user_profile] mc_names: {e}")
+
+    target_user_data["tickets_created"]     = tickets_created
+    target_user_data["tickets_participated"] = tickets_participated
+    target_user_data["applications"]         = applications
+    target_user_data["moderation"]           = moderation
+    target_user_data["levels"]               = levels
+    target_user_data["birthdays"]            = birthdays
+    target_user_data["mc_names"]             = mc_names
+
+    return jsonify(target_user_data)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Error Handler
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1352,3 +1671,8 @@ register_voting_routes(app)
 
 from .legal_routes import register_legal_routes
 register_legal_routes(app)
+
+from .feature_setup_routes import register_feature_setup_routes
+register_feature_setup_routes(
+    app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
+)

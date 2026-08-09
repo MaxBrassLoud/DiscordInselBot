@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Level-System Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .setup-body { max-width: 700px; margin: 0 auto; padding: 24px 22px; }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
+    .panel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-lg); padding:24px 26px; margin-bottom:18px; }
+    .panel-title { font-family:'Rajdhani',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .panel-sub { font-size:0.82rem; color:var(--text3); margin-bottom:20px; }
+    .field { margin-bottom:16px; }
+    .field label { display:block; font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:5px; }
+    .field select { width:100%; background:var(--bg-surface); border:1px solid var(--border); color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem; padding:9px 12px; border-radius:var(--r-sm); outline:none; transition:border-color var(--fast); }
+    .field select:focus { border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12); }
+    .field select option { background:#1d2128; }
+    .field-hint { font-size:0.70rem; color:var(--text3); margin-top:4px; }
+    .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border); }
+    .toggle-row:last-child { border-bottom:none; }
+    .toggle-label { font-size:0.85rem; color:var(--text); font-weight:500; }
+    .toggle-sub { font-size:0.72rem; color:var(--text3); margin-top:2px; }
+    .toggle-switch { position:relative; width:44px; height:24px; flex-shrink:0; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider { position:absolute; inset:0; cursor:pointer; background:var(--border2); border-radius:24px; transition:all var(--mid); }
+    .toggle-slider:before { content:''; position:absolute; width:18px; height:18px; border-radius:50%; background:#fff; left:3px; top:3px; transition:all var(--mid); }
+    .toggle-switch input:checked + .toggle-slider { background:var(--green2); }
+    .toggle-switch input:checked + .toggle-slider:before { transform:translateX(20px); }
+    .btn-group { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:9px 20px; border-radius:var(--r-sm); font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.88rem; cursor:pointer; border:none; transition:all var(--mid); }
+    .btn-primary { background:var(--green2); color:#000; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:200px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
+    .toast.ok  { border-left:3px solid var(--green2); }
+    .toast.err { border-left:3px solid var(--red); }
+  </style>
+</head>
+<body class="detail-body">
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    System Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">⭐ Level-System</span>
+  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
+</div>
+
+<div class="setup-body">
+  <div class="panel-card">
+    <div class="panel-title">Level-System einrichten</div>
+    <div class="panel-sub">Konfiguriere den Kanal für Level-Up-Benachrichtigungen und aktiviere/deaktiviere das System.</div>
+
+    <div class="toggle-row">
+      <div><div class="toggle-label">⭐ Level-System aktiviert</div><div class="toggle-sub">XP werden für Nachrichten und Voice vergeben</div></div>
+      <label class="toggle-switch"><input type="checkbox" id="cfg_enabled" checked><span class="toggle-slider"></span></label>
+    </div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>📢 Level-Update-Kanal</label>
+      <select id="cfg_channel"><option value="">Lade Kanäle...</option></select>
+      <div class="field-hint">Hier werden Level-Up-Nachrichten gesendet.</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Einstellungen speichern</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_ID = {{ server_id | tojson }};
+
+async function init() {
+  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
+  try {
+    const cr = await fetch(`/api/setup/guild/${SERVER_ID}/channels`);
+    const cd = await cr.json();
+    const channels = (cd.channels || []).filter(c => c.type === 0);
+    document.getElementById('cfg_channel').innerHTML = '<option value="">📢 Kanal wählen...</option>' + channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('');
+    await loadConfig();
+  } catch(e) { toast('Fehler beim Laden', 'err'); console.error('init:', e); }
+}
+
+function setSelectValue(id, val) {
+  if (!val) return;
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const trySet = () => { sel.value = val; };
+  trySet(); setTimeout(trySet, 200); setTimeout(trySet, 500);
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch(`/api/setup/level/${SERVER_ID}`);
+    const d = await r.json();
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+    if (d.config) {
+      setSelectValue('cfg_channel', d.config.level_channel_id);
+      if (d.config.levels_enabled !== undefined) document.getElementById('cfg_enabled').checked = d.config.levels_enabled !== false;
+      }, 100);
+    }
+  } catch(e) { console.error('loadConfig:', e); }
+}
+
+async function saveConfig() {
+  const body = {
+    level_channel_id: document.getElementById('cfg_channel').value || null,
+    levels_enabled:   document.getElementById('cfg_enabled').checked,
+  };
+  try {
+    const r = await fetch(`/api/setup/level/${SERVER_ID}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: '+(d.error||'?'), 'err'); return; }
+    toast('Einstellungen gespeichert ✓', 'ok');
+  } catch(e) { toast('Netzwerkfehler: '+e.message, 'err'); }
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type='ok') {
+  const t = document.createElement('div'); t.className = `toast ${type}`;
+  t.innerHTML = `<span>${type==='ok'?'✅':'❌'}</span><span>${esc(msg)}</span>`;
+  document.getElementById('toastContainer').appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+init();
+</script>
+</body>
+</html>

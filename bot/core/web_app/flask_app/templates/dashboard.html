@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard – Insel Bot</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
     /* ── Search Bar ─────────────────────────────────────────── */
@@ -58,6 +58,36 @@
     }
     .search-clear:hover { color: var(--text); }
     .search-clear.visible { display: block; }
+    .search-autocomplete {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border2);
+      border-radius: var(--r-sm);
+      margin-top: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 50;
+      display: none;
+      box-shadow: var(--shadow);
+    }
+    .search-autocomplete.open { display: block; }
+    .search-ac-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+      transition: background var(--fast);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.82rem;
+    }
+    .search-ac-item:last-child { border-bottom: none; }
+    .search-ac-item:hover { background: var(--bg-hover); }
+    .search-ac-item .ac-title { color: var(--text); font-weight: 500; }
+    .search-ac-item .ac-sub { color: var(--text3); font-size: 0.72rem; }
 
     /* ── Search State Indicator ─────────────────────────────── */
     .search-badge {
@@ -109,13 +139,16 @@
 <!-- ── Sidebar ── -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <div class="brand-logo">
-      <svg width="18" height="18" viewBox="0 0 34 34" fill="none">
-        <path d="M7 21c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
-        <circle cx="11" cy="11" r="2" fill="#000"/>
-        <circle cx="23" cy="11" r="2" fill="#000"/>
-      </svg>
-    </div>
+    <a href="/" class="brand-logo" style="text-decoration:none;background:none;padding:0;">
+      <img src="{{ url_for('static', filename='assets/logo.jpg') }}" alt="Insel Bot" class="brand-logo-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="brand-logo" style="display:none">
+        <svg width="18" height="18" viewBox="0 0 34 34" fill="none">
+          <path d="M7 21c2-5 7-7 7-7s5 2 7 7" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="11" cy="11" r="2" fill="#000"/>
+          <circle cx="23" cy="11" r="2" fill="#000"/>
+        </svg>
+      </div>
+    </a>
     <div class="brand-name">Insel <span class="g">Bot</span></div>
     <div class="online-badge"><span class="dot"></span></div>
   </div>
@@ -129,6 +162,9 @@
     <a href="/dashboard/applications{% if server_id %}?server_id={{ server_id }}{% endif %}"
        class="nav-item {% if active_tab == 'applications' %}active{% endif %}">
       <span class="nav-icon">📋</span> Bewerbungen
+    </a>
+    <a href="/dashboard/user" class="nav-item {% if active_tab == 'user' %}active{% endif %}">
+      <span class="nav-icon">👤</span> Nutzer
     </a>
 
     <a href="/dashboard/setup" class="nav-item">
@@ -181,6 +217,8 @@
          class="tab {% if active_tab == 'tickets' %}active{% endif %}">🎫 Tickets</a>
       <a href="/dashboard/applications{% if server_id %}?server_id={{ server_id }}{% endif %}"
          class="tab {% if active_tab == 'applications' %}active{% endif %}">📋 Bewerbungen</a>
+      <a href="/dashboard/user"
+         class="tab {% if active_tab == 'user' %}active{% endif %}">👤 Nutzer</a>
     </div>
   </div>
 
@@ -251,25 +289,88 @@ async function loadServers() {
 
 // ── Search ─────────────────────────────────────────────────────────────────
 
+let _acTimeout = null;
+
 function onSearchInput(value) {
   const clearBtn = document.getElementById('searchClear');
   if (clearBtn) clearBtn.classList.toggle('visible', value.length > 0);
 
   clearTimeout(_searchTimeout);
+  clearTimeout(_acTimeout);
+
   if (value.length === 0) {
     _searchQuery  = "";
     _isSearchMode = false;
+    closeAutocomplete();
     loadContent();
     return;
   }
-  if (value.length < 2) return;
+  if (value.length < 2) { closeAutocomplete(); return; }
 
+  // Autocomplete nach 200ms
+  _acTimeout = setTimeout(() => showAutocomplete(value), 200);
+
+  // Volle Suche nach 400ms
   _searchTimeout = setTimeout(() => {
     _searchQuery  = value;
     _isSearchMode = true;
+    closeAutocomplete();
     loadSearch(value);
-  }, 350);
+  }, 400);
 }
+
+async function showAutocomplete(q) {
+  if (!SERVER_ID) return;
+  const box = document.getElementById('searchAutocomplete');
+  if (!box) return;
+
+  const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets/search' : '/api/applications/search';
+  try {
+    const r = await fetch(`${apiBase}?q=${encodeURIComponent(q)}&server_id=${SERVER_ID}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const items = ACTIVE_TAB === 'tickets' ? (d.tickets || []) : (d.applications || []);
+    if (!items.length) { box.classList.remove('open'); return; }
+
+    const maxShow = 6;
+    box.innerHTML = items.slice(0, maxShow).map(item => {
+      if (ACTIVE_TAB === 'tickets') {
+        return `<div class="search-ac-item" onclick="jumpToTicket(${item.ticket_id})">
+          <span class="ac-title">#${item.ticket_id} ${escHtml(item.title || '')}</span>
+          <span class="ac-sub">${escHtml(item.creator_name || '')}</span>
+        </div>`;
+      } else {
+        return `<div class="search-ac-item" onclick="jumpToApp(${item.app_id})">
+          <span class="ac-title">#${item.app_id} ${escHtml(item.creator_name || '')}</span>
+          <span class="ac-sub">${escHtml(item.minecraft_name || '')}</span>
+        </div>`;
+      }
+    }).join('');
+    if (items.length > maxShow) {
+      box.innerHTML += `<div class="search-ac-item" style="justify-content:center;color:var(--text3);font-size:0.78rem;">+ ${items.length - maxShow} weitere…</div>`;
+    }
+    box.classList.add('open');
+  } catch(e) { console.error('autocomplete:', e); }
+}
+
+function closeAutocomplete() {
+  const box = document.getElementById('searchAutocomplete');
+  if (box) box.classList.remove('open');
+}
+
+function jumpToTicket(id) {
+  closeAutocomplete();
+  window.location.href = `/dashboard/tickets/${id}?server_id=${SERVER_ID}`;
+}
+function jumpToApp(id) {
+  closeAutocomplete();
+  window.location.href = `/dashboard/applications/${id}?server_id=${SERVER_ID}`;
+}
+
+// Close autocomplete on click outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) closeAutocomplete();
+});
 
 function clearSearch() {
   const inp = document.getElementById('searchInput');
@@ -408,6 +509,7 @@ function renderTickets(tickets, modules, params, searchQuery) {
           oninput="onSearchInput(this.value)"
           autocomplete="off"
         >
+        <div class="search-autocomplete" id="searchAutocomplete"></div>
         <button class="search-clear ${searchQuery ? 'visible' : ''}" id="searchClear" onclick="clearSearch()" title="Suche löschen">✕</button>
       </div>
       ${isSearch ? renderSearchBadge(searchQuery, tickets.length) : `

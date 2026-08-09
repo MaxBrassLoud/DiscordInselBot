@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event-System Setup – Insel Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .setup-body { max-width: 700px; margin: 0 auto; padding: 24px 22px; }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
+    .panel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-lg); padding:24px 26px; margin-bottom:18px; }
+    .panel-title { font-family:'Rajdhani',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .panel-sub { font-size:0.82rem; color:var(--text3); margin-bottom:20px; }
+    .field { margin-bottom:16px; }
+    .field label { display:block; font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); margin-bottom:5px; }
+    .field select { width:100%; background:var(--bg-surface); border:1px solid var(--border); color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem; padding:9px 12px; border-radius:var(--r-sm); outline:none; transition:border-color var(--fast); }
+    .field select:focus { border-color:var(--green2); box-shadow:0 0 0 3px rgba(34,197,94,.12); }
+    .field select option { background:#1d2128; }
+    .field-hint { font-size:0.70rem; color:var(--text3); margin-top:4px; }
+    .role-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; min-height:28px; }
+    .role-chip { display:inline-flex; align-items:center; gap:4px; background:var(--green-g2); border:1px solid rgba(74,222,128,0.2); color:var(--green); padding:2px 8px; border-radius:12px; font-size:0.73rem; font-weight:600; }
+    .role-chip-del { background:none; border:none; color:rgba(74,222,128,0.6); cursor:pointer; padding:0 1px; line-height:1; font-size:0.85rem; transition:color var(--fast); }
+    .role-chip-del:hover { color:var(--red); }
+    .btn-group { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:9px 20px; border-radius:var(--r-sm); font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.88rem; cursor:pointer; border:none; transition:all var(--mid); }
+    .btn-primary { background:var(--green2); color:#000; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast { background:var(--bg-card); border:1px solid var(--border2); border-radius:var(--r); padding:10px 16px; font-size:0.83rem; color:var(--text); box-shadow:var(--shadow); min-width:200px; animation:fadeDown .2s ease both; display:flex; align-items:center; gap:8px; }
+    .toast.ok  { border-left:3px solid var(--green2); }
+    .toast.err { border-left:3px solid var(--red); }
+  </style>
+</head>
+<body class="detail-body">
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    System Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">📅 Event-System</span>
+  <div id="topbarGuild" style="margin-left:auto;display:flex;align-items:center;gap:8px;"></div>
+</div>
+
+<div class="setup-body">
+  <div class="panel-card">
+    <div class="panel-title">Event-System einrichten</div>
+    <div class="panel-sub">Konfiguriere den Ankündigungs-Kanal und welche Rollen Events erstellen dürfen.</div>
+
+    <div class="field">
+      <label>📢 Ankündigungs-Kanal <span style="color:var(--red)">*</span></label>
+      <select id="cfg_channel"><option value="">Lade Kanäle...</option></select>
+      <div class="field-hint">Hier werden Events angekündigt.</div>
+    </div>
+
+    <div class="field">
+      <label>🔑 Berechtigte Rollen</label>
+      <div class="role-chips" id="roleChips"><span style="font-size:.73rem;color:var(--text3)">Keine gesetzt (jeder)</span></div>
+      <select id="roleAdd" onchange="addRole(this)" style="margin-top:8px;width:100%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;padding:8px 10px;border-radius:var(--r-sm);outline:none;">
+        <option value="">+ Rolle hinzufügen...</option>
+      </select>
+      <div class="field-hint">Nur diese Rollen können Events erstellen und bearbeiten.</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Einstellungen speichern</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_ID = {{ server_id | tojson }};
+let _channels = [];
+let _roles = [];
+let _roleIds = [];
+
+async function init() {
+  if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
+  try {
+    const [cr, rr] = await Promise.all([
+      fetch(`/api/setup/guild/${SERVER_ID}/channels`),
+      fetch(`/api/setup/guild/${SERVER_ID}/roles`),
+    ]);
+    const cd = await cr.json(); const rd = await rr.json();
+    _channels = (cd.channels || []).filter(c => c.type === 0);
+    _roles = rd.roles || [];
+    populateSelects();
+    await loadConfig();
+  } catch(e) { toast('Fehler beim Laden', 'err'); console.error('init:', e); }
+}
+
+function populateSelects() {
+  document.getElementById('cfg_channel').innerHTML = '<option value="">📢 Kanal wählen *</option>' + _channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('');
+  document.getElementById('roleAdd').innerHTML = '<option value="">+ Rolle hinzufügen...</option>' + _roles.map(r => `<option value="${esc(r.id)}">@${esc(r.name)}</option>`).join('');
+}
+
+function setSelectValue(id, val) {
+  if (!val) return;
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const trySet = () => { sel.value = val; };
+  trySet(); setTimeout(trySet, 200); setTimeout(trySet, 500);
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch(`/api/setup/events/${SERVER_ID}`);
+    const d = await r.json();
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      document.getElementById('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+    if (d.config) {
+      setSelectValue('cfg_channel', d.config.event_channel_id);
+      if (d.config.event_role_ids) {
+        _roleIds = d.config.event_role_ids.split(',').map(r => r.trim()).filter(Boolean);
+        renderRoleChips();
+        }
+      }, 100);
+    }
+  } catch(e) { console.error('loadConfig:', e); }
+}
+
+function addRole(sel) {
+  const val = sel.value; if (!val || _roleIds.includes(val)) { sel.value=''; return; }
+  _roleIds.push(val); sel.value=''; renderRoleChips();
+}
+function removeRole(rid) { _roleIds = _roleIds.filter(r => r !== rid); renderRoleChips(); }
+function renderRoleChips() {
+  const el = document.getElementById('roleChips');
+  if (!_roleIds.length) { el.innerHTML = '<span style="font-size:.73rem;color:var(--text3)">Keine gesetzt (jeder)</span>'; return; }
+  el.innerHTML = _roleIds.map(rid => {
+    const role = _roles.find(r => r.id === rid);
+    return `<span class="role-chip">@${esc(role?.name || rid)}<button class="role-chip-del" onclick="removeRole('${esc(rid)}')">✕</button></span>`;
+  }).join('');
+}
+
+async function saveConfig() {
+  const body = {
+    event_channel_id: document.getElementById('cfg_channel').value || null,
+    event_role_ids:   _roleIds.join(','),
+  };
+  try {
+    const r = await fetch(`/api/setup/events/${SERVER_ID}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: '+(d.error||'?'), 'err'); return; }
+    toast('Einstellungen gespeichert ✓', 'ok');
+  } catch(e) { toast('Netzwerkfehler: '+e.message, 'err'); }
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type='ok') {
+  const t = document.createElement('div'); t.className = `toast ${type}`;
+  t.innerHTML = `<span>${type==='ok'?'✅':'❌'}</span><span>${esc(msg)}</span>`;
+  document.getElementById('toastContainer').appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+init();
+</script>
+</body>
+</html>

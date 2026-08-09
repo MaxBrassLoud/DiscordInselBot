@@ -4,13 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bewerbungs-System Setup – Insel Bot</title>
-  <link rel="preconnect" href="{{ url_for('static', filename='css/fonts.css') }}">
-  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
     /* ── Layout ─────────────────────────────────────── */
     .setup-body { max-width: 1100px; margin: 0 auto; padding: 24px 22px; }
     .setup-cols { display: grid; grid-template-columns: 240px 1fr; gap: 22px; margin-top: 22px; }
     @media(max-width:820px){ .setup-cols { grid-template-columns: 1fr; } }
+    @media(max-width:600px){ .setup-body { padding: 14px; } .panel-card { padding: 18px 16px; } }
 
     /* ── Stepper ────────────────────────────────────── */
     .stepper { position: sticky; top: 70px; }
@@ -345,18 +346,28 @@ let _step = 1;
 
 async function init() {
   if (!SERVER_ID) { toast('Kein Server ausgewählt', 'err'); return; }
-  await Promise.all([loadChannelsAndRoles(), loadConfig()]);
-  updateProgress();
+  try {
+    await Promise.all([loadChannelsAndRoles(), loadConfig()]);
+    updateProgress();
+  } catch(e) {
+    toast('Fehler beim Laden', 'err');
+    console.error('init:', e);
+  }
 }
 
 async function loadChannelsAndRoles() {
-  const [cr, rr] = await Promise.all([
-    fetch(`/api/setup/guild/${SERVER_ID}/channels`),
-    fetch(`/api/setup/guild/${SERVER_ID}/roles`),
-  ]);
-  const cd = await cr.json(); _channels = cd.channels || [];
-  const rd = await rr.json(); _roles    = rd.roles    || [];
-  fillSelects();
+  try {
+    const [cr, rr] = await Promise.all([
+      fetch(`/api/setup/guild/${SERVER_ID}/channels`),
+      fetch(`/api/setup/guild/${SERVER_ID}/roles`),
+    ]);
+    const cd = await cr.json(); _channels = cd.channels || [];
+    const rd = await rr.json(); _roles    = rd.roles    || [];
+    fillSelects();
+  } catch(e) {
+    toast('Fehler beim Laden der Kanäle', 'err');
+    console.error('loadChannelsAndRoles:', e);
+  }
 }
 
 function fillSelects() {
@@ -387,50 +398,58 @@ function fillSelects() {
 }
 
 async function loadConfig() {
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}`);
-  const d = await r.json();
+  try {
+    const r = await fetch(`/api/setup/applications/${SERVER_ID}`);
+    const d = await r.json();
 
-  if (d.guild) {
-    const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
-    q('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    if (d.guild) {
+      const icon = d.guild.icon ? `<img src="${esc(d.guild.icon)}" style="width:22px;height:22px;border-radius:50%;">` : '';
+      q('topbarGuild').innerHTML = `${icon}<span style="font-size:.83rem;color:var(--text2);">${esc(d.guild.name)}</span>`;
+    }
+
+    if (d.config) {
+      const c = d.config;
+      setTimeout(() => {
+        setVal('cfg_panel_channel',  c.panel_channel_id);
+        setVal('cfg_category',       c.category_id);
+        setVal('cfg_newbie_role',    c.newbie_role_id);
+        setVal('cfg_member_role',    c.member_role_id);
+        setVal('cfg_log_channel',    c.log_channel_id);
+        setVal('cfg_mc_log_channel', c.mc_log_channel_id);
+        if (c.rejection_cooldown_hours != null) q('cfg_cooldown').value = c.rejection_cooldown_hours;
+        if (c.welcome_message)     q('cfg_welcome').value     = c.welcome_message;
+        if (c.instruction_message) q('cfg_instruction').value = c.instruction_message;
+        if (c.panel_message)       q('panel_desc').value      = c.panel_message;
+      }, 150);
+
+      const rawStaff = c.staff_role_ids || '';
+      _staffRoleIds = typeof rawStaff === 'string'
+        ? rawStaff.split(',').map(r=>r.trim()).filter(Boolean)
+        : (rawStaff || []);
+      renderRoleChips('staff');
+
+      const rawWeb = c.web_admin_role_ids || '';
+      _webAdminRoleIds = typeof rawWeb === 'string'
+        ? rawWeb.split(',').map(r=>r.trim()).filter(Boolean)
+        : (rawWeb || []);
+      renderRoleChips('webAdmin');
+
+      if (c.panel_channel_id && c.category_id) goStep(2, false);
+    }
+
+    q('panel_desc').value = d.config?.panel_message || d.config?.welcome_message || 'Klicke auf den Button um deine Bewerbung einzureichen.';
+    buildPreview();
+  } catch(e) {
+    toast('Fehler beim Laden der Konfiguration', 'err');
+    console.error('loadConfig:', e);
   }
-
-  if (d.config) {
-    const c = d.config;
-    setTimeout(() => {
-      setVal('cfg_panel_channel',  c.panel_channel_id);
-      setVal('cfg_category',       c.category_id);
-      setVal('cfg_newbie_role',    c.newbie_role_id);
-      setVal('cfg_member_role',    c.member_role_id);
-      setVal('cfg_log_channel',    c.log_channel_id);
-      setVal('cfg_mc_log_channel', c.mc_log_channel_id);
-      if (c.rejection_cooldown_hours != null) q('cfg_cooldown').value = c.rejection_cooldown_hours;
-      if (c.welcome_message)     q('cfg_welcome').value     = c.welcome_message;
-      if (c.instruction_message) q('cfg_instruction').value = c.instruction_message;
-      if (c.panel_message)       q('panel_desc').value      = c.panel_message;
-    }, 150);
-
-    const rawStaff = c.staff_role_ids || '';
-    _staffRoleIds = typeof rawStaff === 'string'
-      ? rawStaff.split(',').map(r=>r.trim()).filter(Boolean)
-      : (rawStaff || []);
-    renderRoleChips('staff');
-
-    const rawWeb = c.web_admin_role_ids || '';
-    _webAdminRoleIds = typeof rawWeb === 'string'
-      ? rawWeb.split(',').map(r=>r.trim()).filter(Boolean)
-      : (rawWeb || []);
-    renderRoleChips('webAdmin');
-
-    if (c.panel_channel_id && c.category_id) goStep(2, false);
-  }
-
-  q('panel_desc').value = d.config?.panel_message || d.config?.welcome_message || 'Klicke auf den Button um deine Bewerbung einzureichen.';
-  buildPreview();
 }
 
 function setVal(id, val) {
-  if (val) setTimeout(() => { const el = q(id); if (el) el.value = val; }, 160);
+  if (val) {
+    const trySet = () => { const el = q(id); if (el) el.value = val; };
+    trySet(); setTimeout(trySet, 200); setTimeout(trySet, 500);
+  }
 }
 
 function addRole(type, sel) {
@@ -512,12 +531,16 @@ async function saveConfig() {
     welcome_message:          q('cfg_welcome').value,
     instruction_message:      q('cfg_instruction').value,
   };
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}`, {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  toast('Gespeichert ✓', 'ok');
+  try {
+    const r = await fetch(`/api/setup/applications/${SERVER_ID}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+    toast('Gespeichert ✓', 'ok');
+  } catch(e) {
+    toast('Netzwerkfehler: ' + e.message, 'err');
+  }
 }
 
 function buildSummary() {
@@ -561,13 +584,17 @@ async function sendPanel() {
     panel_title: q('panel_title')?.value || '⛏️ Bewerbung einreichen',
     panel_desc:  q('panel_desc')?.value  || '',
   };
-  const r = await fetch(`/api/setup/applications/${SERVER_ID}/panel`, {
-    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
-  q('panelSuccess').classList.add('show');
-  toast('Panel erfolgreich gesendet ✓', 'ok');
+  try {
+    const r = await fetch(`/api/setup/applications/${SERVER_ID}/panel`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast('Fehler: ' + (d.error || '?'), 'err'); return; }
+    q('panelSuccess').classList.add('show');
+    toast('Panel erfolgreich gesendet ✓', 'ok');
+  } catch(e) {
+    toast('Netzwerkfehler: ' + e.message, 'err');
+  }
 }
 
 function q(id) { return document.getElementById(id); }

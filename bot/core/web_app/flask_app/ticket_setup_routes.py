@@ -8,12 +8,15 @@ HTML-Templates liegen in templates/ – kein hardcoded HTML mehr in dieser Datei
 from __future__ import annotations
 
 import os
+import logging
 from functools import wraps
 
 from flask import jsonify, request, render_template, session
 
 BOT_TOKEN = os.getenv("DISCORD_TOKEN", "")
 MBL_ID    = os.getenv("MBL", "")
+
+log = logging.getLogger("insel_web")
 
 
 def _is_mbl_user(user: dict) -> bool:
@@ -41,20 +44,32 @@ def register_ticket_setup_routes(app, login_required, _is_mbl, _bot_get, _cached
         uid = user.get("id", "")
         if not uid:
             return False
-        member = bot_get_func(f"/guilds/{server_id}/members/{uid}")
-        if not member:
+        try:
+            # Zuerst prüfen ob der Bot auf dem Server ist
+            guild = _cached_guild(server_id)
+            if guild is None:
+                log.debug(f"[setup] Bot ist nicht auf Server {server_id}")
+                return False
+            member = bot_get_func(f"/guilds/{server_id}/members/{uid}")
+            if not member:
+                log.debug(f"[setup] User {uid} nicht auf Server {server_id} gefunden")
+                return False
+            member_role_ids = set(str(r) for r in (member.get("roles") or []))
+            guild_roles = bot_get_func(f"/guilds/{server_id}/roles")
+            if not guild_roles:
+                log.debug(f"[setup] Keine Rollen für Server {server_id} geladen")
+                return False
+            for role in guild_roles:
+                role_id = str(role.get("id", ""))
+                if role_id == server_id or role_id in member_role_ids:
+                    perms = int(role.get("permissions", 0))
+                    if perms & 0x8:
+                        return True
+            log.debug(f"[setup] User {uid} ist kein Admin auf Server {server_id}")
             return False
-        member_role_ids = set(str(r) for r in (member.get("roles") or []))
-        guild_roles = bot_get_func(f"/guilds/{server_id}/roles")
-        if not guild_roles:
+        except Exception as e:
+            log.error(f"[setup] Fehler bei Admin-Prüfung für Server {server_id}: {e}")
             return False
-        for role in guild_roles:
-            role_id = str(role.get("id", ""))
-            if role_id == server_id or role_id in member_role_ids:
-                perms = int(role.get("permissions", 0))
-                if perms & 0x8:
-                    return True
-        return False
 
     # ── GET /dashboard/setup ─────────────────────────────────────────────────
     @app.route("/dashboard/setup")
@@ -455,17 +470,26 @@ def register_ticket_setup_routes(app, login_required, _is_mbl, _bot_get, _cached
             all_ids = list(server_roles.keys())
 
         servers = []
+        skipped = 0
         for sid in all_ids:
             if not _is_mbl(user):
                 is_admin = _user_is_admin_on_server(user, sid, _bot_get)
                 if not is_admin:
                     continue
             guild = _cached_guild(sid)
+            if guild is None:
+                # Bot ist nicht auf diesem Server – überspringen
+                skipped += 1
+                log.debug(f"[setup] Überspringe Server {sid} – Bot nicht vorhanden")
+                continue
             servers.append({
                 "server_id": sid,
                 "name":      guild.get("name", sid) if guild else sid,
                 "icon":      _guild_icon_url(guild) if guild else None,
             })
+
+        if skipped > 0:
+            log.info(f"[setup] {skipped} Server übersprungen (Bot nicht vorhanden)")
 
         return jsonify({"servers": servers})
 
@@ -475,10 +499,60 @@ def _get_all_known_server_ids():
         from bot.core.supabase_client import get_supabase
         sb  = get_supabase()
         ids = set()
-        for row in (sb.table("ticket_servers").select("server_id").execute().data or []):
-            ids.add(row["server_id"])
-        for row in (sb.table("application_servers").select("server_id").execute().data or []):
-            ids.add(row["server_id"])
+
+        # 1. Bot-Guilds direkt von Discord laden
+        bot_guild_ids = set()
+        if BOT_TOKEN:
+            try:
+                import requests as req_lib
+                r = req_lib.get(
+                    "https://discord.com/api/v10/users/@me/guilds",
+                    headers={"Authorization": f"Bot {BOT_TOKEN}"},
+                    timeout=5,
+                )
+                if r.ok:
+                    guilds = r.json()
+                    if isinstance(guilds, list):
+                        for g in guilds:
+                            gid = g.get("id")
+                            if gid:
+                                bot_guild_ids.add(gid)
+                                ids.add(gid)
+                        log.info(f"[setup] Bot ist auf {len(bot_guild_ids)} Guilds (Discord API)")
+                else:
+                    log.warning(f"[setup] Bot-Guilds API fehlgeschlagen: {r.status_code}")
+            except Exception as e:
+                log.error(f"[setup] Bot-Guilds laden fehlgeschlagen: {e}")
+
+        # 2. DB-Tabellen durchsuchen
+        server_id_tables = [
+            "ticket_servers", "application_servers",
+            "voice_creator_config", "raid_ignored_roles",
+            "birthdays", "minecraft_names",
+        ]
+        guild_id_tables = [
+            "settings", "stream_notifications_config",
+        ]
+        db_ids = set()
+        for table in server_id_tables:
+            try:
+                for row in (sb.table(table).select("server_id").execute().data or []):
+                    sid = row.get("server_id")
+                    if sid:
+                        db_ids.add(sid)
+            except Exception:
+                pass
+        for table in guild_id_tables:
+            try:
+                for row in (sb.table(table).select("guild_id").execute().data or []):
+                    gid = row.get("guild_id")
+                    if gid:
+                        db_ids.add(gid)
+            except Exception:
+                pass
+
+        # Nur Server hinzufügen die der Bot kennt (oder alle für MBL)
+        ids.update(db_ids)
         return sorted(ids)
     except Exception:
         return []
