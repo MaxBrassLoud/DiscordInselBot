@@ -46,12 +46,13 @@ from flask import (
     jsonify, render_template_string, request, redirect, session, Response
 )
 
+import logging
+log = logging.getLogger("voting_routes")
+
 VOTER_SALT   = os.getenv("VOTER_SALT", "")
 if not VOTER_SALT:
-    log.warning("[voting] VOTER_SALT nicht gesetzt! Verwende stabilen Fallback. "
-                "Setze VOTER_SALT in der .env für Produktion.")
-    VOTER_SALT = "insel-bot-voter-salt-fallback-2024"
-MBL_ID       = os.getenv("MBL", "")
+    raise RuntimeError("VOTER_SALT muss gesetzt sein; ohne ihn sind Stimm-Hashes vorhersagbar.")
+MBL_ID       = os.getenv("MBL_DISCORD_ID", "").strip() or os.getenv("MBL", "").strip()
 BOT_TOKEN    = os.getenv("DISCORD_TOKEN", "")
 DISCORD_API  = "https://discord.com/api/v10"
 
@@ -64,8 +65,6 @@ VOTINGS_DIR = _BOT_ROOT / "votings"
 RESULTS_DIR = _BOT_ROOT / "results"
 
 import requests as req_lib
-import logging
-log = logging.getLogger("voting_routes")
 
 
 def _voter_hash(user_id: str, voting_id: str) -> str:
@@ -183,7 +182,7 @@ def register_voting_routes(app, login_required=None, _is_mbl_fn=None, _bot_get_f
     from bot.core.supabase_client import get_supabase
 
     def _is_mbl_user(user: dict) -> bool:
-        return bool(MBL_ID and user.get("id") == MBL_ID)
+        return bool(MBL_ID and str(user.get("id", "")) == MBL_ID)
 
     def _can_see_voters(user: dict, voting: dict) -> bool:
         if _is_mbl_user(user):

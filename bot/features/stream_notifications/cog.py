@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import aiohttp
@@ -113,7 +113,7 @@ def _get_accounts(guild_id: str) -> list[dict]:
 
 def _add_account(guild_id: str, platform: str, account_id: str,
                  account_name: str | None = None, channel_id: str | None = None,
-                 role_id: str | None = None):
+                 role_id: str | None = None, last_known_id: str | None = None):
     get_supabase().table("stream_notifications_accounts").insert({
         "guild_id": guild_id,
         "platform": platform,
@@ -121,6 +121,7 @@ def _add_account(guild_id: str, platform: str, account_id: str,
         "account_name": account_name,
         "channel_id": channel_id,
         "role_id": role_id,
+        "last_known_id": last_known_id,
     }).execute()
 
 
@@ -267,32 +268,44 @@ def _parse_twitch_url(url: str) -> str | None:
 
 
 async def _fetch_latest_youtube_video(channel_id: str) -> dict | None:
+    """Fetch uploads through the channel playlist (2 low-quota calls).
+
+    YouTube's search endpoint costs 100 quota units per request and made a
+    five-minute polling loop unusable for more than a handful of channels.
+    """
     if not YT_API_KEY:
         return None
-    url = f"{YOUTUBE_API_BASE}/search"
-    params = {
-        "part": "snippet",
-        "channelId": channel_id,
-        "order": "date",
-        "maxResults": 1,
-        "type": "video",
-        "key": YT_API_KEY,
-    }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(f"{YOUTUBE_API_BASE}/channels", params={
+                "part": "contentDetails,snippet", "id": channel_id, "key": YT_API_KEY,
+            }, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
                 items = data.get("items", [])
                 if not items:
                     return None
+                channel = items[0]
+                uploads_id = channel.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads")
+                if not uploads_id:
+                    return None
+            async with session.get(f"{YOUTUBE_API_BASE}/playlistItems", params={
+                "part": "snippet,contentDetails", "playlistId": uploads_id, "maxResults": 1, "key": YT_API_KEY,
+            }, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                items = (await resp.json()).get("items", [])
+                if not items:
+                    return None
                 video = items[0]
-                video_id = video["id"]["videoId"]
-                snippet = video["snippet"]
+                video_id = video.get("contentDetails", {}).get("videoId")
+                snippet = video.get("snippet", {})
+                if not video_id:
+                    return None
                 return {
                     "video_id": video_id,
-                    "title": snippet["title"],
+                    "title": snippet.get("title", "Neues Video"),
                     "url": f"https://www.youtube.com/watch?v={video_id}",
                     "channel_name": snippet.get("channelTitle", ""),
                     "thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
@@ -303,11 +316,18 @@ async def _fetch_latest_youtube_video(channel_id: str) -> dict | None:
 
 
 _twitch_oauth_token: str | None = None
+_twitch_oauth_expires_at: datetime | None = None
+
+
+def _invalidate_twitch_token() -> None:
+    global _twitch_oauth_token, _twitch_oauth_expires_at
+    _twitch_oauth_token = None
+    _twitch_oauth_expires_at = None
 
 
 async def _get_twitch_token() -> str | None:
-    global _twitch_oauth_token
-    if _twitch_oauth_token:
+    global _twitch_oauth_token, _twitch_oauth_expires_at
+    if _twitch_oauth_token and _twitch_oauth_expires_at and _twitch_oauth_expires_at > datetime.now(timezone.utc):
         return _twitch_oauth_token
     if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
         return None
@@ -322,6 +342,9 @@ async def _get_twitch_token() -> str | None:
                     return None
                 data = await resp.json()
                 _twitch_oauth_token = data.get("access_token")
+                _twitch_oauth_expires_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=max(0, int(data.get("expires_in", 0)) - 60)
+                )
                 return _twitch_oauth_token
     except Exception as e:
         logger.warning(f"[twitch] token fetch: {e}")
@@ -338,6 +361,9 @@ async def _resolve_twitch_login(login: str) -> dict | None:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params={"login": login.lower()},
                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 401:
+                    _invalidate_twitch_token()
+                    return None
                 if resp.status != 200:
                     return None
                 data = await resp.json()
@@ -358,6 +384,9 @@ async def _check_twitch_live(user_id: str) -> dict | None:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params={"user_id": user_id},
                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 401:
+                    _invalidate_twitch_token()
+                    return None
                 if resp.status != 200:
                     return None
                 data = await resp.json()
@@ -594,7 +623,13 @@ class StreamNotificationsCog(commands.Cog):
                     )
                     return
 
-            _add_account(str(interaction.guild_id), "youtube", yt_channel_id, name, channel_id, role_id)
+            # Baseline the current upload.  A newly registered channel must
+            # not announce an old video as if it were uploaded just now.
+            latest = await _fetch_latest_youtube_video(yt_channel_id)
+            _add_account(
+                str(interaction.guild_id), "youtube", yt_channel_id, name,
+                channel_id, role_id, latest.get("video_id") if latest else None,
+            )
             ch_text = f" in <#{channel_id}>" if kanal else ""
             role_text = f" + {rolle.mention}" if rolle else ""
             await interaction.followup.send(

@@ -220,7 +220,7 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
         def decorated(*args, **kwargs):
             if "user" not in session:
                 return jsonify({"error": "Unauthorized"}), 401
-            if MBL_ID and not _is_mbl(session["user"]):
+            if not _is_mbl(session["user"]):
                 return jsonify({"error": "Nur MBL"}), 403
             return f(*args, **kwargs)
         return decorated
@@ -495,7 +495,7 @@ def register_import_routes(app, login_required, _is_mbl, MBL_ID):
     @app.route("/dashboard/import")
     @login_required
     def import_dashboard():
-        if MBL_ID and not _is_mbl(session["user"]):
+        if not _is_mbl(session["user"]):
             from flask import render_template
             return render_template(
                 "error.html", code=403, title="Kein Zugriff",

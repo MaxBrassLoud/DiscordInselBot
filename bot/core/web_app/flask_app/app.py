@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from functools import wraps
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 try:
     from werkzeug.urls import url_parse
 except ImportError:
@@ -57,6 +57,13 @@ if len(_SECRET_KEY) < 32:
     sys.exit(1)
 
 app.secret_key = _SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Local HTTP development must keep working; production HTTPS cookies are
+    # never sent over an unencrypted connection.
+    SESSION_COOKIE_SECURE=os.getenv("WEB_BASE_URL", "").startswith("https://"),
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Rate Limiter (in-memory, pro IP)
@@ -87,12 +94,24 @@ def _enforce_rate_limit():
     if not _check_rate_limit(ip):
         return jsonify({"error": "Zu viele Anfragen. Bitte später erneut versuchen."}), 429
 
+
+@app.before_request
+def _reject_cross_site_writes():
+    """Block browser requests that try to mutate a signed-in session cross-site."""
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    origin = request.headers.get("Origin")
+    if origin and urlsplit(origin).netloc != request.host:
+        return jsonify({"error": "Cross-site request blocked"}), 403
+
 DISCORD_API   = "https://discord.com/api/v10"
 CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
 BOT_TOKEN     = os.getenv("DISCORD_TOKEN", "")
 WEB_BASE_URL  = os.getenv("WEB_BASE_URL", "http://localhost:5000").rstrip("/")
-MBL_ID        = os.getenv("MBL", "")
+# MBL is kept as a backwards-compatible name.  Prefer the explicit name in
+# deployments so it is clear that this is a Discord snowflake, not a username.
+MBL_ID        = os.getenv("MBL_DISCORD_ID", "").strip() or os.getenv("MBL", "").strip()
 SUPABASE_URL  = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY", "")
 
@@ -425,7 +444,7 @@ def _get_user_roles_for_server(user: dict, server_id: str) -> set[str]:
     return {str(r).strip() for r in roles if r}
 
 def _is_mbl(user: dict) -> bool:
-    return bool(MBL_ID and user.get("id") == MBL_ID)
+    return bool(MBL_ID and str(user.get("id", "")) == MBL_ID)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Login-Ablauf
@@ -436,7 +455,7 @@ def _build_server_roles(uid: str) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
 
     # MBL hat automatisch Zugriff auf ALLE Server
-    if MBL_ID and uid == MBL_ID:
+    if MBL_ID and str(uid) == MBL_ID:
         log.info(f"[auth] MBL erkannt – gebe Zugriff auf alle {len(db_server_ids)} Server")
         for sid in db_server_ids:
             result[sid] = ["MBL_FULL_ACCESS"]
@@ -607,7 +626,7 @@ def ensure_fresh_roles():
     if not uid:
         return
     # MBL: Immer Rollen laden (auch ohne BOT_TOKEN)
-    is_mbl = MBL_ID and uid == MBL_ID
+    is_mbl = _is_mbl(user)
     if not is_mbl and not BOT_TOKEN:
         return
     if not (roles_empty or roles_stale):
@@ -1334,11 +1353,60 @@ def api_member(user_id):
 def api_members_search():
     from urllib.parse import quote
     q         = request.args.get("q", "").strip()
-    server_id = request.args.get("server_id") or _first_accessible_server(session["user"])
+    user      = session["user"]
+    server_id = request.args.get("server_id") or _first_accessible_server(user)
     if len(q) < 2 or not server_id:
         return jsonify([])
-    if not _is_mbl(session["user"]) and server_id not in (session["user"].get("server_roles") or {}):
+    if not _is_mbl(user) and server_id not in (user.get("server_roles") or {}):
         return jsonify([])
+
+    # MBL searches the entire data set, not just members currently present in
+    # the first guild.  This also finds users who left a server but still have
+    # tickets, applications or moderation records in the system.
+    if _is_mbl(user):
+        matches: dict[str, dict] = {}
+
+        def add_match(uid, display, source):
+            uid = str(uid or "").strip()
+            if not uid or not uid.isdigit():
+                return
+            entry = matches.setdefault(uid, {"id": uid, "display": "Unbekannt", "avatar": None, "sources": set()})
+            if display and entry["display"] == "Unbekannt":
+                entry["display"] = str(display)
+            entry["sources"].add(source)
+
+        # A numeric Discord ID is a useful direct lookup even if it has not
+        # yet occurred in a display-name field.
+        if q.isdigit():
+            add_match(q, q, "Discord-ID")
+        try:
+            for row in (sb("tickets").select("creator_id,creator_name").ilike("creator_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("creator_id"), row.get("creator_name"), "Tickets")
+            for row in (sb("applications").select("creator_id,creator_name").ilike("creator_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("creator_id"), row.get("creator_name"), "Bewerbungen")
+            for row in (sb("moderation_logs").select("target_id,target_name").ilike("target_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("target_id"), row.get("target_name"), "Moderation")
+            for row in (sb("minecraft_names").select("user_id,minecraft_name").ilike("minecraft_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("user_id"), row.get("minecraft_name"), "Minecraft")
+            for row in (sb("ticket_messages").select("user_id,user_name").ilike("user_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("user_id"), row.get("user_name"), "Ticket-Nachrichten")
+            for row in (sb("application_messages").select("user_id,user_name").ilike("user_name", f"%{q}%").limit(20).execute().data or []):
+                add_match(row.get("user_id"), row.get("user_name"), "Bewerbungs-Nachrichten")
+        except Exception as e:
+            log.warning(f"[user_search] Datenbanksuche fehlgeschlagen: {e}")
+
+        # Enrich historical matches from Discord where possible, without
+        # dropping records whose Discord member object no longer exists.
+        for entry in matches.values():
+            for sid in _load_all_server_ids():
+                member = _cached_member(sid, entry["id"])
+                if member:
+                    entry["display"] = _member_name(member, entry["display"])
+                    entry["avatar"] = _member_avatar(member, entry["id"])
+                    break
+            entry["sources"] = sorted(entry["sources"])
+        return jsonify(sorted(matches.values(), key=lambda item: item["display"].lower())[:20])
+
     encoded_q = quote(q, safe="")
     data = _bot_get(f"/guilds/{server_id}/members/search?query={encoded_q}&limit=12")
     if not isinstance(data, list):
@@ -1357,7 +1425,7 @@ def api_members_search():
 @login_required
 def api_debug_permissions():
     user = session["user"]
-    if MBL_ID and not _is_mbl(user):
+    if not _is_mbl(user):
         return jsonify({"error": "Nur für MBL zugänglich"}), 403
 
     server_roles = user.get("server_roles") or {}
@@ -1404,6 +1472,8 @@ def api_debug_permissions():
 @login_required
 def api_refresh_roles():
     user = session["user"]
+    if not _is_mbl(user):
+        return jsonify({"error": "Nur für MBL zugänglich"}), 403
     uid  = user.get("id", "")
 
     with _cache_lock:
@@ -1431,6 +1501,8 @@ def api_refresh_roles():
 @login_required
 def api_debug_servers():
     user = session["user"]
+    if not _is_mbl(user):
+        return jsonify({"error": "Nur für MBL zugänglich"}), 403
     uid  = user.get("id", "")
 
     # Cache leeren für frische Daten
@@ -1484,6 +1556,11 @@ def api_user_profile():
     if _is_mbl(user):
         accessible = set(all_server_ids)
 
+    def set_historical_name(name) -> None:
+        """Keep profiles useful when the person has already left Discord."""
+        if name and not target_user_data.get("name"):
+            target_user_data["name"] = str(name)
+
     for sid in all_server_ids:
         if sid not in accessible:
             continue
@@ -1529,6 +1606,7 @@ def api_user_profile():
                 "ticket_id,title,module,status,creator_id,creator_name,created_at,closed_at,server_id"
             ).eq("server_id", sid).eq("creator_id", target_id).execute().data or []
             for t in rows:
+                set_historical_name(t.get("creator_name"))
                 g = _cached_guild(sid)
                 t["_server_name"] = g.get("name", sid) if g else sid
                 tickets_created.append(t)
@@ -1555,6 +1633,7 @@ def api_user_profile():
                 "app_id,creator_id,creator_name,minecraft_name,status,created_at,closed_at,server_id"
             ).eq("server_id", sid).eq("creator_id", target_id).execute().data or []
             for a in rows:
+                set_historical_name(a.get("creator_name"))
                 g = _cached_guild(sid)
                 a["_server_name"] = g.get("name", sid) if g else sid
                 applications.append(a)
@@ -1569,11 +1648,47 @@ def api_user_profile():
                 "id,server_id,action,target_id,target_name,moderator_id,moderator_name,reason,duration_seconds,until,created_at"
             ).eq("server_id", sid).eq("target_id", target_id).order("created_at", desc=True).limit(50).execute().data or []
             for m in rows:
+                set_historical_name(m.get("target_name"))
                 g = _cached_guild(sid)
                 m["_server_name"] = g.get("name", sid) if g else sid
                 moderation.append(m)
     except Exception as e:
         log.error(f"[user_profile] moderation: {e}")
+
+    # Cross-server moderation is intentionally represented as aggregate data.
+    # It allows MBL to recognise repeat offences without exposing the details
+    # of actions from another server in the summary itself.
+    system_moderation_summary = {
+        "total_actions": len(moderation),
+        "ban_count": sum(1 for row in moderation if str(row.get("action", "")).lower() == "ban"),
+        "server_count": len({row.get("server_id") for row in moderation if row.get("server_id")}),
+    }
+    if _is_mbl(user):
+        system_moderation_summary = {"total_actions": 0, "ban_count": 0, "server_count": 0}
+        try:
+            for sid in all_server_ids:
+                rows = (sb("moderation_logs").select("action")
+                        .eq("server_id", sid).eq("target_id", target_id).execute().data or [])
+                if rows:
+                    system_moderation_summary["server_count"] += 1
+                    system_moderation_summary["total_actions"] += len(rows)
+                    system_moderation_summary["ban_count"] += sum(
+                        1 for row in rows if str(row.get("action", "")).lower() == "ban"
+                    )
+        except Exception as e:
+            log.error(f"[user_profile] system moderation summary: {e}")
+
+    activity_summary = {"ticket_messages": 0, "application_messages": 0}
+    try:
+        for sid in accessible:
+            ticket_result = (sb("ticket_messages").select("id", count="exact")
+                             .eq("server_id", sid).eq("user_id", target_id).execute())
+            app_result = (sb("application_messages").select("id", count="exact")
+                          .eq("server_id", sid).eq("user_id", target_id).execute())
+            activity_summary["ticket_messages"] += ticket_result.count or 0
+            activity_summary["application_messages"] += app_result.count or 0
+    except Exception as e:
+        log.error(f"[user_profile] activity summary: {e}")
 
     # ── Level (alle Server) ──────────────────────────────────────────────────
     levels = []
@@ -1624,6 +1739,8 @@ def api_user_profile():
     target_user_data["tickets_participated"] = tickets_participated
     target_user_data["applications"]         = applications
     target_user_data["moderation"]           = moderation
+    target_user_data["system_moderation_summary"] = system_moderation_summary
+    target_user_data["activity_summary"]     = activity_summary
     target_user_data["levels"]               = levels
     target_user_data["birthdays"]            = birthdays
     target_user_data["mc_names"]             = mc_names

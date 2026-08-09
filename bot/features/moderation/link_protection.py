@@ -28,13 +28,10 @@ from bot.utils.permissions import has_admin_rights
 logger = get_logger("link_protection")
 
 # ── Reguläre Ausdrücke ──────────────────────────────────────────────────────
-URL_PATTERN = re.compile(
-    r'(https?://[^\s]+|www\.[^\s]+)',
-    re.IGNORECASE
-)
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>]+", re.IGNORECASE)
 
 YOUTUBE_CHANNEL_PATTERN = re.compile(
-    r'(?:youtube\.com/(?:channel/|c/|@)|youtu\.be/)([a-zA-Z0-9_-]+)',
+    r'(?:youtube\.com/(?:channel/|c/|user/|@))([a-zA-Z0-9_-]+)',
     re.IGNORECASE
 )
 
@@ -93,14 +90,12 @@ def _add_allowed_link(server_id: str, url: str, created_by: str, channel_id: Opt
     """Fügt eine erlaubte Domain/URL hinzu."""
     try:
         sb = get_supabase()
-        parsed = urlparse(url)
-        domain = parsed.netloc or parsed.path
-        if not domain:
+        host, path = _normalise_url(url)
+        if not host:
             return
-
-        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else domain
-        if parsed.path and parsed.path != "/":
-            base_url += parsed.path.rstrip("/")
+        # Store one canonical value so adding and removing a domain work with
+        # or without a scheme and trailing slash.
+        base_url = f"{host}{path}"
 
         sb.table("link_protection_allowed").insert({
             "server_id": server_id,
@@ -117,11 +112,15 @@ def _add_allowed_link(server_id: str, url: str, created_by: str, channel_id: Opt
 def _delete_allowed_link(server_id: str, url: str):
     try:
         sb = get_supabase()
-        sb.table("link_protection_allowed") \
-            .delete() \
-            .eq("server_id", server_id) \
-            .eq("url", url) \
-            .execute()
+        host, path = _normalise_url(url)
+        if not host:
+            return
+        # Older installations may contain the same value with http(s)://.
+        # Remove all equivalent forms so a whitelist entry cannot become
+        # impossible to manage after the canonicalisation update.
+        for value in {url.strip().rstrip("/"), f"{host}{path}", f"https://{host}{path}", f"http://{host}{path}"}:
+            sb.table("link_protection_allowed") \
+                .delete().eq("server_id", server_id).eq("url", value).execute()
     except Exception as e:
         logger.error(f"[link_protection] _delete_allowed_link: {e}")
 
@@ -135,7 +134,7 @@ def _get_whitelisted_channels(server_id: str, platform: str) -> Set[str]:
             .eq("server_id", server_id) \
             .eq("platform", platform) \
             .execute()
-        return {row["channel_id"] for row in (r.data or [])}
+        return {_normalise_platform_channel(platform, row["channel_id"]) for row in (r.data or [])}
     except Exception as e:
         logger.error(f"[link_protection] _get_whitelisted_channels: {e}")
         return set()
@@ -147,7 +146,7 @@ def _add_whitelisted_channel(server_id: str, platform: str, channel_id: str):
         sb.table("link_protection_platform_whitelist").insert({
             "server_id": server_id,
             "platform": platform,
-            "channel_id": channel_id,
+            "channel_id": _normalise_platform_channel(platform, channel_id),
         }).execute()
     except Exception as e:
         logger.error(f"[link_protection] _add_whitelisted_channel: {e}")
@@ -160,14 +159,14 @@ def _remove_whitelisted_channel(server_id: str, platform: str, channel_id: str):
             .delete() \
             .eq("server_id", server_id) \
             .eq("platform", platform) \
-            .eq("channel_id", channel_id) \
+            .eq("channel_id", _normalise_platform_channel(platform, channel_id)) \
             .execute()
     except Exception as e:
         logger.error(f"[link_protection] _remove_whitelisted_channel: {e}")
 
 
-def _get_user_allowed_until(server_id: str, user_id: str) -> Optional[datetime]:
-    """Holt den Zeitpunkt bis zu dem ein User Links senden darf."""
+def _is_user_allowed(server_id: str, user_id: str) -> bool:
+    """True only for an explicit, active (or permanent) user exemption."""
     try:
         sb = get_supabase()
         r = sb.table("link_protection_user_allow") \
@@ -175,11 +174,18 @@ def _get_user_allowed_until(server_id: str, user_id: str) -> Optional[datetime]:
             .eq("server_id", server_id) \
             .eq("user_id", user_id) \
             .execute()
-        if r.data and r.data[0].get("allowed_until"):
-            return datetime.fromisoformat(r.data[0]["allowed_until"])
+        if not r.data:
+            return False
+        allowed_until = r.data[0].get("allowed_until")
+        # NULL is the documented value for a permanent exemption.  It must
+        # not be confused with a missing row, which means "not allowed".
+        if allowed_until is None:
+            return True
+        expires = datetime.fromisoformat(allowed_until.replace("Z", "+00:00"))
+        return expires > datetime.now(timezone.utc)
     except Exception as e:
-        logger.error(f"[link_protection] _get_user_allowed_until: {e}")
-    return None
+        logger.error(f"[link_protection] _is_user_allowed: {e}")
+    return False
 
 
 def _set_user_allowed_until(server_id: str, user_id: str, allowed_until: Optional[datetime]):
@@ -204,6 +210,14 @@ def _set_user_allowed_until(server_id: str, user_id: str, allowed_until: Optiona
         logger.error(f"[link_protection] _set_user_allowed_until: {e}")
 
 
+def _remove_user_allow(server_id: str, user_id: str):
+    try:
+        get_supabase().table("link_protection_user_allow") \
+            .delete().eq("server_id", server_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.error(f"[link_protection] _remove_user_allow: {e}")
+
+
 def _log_action(server_id: str, action: str, user_id: str, target_url: str, moderator_id: Optional[str] = None):
     """Loggt eine Link-Protection-Aktion."""
     try:
@@ -222,15 +236,31 @@ def _log_action(server_id: str, action: str, user_id: str, target_url: str, mode
 
 # ── Helper-Funktionen ──────────────────────────────────────────────────────
 
-def _is_allowed_url(url: str, allowed_links: List[dict]) -> bool:
-    """Prüft, ob eine URL auf der Whitelist steht."""
-    parsed = urlparse(url)
-    domain = parsed.netloc or parsed.path
+def _normalise_url(value: str):
+    """Return a safe comparable host/path pair for a user supplied URL."""
+    value = value.strip().rstrip(".,!?;:)]}\"'")
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = parsed.path.rstrip("/")
+    return host, path
+
+
+def _is_allowed_url(url: str, allowed_links: List[dict], channel_id: str, user_id: str) -> bool:
+    """Match only an exact domain/subdomain and an optional path prefix."""
+    host, path = _normalise_url(url)
+    if not host:
+        return False
     for entry in allowed_links:
-        entry_url = entry["url"]
-        entry_parsed = urlparse(entry_url)
-        entry_domain = entry_parsed.netloc or entry_parsed.path
-        if parsed.netloc == entry_domain or parsed.path.startswith(entry_domain):
+        if entry.get("channel_id") and str(entry["channel_id"]) != channel_id:
+            continue
+        if entry.get("user_id") and str(entry["user_id"]) != user_id:
+            continue
+        entry_host, entry_path = _normalise_url(entry.get("url", ""))
+        if not entry_host:
+            continue
+        domain_match = host == entry_host or host.endswith(f".{entry_host}")
+        path_match = not entry_path or path == entry_path or path.startswith(f"{entry_path}/")
+        if domain_match and path_match:
             return True
     return False
 
@@ -239,7 +269,7 @@ def _extract_youtube_channel(url: str) -> Optional[str]:
     """Extrahiert die YouTube-Kanal-ID oder den Handle aus einer URL."""
     match = YOUTUBE_CHANNEL_PATTERN.search(url)
     if match:
-        return match.group(1)
+        return _normalise_platform_channel("youtube", match.group(1))
     return None
 
 
@@ -247,8 +277,16 @@ def _extract_twitch_channel(url: str) -> Optional[str]:
     """Extrahiert den Twitch-Kanal aus einer URL."""
     match = TWITCH_CHANNEL_PATTERN.search(url)
     if match:
-        return match.group(1)
+        return _normalise_platform_channel("twitch", match.group(1))
     return None
+
+
+def _normalise_platform_channel(platform: str, channel_id: str) -> str:
+    value = str(channel_id or "").strip().lstrip("@").rstrip("/")
+    # YouTube channel IDs are case-sensitive; handles are not.
+    if platform == "youtube" and value.startswith("UC"):
+        return value
+    return value.lower()
 
 
 # ── Views für den Link-Approval-Workflow ───────────────────────────────────
@@ -394,9 +432,9 @@ class LinkProtectionCog(commands.Cog):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
 
-        parsed = urlparse(url)
-        domain = parsed.netloc or parsed.path
-        _delete_allowed_link(str(interaction.guild_id), domain)
+        host, path = _normalise_url(url)
+        domain = f"{host}{path}" if host else url
+        _delete_allowed_link(str(interaction.guild_id), url)
         self._allowed_cache.pop(str(interaction.guild_id), None)
         await interaction.response.send_message(f"✅ `{domain}` wurde von der Whitelist entfernt.", ephemeral=True)
 
@@ -511,7 +549,7 @@ class LinkProtectionCog(commands.Cog):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
 
-        _set_user_allowed_until(str(interaction.guild_id), str(user.id), None)
+        _remove_user_allow(str(interaction.guild_id), str(user.id))
         await interaction.response.send_message(
             f"✅ {user.mention} kann jetzt keine Links mehr senden.",
             ephemeral=True
@@ -587,15 +625,14 @@ class LinkProtectionCog(commands.Cog):
         whitelisted_yt = _get_whitelisted_channels(str(message.guild.id), "youtube")
         whitelisted_tw = _get_whitelisted_channels(str(message.guild.id), "twitch")
 
-        user_allowed_until = _get_user_allowed_until(str(message.guild.id), str(message.author.id))
-        user_is_allowed = user_allowed_until is None or user_allowed_until > datetime.now(timezone.utc)
+        user_is_allowed = _is_user_allowed(str(message.guild.id), str(message.author.id))
 
         if message.author.guild_permissions.administrator:
             return
 
-        blocked = False
+        blocked_url = None
         for url in urls:
-            if _is_allowed_url(url, allowed_links):
+            if _is_allowed_url(url, allowed_links, str(message.channel.id), str(message.author.id)):
                 continue
 
             yt_channel = _extract_youtube_channel(url)
@@ -609,10 +646,10 @@ class LinkProtectionCog(commands.Cog):
             if user_is_allowed:
                 continue
 
-            blocked = True
+            blocked_url = url
             break
 
-        if blocked:
+        if blocked_url:
             try:
                 await message.delete()
             except discord.Forbidden:
@@ -635,8 +672,13 @@ class LinkProtectionCog(commands.Cog):
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc)
             )
-            view = LinkBlockedView(str(message.guild.id), str(message.author.id), urls[0], message)
-            await message.author.send(embed=embed, view=view)
+            _log_action(str(message.guild.id), "block", str(message.author.id), blocked_url)
+            view = LinkBlockedView(str(message.guild.id), str(message.author.id), blocked_url, message)
+            try:
+                await message.author.send(embed=embed, view=view)
+            except (discord.Forbidden, discord.HTTPException):
+                # DMs are optional; a disabled DM must not prevent audit logs.
+                logger.info(f"[link_protection] DM an {message.author.id} nicht möglich")
 
             log_channel_id = config.get("moderation_log_channel_id")
             if log_channel_id:
@@ -644,12 +686,12 @@ class LinkProtectionCog(commands.Cog):
                 if log_channel:
                     log_embed = discord.Embed(
                         title="🔒 Link blockiert",
-                        description=f"User: {message.author.mention}\nLink: {urls[0]}",
+                        description=f"User: {message.author.mention}\nLink: {blocked_url}",
                         color=discord.Color.red(),
                         timestamp=datetime.now(timezone.utc)
                     )
                     log_embed.set_footer(text=f"User-ID: {message.author.id}")
-                    await log_channel.send(embed=log_embed, view=LinkApprovalView(str(message.guild.id), str(message.author.id), urls[0], message))
+                    await log_channel.send(embed=log_embed, view=LinkApprovalView(str(message.guild.id), str(message.author.id), blocked_url, message))
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
@@ -669,13 +711,18 @@ class LinkBlockedView(discord.ui.View):
 
     @discord.ui.button(label="🔗 Link freigeben lassen", style=discord.ButtonStyle.primary)
     async def request_approval(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("❌ Diese Freigabeanfrage gehört nicht dir.", ephemeral=True)
+            return
         config = _get_link_config(self.server_id)
         log_channel_id = config.get("moderation_log_channel_id")
         if not log_channel_id:
             await interaction.response.send_message("❌ Kein Moderation-Channel konfiguriert.", ephemeral=True)
             return
 
-        log_channel = interaction.guild.get_channel(int(log_channel_id))
+        # This button is shown in a DM, so interaction.guild is always None.
+        guild = self.original_message.guild
+        log_channel = guild.get_channel(int(log_channel_id)) if guild else None
         if not log_channel:
             await interaction.response.send_message("❌ Moderation-Channel nicht gefunden.", ephemeral=True)
             return

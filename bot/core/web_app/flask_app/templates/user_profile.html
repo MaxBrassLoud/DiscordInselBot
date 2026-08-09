@@ -11,7 +11,7 @@
     @media(max-width:768px){ .profile-body { padding: 14px; } }
 
     /* Search */
-    .search-box { display:flex; gap:10px; margin-bottom:24px; flex-wrap:wrap; }
+    .search-box { display:flex; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
     .search-input-wrap { flex:1; min-width:250px; position:relative; }
     .search-input-wrap input {
       width:100%; background:var(--bg-surface); border:1px solid var(--border); color:var(--text);
@@ -34,6 +34,8 @@
     .search-result-item img { width:28px; height:28px; border-radius:50%; flex-shrink:0; }
     .search-result-item .name { font-size:0.85rem; font-weight:600; color:var(--text); }
     .search-result-item .sub { font-size:0.72rem; color:var(--text3); }
+    .search-result-meta { display:flex; align-items:center; gap:7px; min-width:0; }
+    .search-source { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:0.65rem; color:var(--green); background:rgba(74,222,128,.08); border:1px solid rgba(74,222,128,.16); border-radius:999px; padding:1px 7px; }
 
     /* Profile card */
     .profile-hero { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-xl); padding:28px; margin-bottom:20px; display:none; }
@@ -44,10 +46,12 @@
     .profile-name { font-family:'Rajdhani',sans-serif; font-size:1.6rem; font-weight:700; color:var(--text); margin-bottom:2px; }
     .profile-username { font-size:0.85rem; color:var(--text3); margin-bottom:8px; }
     .profile-id { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--text4); }
-    .profile-stats { display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; }
-    .profile-stat { text-align:center; }
+    .profile-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(82px, 1fr)); gap:8px; margin-top:16px; }
+    .profile-stat { text-align:center; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-sm); padding:8px 6px; }
     .profile-stat-num { font-family:'Rajdhani',sans-serif; font-size:1.3rem; font-weight:700; color:var(--green); }
     .profile-stat-label { font-size:0.66rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+    .summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; padding:18px; }
+    .summary-grid .profile-stat { padding:12px; text-align:left; }
 
     /* Server chips */
     .server-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
@@ -95,6 +99,13 @@
     .no-profile { text-align:center; padding:60px 20px; color:var(--text3); }
     .no-profile-icon { font-size:2.5rem; margin-bottom:12px; opacity:0.3; }
     .no-profile h3 { font-family:'Rajdhani',sans-serif; font-size:1.1rem; color:var(--text2); margin-bottom:4px; }
+    @media(max-width:560px) {
+      .profile-hero { padding:20px; }
+      .profile-hero-inner { align-items:flex-start; }
+      .profile-stats { grid-template-columns:repeat(3, 1fr); }
+      .data-table thead th, .data-table tbody td { padding:8px 10px; }
+      .search-btn { width:100%; }
+    }
   </style>
 </head>
 <body class="dash-body">
@@ -168,12 +179,12 @@
             <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
           </svg>
         </span>
-        <input type="text" id="searchInput" placeholder="Discord-ID oder Name eingeben..." autocomplete="off">
+        <input type="text" id="searchInput" placeholder="Discord-ID, Discord-, Minecraft-Name …" autocomplete="off">
         <div class="search-results" id="searchResults"></div>
       </div>
       <button class="search-btn" id="searchBtn" onclick="searchUser()">🔍 Suchen</button>
     </div>
-    <div class="search-hint">Gib eine Discord-ID (z.B. 123456789) oder einen Benutzernamen ein und klicke auf Suchen.</div>
+    <div class="search-hint">Suche nach Discord-ID, Discord-Namen oder Minecraft-Namen. MBL durchsucht zusätzlich Tickets, Bewerbungen und Moderationsdaten aller Bot-Server.</div>
 
     <!-- Loading -->
     <div class="loading-state" id="loadingState" style="display:none;">
@@ -226,8 +237,8 @@ async function searchMembers(query) {
     if (!data.length) { box.classList.remove('open'); return; }
     box.innerHTML = data.map(m =>
       `<div class="search-result-item" onclick="selectUser('${esc(m.id)}', '${esc(m.display)}')">
-        ${m.avatar ? `<img src="${esc(m.avatar)}" alt="">` : '<div style="width:28px;height:28px;border-radius:50%;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:var(--text3);">${esc((m.display||'?')[0])}</div>'}
-        <div><div class="name">${esc(m.display)}</div><div class="sub">${esc(m.id)}</div></div>
+        ${m.avatar ? `<img src="${esc(m.avatar)}" alt="">` : `<div style="width:28px;height:28px;border-radius:50%;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:var(--text3);">${esc((m.display || '?')[0])}</div>`}
+        <div style="min-width:0"><div class="name">${esc(m.display)}</div><div class="search-result-meta"><div class="sub">${esc(m.id)}</div>${m.sources?.length ? `<span class="search-source">${esc(m.sources.join(' · '))}</span>` : ''}</div></div>
       </div>`
     ).join('');
     box.classList.add('open');
@@ -285,6 +296,8 @@ function renderProfile(d) {
   const bdays = d.birthdays || [];
   const mc = d.mc_names || [];
   const servers = d.servers || [];
+  const systemMod = d.system_moderation_summary || { total_actions: mod.length, ban_count: 0, server_count: 0 };
+  const activity = d.activity_summary || { ticket_messages: 0, application_messages: 0 };
 
   let html = '';
 
@@ -300,6 +313,9 @@ function renderProfile(d) {
           <div class="profile-stat"><div class="profile-stat-num">${tc.length}</div><div class="profile-stat-label">Tickets</div></div>
           <div class="profile-stat"><div class="profile-stat-num">${apps.length}</div><div class="profile-stat-label">Bewerbungen</div></div>
           <div class="profile-stat"><div class="profile-stat-num">${mod.length}</div><div class="profile-stat-label">Moderation</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${systemMod.total_actions}</div><div class="profile-stat-label">Eingriffe gesamt</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${systemMod.ban_count}</div><div class="profile-stat-label">Bans gesamt</div></div>
+          <div class="profile-stat"><div class="profile-stat-num">${activity.ticket_messages + activity.application_messages}</div><div class="profile-stat-label">Nachrichten</div></div>
           <div class="profile-stat"><div class="profile-stat-num">${servers.length}</div><div class="profile-stat-label">Server</div></div>
         </div>
         ${servers.length ? `<div class="server-chips">${servers.map(s =>
@@ -311,6 +327,20 @@ function renderProfile(d) {
       </div>
     </div>
   </div>`;
+
+  html += renderSection('📊', 'Systemweite Moderationsübersicht', systemMod.total_actions, `
+    <div class="summary-grid">
+      <div><div class="profile-stat-num">${systemMod.total_actions}</div><div class="profile-stat-label">Eingriffe über alle Server</div></div>
+      <div><div class="profile-stat-num">${systemMod.ban_count}</div><div class="profile-stat-label">Bans über alle Server</div></div>
+      <div><div class="profile-stat-num">${systemMod.server_count}</div><div class="profile-stat-label">Server mit Einträgen</div></div>
+    </div>
+    <div class="empty-msg" style="padding-top:0;">Diese Übersicht enthält absichtlich nur Summen, keine Details zu serverübergreifenden Maßnahmen.</div>`);
+
+  html += renderSection('💬', 'Gesammelte Aktivität', activity.ticket_messages + activity.application_messages, `
+    <div class="summary-grid">
+      <div><div class="profile-stat-num">${activity.ticket_messages}</div><div class="profile-stat-label">Ticket-Nachrichten</div></div>
+      <div><div class="profile-stat-num">${activity.application_messages}</div><div class="profile-stat-label">Bewerbungs-Nachrichten</div></div>
+    </div>`);
 
   // ── Tickets erstellt ──────────────────────────────────────────────────────
   html += renderSection('🎫', 'Erstellte Tickets', tc.length, `
