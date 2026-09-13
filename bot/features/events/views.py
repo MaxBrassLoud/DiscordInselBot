@@ -1,6 +1,6 @@
 import discord
 from bot.core.supabase_client import get_supabase
-from .helpers import build_event_embed, parse_event_time, TZ
+from .helpers import build_event_embed, parse_event_time
 from bot.utils.logger import get_logger
 from datetime import datetime
 
@@ -105,6 +105,7 @@ class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
             if not config or not config.get("event_channel_id"):
                 await interaction.followup.send("❌ Bitte führe zuerst `/setup_event` aus!", ephemeral=True)
                 return
+            timezone_name = config.get("timezone", "Europe/Berlin")
             channel = self.bot.get_channel(int(config["event_channel_id"]))
             if not channel:
                 await interaction.followup.send("❌ Event-Kanal nicht gefunden!", ephemeral=True)
@@ -118,12 +119,12 @@ class EventCreateModal(discord.ui.Modal, title="Event erstellen"):
             end_dt    = None
 
             if not start_tba:
-                start_dt = parse_event_time(raw_start)
+                start_dt = parse_event_time(raw_start, timezone_name)
                 if start_dt is None or start_dt == "-1":
                     await interaction.followup.send("❌ Ungültiges Startzeit-Format!", ephemeral=True)
                     return
             if not end_open:
-                end_dt = parse_event_time(raw_end)
+                end_dt = parse_event_time(raw_end, timezone_name)
                 if end_dt is None or end_dt == "-1":
                     await interaction.followup.send("❌ Ungültiges Endzeit-Format!", ephemeral=True)
                     return
@@ -213,6 +214,9 @@ class EventRescheduleModal(discord.ui.Modal, title="Event neu terminieren"):
         await interaction.response.defer(ephemeral=True)
         try:
             supabase  = get_supabase()
+            from bot.core.settings import get_settings
+            config = await get_settings(str(interaction.guild_id))
+            timezone_name = (config or {}).get("timezone", "Europe/Berlin")
             raw_start = self.new_start.value.strip()
             raw_end   = self.new_end.value.strip()
             start_tba = raw_start == "-1"
@@ -220,12 +224,12 @@ class EventRescheduleModal(discord.ui.Modal, title="Event neu terminieren"):
             start_dt  = None
             end_dt    = None
             if not start_tba:
-                start_dt = parse_event_time(raw_start)
+                start_dt = parse_event_time(raw_start, timezone_name)
                 if not start_dt or start_dt == "-1":
                     await interaction.followup.send("❌ Ungültiges Startzeit-Format!", ephemeral=True)
                     return
             if not end_open:
-                end_dt = parse_event_time(raw_end)
+                end_dt = parse_event_time(raw_end, timezone_name)
                 if not end_dt or end_dt == "-1":
                     await interaction.followup.send("❌ Ungültiges Endzeit-Format!", ephemeral=True)
                     return
@@ -290,14 +294,17 @@ class EventSetDateModal(discord.ui.Modal, title="Datum festlegen"):
         await interaction.response.defer(ephemeral=True)
         try:
             supabase = get_supabase()
+            from bot.core.settings import get_settings
+            config = await get_settings(str(interaction.guild_id))
+            timezone_name = (config or {}).get("timezone", "Europe/Berlin")
             end_open = self.new_end.value.strip() == "-1"
-            start_dt = parse_event_time(self.new_start.value.strip())
+            start_dt = parse_event_time(self.new_start.value.strip(), timezone_name)
             if not start_dt or start_dt == "-1":
                 await interaction.followup.send("❌ Ungültiges Format!", ephemeral=True)
                 return
             end_dt = None
             if not end_open:
-                end_dt = parse_event_time(self.new_end.value.strip())
+                end_dt = parse_event_time(self.new_end.value.strip(), timezone_name)
                 if not end_dt or end_dt <= start_dt:
                     await interaction.followup.send("❌ Ungültige Endzeit!", ephemeral=True)
                     return

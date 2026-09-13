@@ -20,8 +20,12 @@ create table public.settings (
   level_channel_id text null,
   levels_enabled boolean null default true,
   moderation_log_channel_id text null,
+  timezone text not null default 'Europe/Berlin',
   constraint settings_pkey primary key (id),
   constraint settings_guild_id_key unique (guild_id)
 ) TABLESPACE pg_default;
 
 create index IF not exists idx_settings_guild on public.settings using btree (guild_id) TABLESPACE pg_default;
+
+-- Bestehende Installationen: diesen Befehl ebenfalls einmal ausführen.
+alter table public.settings add column if not exists timezone text not null default 'Europe/Berlin';

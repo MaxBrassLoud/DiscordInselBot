@@ -2,13 +2,14 @@ import os
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime
+from datetime import datetime, timezone
 
 from bot.core.settings import get_settings, upsert_settings
 from bot.core.supabase_client import get_supabase
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
-from .helpers import TZ, build_event_embed
+from .helpers import build_event_embed
+from bot.core.guild_time import parse_stored_time
 from .views import EventFollowView, EventCreateModal, EventEditSelectView, _archive_event, _notify_thread, _update_event_message
 
 logger = get_logger("events")
@@ -174,14 +175,14 @@ class EventsCog(commands.Cog):
     async def check_events(self):
         try:
             supabase = get_supabase()
-            now      = datetime.now(TZ)
+            now      = datetime.now(timezone.utc)
             result   = supabase.table("events").select("*").eq("archived", False).execute()
             for ev in result.data:
                 try:
                     status   = ev.get("status", "upcoming")
                     end_open = ev.get("end_open", False)
-                    start_dt = datetime.fromisoformat(ev["start_time"]).replace(tzinfo=TZ) if ev.get("start_time") else None
-                    end_dt   = datetime.fromisoformat(ev["end_time"]).replace(tzinfo=TZ)   if ev.get("end_time")   else None
+                    start_dt = parse_stored_time(ev.get("start_time"))
+                    end_dt   = parse_stored_time(ev.get("end_time"))
 
                     if status in ("cancelled", "delayed", "ended", "tba", "open_end"):
                         if status == "ended" and end_dt and (now - end_dt).total_seconds() >= 86400:

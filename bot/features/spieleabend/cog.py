@@ -1,10 +1,11 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from bot.core.settings import get_settings, upsert_settings
 from bot.core.supabase_client import get_supabase
+from bot.core.guild_time import parse_stored_time
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
 
@@ -96,15 +97,12 @@ class SpielabendCog(commands.Cog):
     async def check_reminders(self):
         try:
             supabase = get_supabase()
-            tz  = timezone(timedelta(hours=1))
-            now = datetime.now(tz)
+            now = datetime.now(timezone.utc)
             result = supabase.table("game_nights").select("*").execute()
             for gn in result.data:
                 if not gn.get('zeitpunkt'):
                     continue
-                zeitpunkt = datetime.fromisoformat(gn['zeitpunkt'])
-                if zeitpunkt.tzinfo is None:
-                    zeitpunkt = zeitpunkt.replace(tzinfo=tz)
+                zeitpunkt = parse_stored_time(gn['zeitpunkt'])
                 time_diff = (zeitpunkt - now).total_seconds() / 60
                 thread = self.bot.get_channel(int(gn['thread_id']))
                 if not thread:

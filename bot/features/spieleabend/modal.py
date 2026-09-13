@@ -1,7 +1,8 @@
 import discord
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from bot.core.settings import get_settings
+from bot.core.guild_time import get_timezone, parse_local_time
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
 from .views import SpielabendView
@@ -30,27 +31,8 @@ class SpielabendModal(discord.ui.Modal, title="Spieleabend erstellen"):
         super().__init__()
         self.bot = bot
 
-    def parse_time(self, time_str: str):
-        try:
-            tz = timezone(timedelta(hours=1))
-            if ":" in time_str and len(time_str.split()) == 1:
-                parts = time_str.split(":")
-                now = datetime.now(tz)
-                target = now.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
-                if target < now:
-                    target += timedelta(days=1)
-                return target
-            for fmt in ["%d.%m.%Y %H:%M", "%d.%m. %H:%M"]:
-                try:
-                    parsed = datetime.strptime(time_str, fmt)
-                    if fmt == "%d.%m. %H:%M":
-                        parsed = parsed.replace(year=datetime.now(tz).year)
-                    return parsed.replace(tzinfo=tz)
-                except Exception:
-                    continue
-            return None
-        except Exception:
-            return None
+    def parse_time(self, time_str: str, timezone_name: str):
+        return parse_local_time(time_str, get_timezone(timezone_name))
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -64,7 +46,10 @@ class SpielabendModal(discord.ui.Modal, title="Spieleabend erstellen"):
             if not channel:
                 await interaction.followup.send("❌ Kanal nicht gefunden!", ephemeral=True)
                 return
-            zeitpunkt = self.parse_time(self.uhrzeit.value)
+            zeitpunkt = self.parse_time(self.uhrzeit.value, config.get("timezone", "Europe/Berlin"))
+            if zeitpunkt is None:
+                await interaction.followup.send("❌ Ungültiges Zeitformat! Beispiel: `20:00` oder `03.01.2026 20:00`.", ephemeral=True)
+                return
             embed = discord.Embed(
                 title=f"🎮 {self.titel.value}",
                 color=discord.Color.blue(),

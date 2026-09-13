@@ -31,6 +31,18 @@ SUPABASE SQL (einmalig ausführen):
         ON moderation_logs (server_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_moderation_logs_target
         ON moderation_logs (server_id, target_id, created_at DESC);
+
+-- Zusätzliche Spalten für den Audit-Log-Import:
+    ALTER TABLE moderation_logs
+        ADD COLUMN IF NOT EXISTS audit_action   TEXT,
+        ADD COLUMN IF NOT EXISTS audit_log_id   TEXT,
+        ADD COLUMN IF NOT EXISTS audit_details  JSONB,
+        ADD COLUMN IF NOT EXISTS source         TEXT DEFAULT 'bot',
+        ADD COLUMN IF NOT EXISTS imported_at    TIMESTAMPTZ;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_moderation_logs_audit_log_id
+        ON moderation_logs (audit_log_id)
+        WHERE audit_log_id IS NOT NULL;
 """
 
 from __future__ import annotations
@@ -42,15 +54,114 @@ from typing import List, Dict, Any
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot.core.supabase_client import get_supabase
+from bot.core.settings import get_settings
+from bot.core.guild_time import get_timezone, parse_local_time
 from bot.utils.logger import get_logger
 from bot.utils.permissions import has_admin_rights
 
 logger = get_logger("moderation")
 
-TZ_BERLIN = timezone(timedelta(hours=2))
+
+def _audit_value(value: Any) -> Any:
+    """Wandelt Discord-Objekte rekursiv in JSON-sichere, im Web lesbare Werte um."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (list, tuple, set)):
+        return [_audit_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _audit_value(item) for key, item in value.items()}
+    if hasattr(value, "id"):
+        return {"id": str(value.id), "name": str(value)}
+    return str(value)
+
+
+def _audit_action_name(action: discord.AuditLogAction) -> str:
+    return getattr(action, "name", str(action).rsplit(".", 1)[-1])
+
+
+def _audit_entry_details(entry: discord.AuditLogEntry) -> dict[str, Any]:
+    """
+    Bewahrt Änderungen und Zusatzdaten eines Audit-Log-Eintrags vollständig auf.
+
+    Je nach discord.py-Version sind entry.before / entry.after:
+      - rohe dicts, oder
+      - _AuditLogProxy-Objekte (iterierbar als (key, value)-Tupel).
+    Beide Fälle werden hier normalisiert.
+    """
+
+    def _as_dict(obj: Any) -> dict[str, Any]:
+        if obj is None:
+            return {}
+        if isinstance(obj, dict):
+            return {str(k): v for k, v in obj.items()}
+        # _AuditLogProxy liefert (key, value)-Paare; dict(...) würde genauso gehen.
+        try:
+            return {str(k): v for k, v in obj}
+        except (TypeError, ValueError):
+            pass
+        # Fallback: Namespace-Objekt
+        if hasattr(obj, "__dict__"):
+            return {str(k): v for k, v in vars(obj).items()}
+        return {}
+
+    before = _as_dict(entry.before)
+    after = _as_dict(entry.after)
+
+    changes: dict[str, dict[str, Any]] = {}
+    for key in set(before) | set(after):
+        b = before.get(key)
+        a = after.get(key)
+        if b != a:
+            changes[key] = {
+                "before": _audit_value(b),
+                "after": _audit_value(a),
+            }
+
+    return {
+        "reason": entry.reason,
+        "changes": changes,
+        "extra": _audit_value(entry.extra),
+    }
+
+
+async def _import_audit_entry(guild: discord.Guild, entry: discord.AuditLogEntry) -> bool:
+    """Speichert einen Audit-Eintrag genau einmal. True bedeutet: neu importiert."""
+    target = entry.target
+    target_id = str(getattr(target, "id", guild.id))
+    target_name = str(target) if target is not None else guild.name
+    moderator = entry.user
+    audit_id = str(entry.id)
+    payload = {
+        "server_id": str(guild.id),
+        "action": _audit_action_name(entry.action),
+        "audit_action": _audit_action_name(entry.action),
+        "audit_log_id": audit_id,
+        "target_id": target_id,
+        "target_name": target_name,
+        "moderator_id": str(moderator.id) if moderator else None,
+        "moderator_name": str(moderator) if moderator else None,
+        "reason": entry.reason,
+        "audit_details": _audit_entry_details(entry),
+        "source": "discord_audit",
+        "created_at": entry.created_at.isoformat(),
+        "imported_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        # Die Unique-Constraint aus moderation_logs.sql verhindert auch
+        # parallele Imports (z. B. nach einem Reconnect) zuverlässig.
+        get_supabase().table("moderation_logs").upsert(
+            payload, on_conflict="audit_log_id", ignore_duplicates=True
+        ).execute()
+        return True
+    except Exception as e:
+        # exception statt warning, damit man fehlende Spalten/RLS-Probleme sieht.
+        logger.exception(f"[audit-import] {guild.id}/{audit_id}: {e}")
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -511,22 +622,11 @@ class TimeoutUntilModal(discord.ui.Modal, title="Timeout – bis zu einem Zeitpu
         super().__init__()
         self.target = target
 
-    def _parse_until(self, raw: str) -> datetime | None:
-        from datetime import datetime as dt
-        raw = raw.strip()
-        for fmt in ["%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S", "%d.%m. %H:%M", "%d.%m %H:%M"]:
-            try:
-                parsed = dt.strptime(raw, fmt)
-                if "%Y" not in fmt:
-                    parsed = parsed.replace(year=dt.now().year)
-                local = parsed.replace(tzinfo=TZ_BERLIN)
-                return local.astimezone(timezone.utc)
-            except ValueError:
-                continue
-        return None
-
     async def on_submit(self, interaction: discord.Interaction):
-        until = self._parse_until(self.zeitpunkt.value)
+        settings = await get_settings(str(interaction.guild_id))
+        until = parse_local_time(self.zeitpunkt.value, get_timezone((settings or {}).get("timezone")))
+        if until == "-1":
+            until = None
         if until is None:
             await interaction.response.send_message("❌ Ungültiges Datumsformat.\nBeispiele: `25.12.2025 20:00` oder `31.01. 08:30`", ephemeral=True)
             return
@@ -661,6 +761,54 @@ async def _fetch_moderation_logs(guild_id: str, target_id: str | None = None, li
 class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self) -> None:
+        self.audit_log_sync.start()
+
+    def cog_unload(self) -> None:
+        self.audit_log_sync.cancel()
+
+    async def _latest_imported_audit_id(self, guild_id: str) -> int | None:
+        """Liest den zuletzt importierten Discord-Snowflake als Sync-Marke."""
+        try:
+            rows = (get_supabase().table("moderation_logs")
+                    .select("audit_log_id")
+                    .eq("server_id", guild_id)
+                    .not_.is_("audit_log_id", "null")
+                    .order("created_at", desc=True)
+                    .limit(50).execute().data or [])
+            ids = [int(row["audit_log_id"]) for row in rows if row.get("audit_log_id")]
+            return max(ids) if ids else None
+        except Exception as e:
+            logger.warning(f"[audit-import] Sync-Marke für {guild_id} nicht lesbar: {e}")
+            return None
+
+    @tasks.loop(hours=1)
+    async def audit_log_sync(self) -> None:
+        """Holt pro Server alle seit dem letzten Lauf entstandenen Discord-Audit-Logs."""
+        for guild in self.bot.guilds:
+            try:
+                latest_id = await self._latest_imported_audit_id(str(guild.id))
+                after = discord.Object(id=latest_id) if latest_id else None
+                imported = 0
+                async for entry in guild.audit_logs(limit=None, after=after, oldest_first=True):
+                    if await _import_audit_entry(guild, entry):
+                        imported += 1
+                logger.info(
+                    f"[audit-import] {guild.name} ({guild.id}): {imported} neue Audit-Einträge"
+                )
+            except discord.Forbidden:
+                logger.warning(
+                    f"[audit-import] Keine Berechtigung 'Audit-Log anzeigen' auf {guild.name} ({guild.id})"
+                )
+            except discord.HTTPException as e:
+                logger.warning(f"[audit-import] Discord-Fehler auf {guild.name}: {e}")
+            except Exception as e:
+                logger.exception(f"[audit-import] Unerwarteter Fehler auf {guild.name}: {e}")
+
+    @audit_log_sync.before_loop
+    async def before_audit_log_sync(self) -> None:
+        await self.bot.wait_until_ready()
 
     moderation = app_commands.Group(name="moderation", description="Moderations-System")
 

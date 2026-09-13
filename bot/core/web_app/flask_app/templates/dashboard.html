@@ -163,6 +163,10 @@
        class="nav-item {% if active_tab == 'applications' %}active{% endif %}">
       <span class="nav-icon">📋</span> Bewerbungen
     </a>
+    {% if moderation_access %}<a href="/dashboard/moderation{% if server_id %}?server_id={{ server_id }}{% endif %}"
+       class="nav-item {% if active_tab == 'moderation' %}active{% endif %}">
+      <span class="nav-icon">🛡️</span> Moderationslogs
+    </a>{% endif %}
     <a href="/dashboard/user" class="nav-item {% if active_tab == 'user' %}active{% endif %}">
       <span class="nav-icon">👤</span> Nutzer
     </a>
@@ -217,6 +221,9 @@
          class="tab {% if active_tab == 'tickets' %}active{% endif %}">🎫 Tickets</a>
       <a href="/dashboard/applications{% if server_id %}?server_id={{ server_id }}{% endif %}"
          class="tab {% if active_tab == 'applications' %}active{% endif %}">📋 Bewerbungen</a>
+      {% if moderation_access %}<a href="/dashboard/moderation{% if server_id %}?server_id={{ server_id }}{% endif %}"
+         class="tab {% if active_tab == 'moderation' %}active{% endif %}">🛡️ Moderation</a>
+      {% endif %}
       <a href="/dashboard/user"
          class="tab {% if active_tab == 'user' %}active{% endif %}">👤 Nutzer</a>
     </div>
@@ -266,7 +273,8 @@ async function loadServers() {
   try {
     const res  = await fetch('/api/guild');
     const data = await res.json();
-    const servers = ACTIVE_TAB === 'tickets' ? data.ticket_servers : data.app_servers;
+    const servers = ACTIVE_TAB === 'tickets' ? data.ticket_servers
+      : ACTIVE_TAB === 'applications' ? data.app_servers : data.moderation_servers;
     const list    = document.getElementById('serverList');
     if (!servers || servers.length === 0) {
       list.innerHTML = '<span style="font-size:.78rem;color:var(--text3);padding:6px 10px;display:block;">Keine Server</span>';
@@ -274,7 +282,8 @@ async function loadServers() {
     }
     list.innerHTML = servers.map(srv => {
       const active  = srv.server_id === SERVER_ID ? 'active' : '';
-      const baseUrl = ACTIVE_TAB === 'tickets' ? '/dashboard/tickets' : '/dashboard/applications';
+      const baseUrl = ACTIVE_TAB === 'tickets' ? '/dashboard/tickets'
+        : ACTIVE_TAB === 'applications' ? '/dashboard/applications' : '/dashboard/moderation';
       const icon    = srv.guild_icon
         ? `<img class="server-icon" src="${srv.guild_icon}" alt="">`
         : `<div class="server-icon-ph">${srv.guild_name.slice(0,2).toUpperCase()}</div>`;
@@ -324,6 +333,7 @@ async function showAutocomplete(q) {
   const box = document.getElementById('searchAutocomplete');
   if (!box) return;
 
+  if (ACTIVE_TAB === 'moderation') return;
   const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets/search' : '/api/applications/search';
   try {
     const r = await fetch(`${apiBase}?q=${encodeURIComponent(q)}&server_id=${SERVER_ID}`);
@@ -386,9 +396,8 @@ async function loadSearch(q) {
   if (!SERVER_ID) return;
   showSkeleton(false);
 
-  const apiBase = ACTIVE_TAB === 'tickets'
-    ? `/api/tickets/search`
-    : `/api/applications/search`;
+  const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets/search'
+    : ACTIVE_TAB === 'applications' ? '/api/applications/search' : '/api/moderation';
   const url = `${apiBase}?q=${encodeURIComponent(q)}&server_id=${SERVER_ID}`;
 
   try {
@@ -398,8 +407,10 @@ async function loadSearch(q) {
 
     if (ACTIVE_TAB === 'tickets') {
       renderTickets(data.tickets || [], [], new URLSearchParams(), q);
-    } else {
+    } else if (ACTIVE_TAB === 'applications') {
       renderApplications(data.applications || [], new URLSearchParams(), q);
+    } else {
+      renderModeration(data.logs || [], data.actions || [], new URLSearchParams(), q);
     }
   } catch(e) {
     showError('Netzwerkfehler: ' + e.message);
@@ -421,7 +432,8 @@ async function loadContent() {
   }
 
   const params  = new URLSearchParams(window.location.search);
-  const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets' : '/api/applications';
+  const apiBase = ACTIVE_TAB === 'tickets' ? '/api/tickets'
+    : ACTIVE_TAB === 'applications' ? '/api/applications' : '/api/moderation';
   const url     = `${apiBase}?${params.toString()}`;
 
   try {
@@ -431,8 +443,10 @@ async function loadContent() {
 
     if (ACTIVE_TAB === 'tickets') {
       renderTickets(data.tickets || [], data.modules || [], params, "");
-    } else {
+    } else if (ACTIVE_TAB === 'applications') {
       renderApplications(data.applications || [], params, "");
+    } else {
+      renderModeration(data.logs || [], data.actions || [], params, "");
     }
 
     updateTopbar();
@@ -446,7 +460,8 @@ async function updateTopbar() {
   try {
     const res  = await fetch('/api/guild');
     const data = await res.json();
-    const list = ACTIVE_TAB === 'tickets' ? data.ticket_servers : data.app_servers;
+    const list = ACTIVE_TAB === 'tickets' ? data.ticket_servers
+      : ACTIVE_TAB === 'applications' ? data.app_servers : data.moderation_servers;
     const srv  = list?.find(s => s.server_id === SERVER_ID);
     if (srv) {
       const icon = srv.guild_icon ? `<img class="topbar-guild-icon" src="${srv.guild_icon}" alt="">` : '';
@@ -682,6 +697,82 @@ function renderApplications(apps, params, searchQuery) {
 
   const uniqueIds = [...new Set(apps.map(a => a.creator_id).filter(Boolean))];
   uniqueIds.forEach(uid => loadMemberLazy(uid));
+}
+
+// ── Moderation / Discord Audit Log ─────────────────────────────────────────
+
+function renderModeration(logs, actions, params, searchQuery) {
+  showSkeleton(false);
+  const actionF = params.get('action') || '';
+  const isSearch = !!searchQuery;
+  const actionOptions = actions.map(action =>
+    `<option value="${escHtml(action)}" ${action === actionF ? 'selected' : ''}>${escHtml(action)}</option>`
+  ).join('');
+  const filterBar = `
+    <div class="filter-bar">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="searchInput" class="search-input"
+          placeholder="Suche nach Aktion, Nutzer, Moderator oder Grund…"
+          value="${escHtml(searchQuery)}" oninput="onSearchInput(this.value)" autocomplete="off">
+        <button class="search-clear ${searchQuery ? 'visible' : ''}" id="searchClear" onclick="clearSearch()" title="Suche löschen">✕</button>
+      </div>
+      ${isSearch ? renderSearchBadge(searchQuery, logs.length) : `
+      <form class="filter-form" id="filterForm">
+        <input type="hidden" name="server_id" value="${escHtml(SERVER_ID)}">
+        <select class="filter-select" name="action" onchange="submitFilter()">
+          <option value="">Alle Audit-Aktionen</option>${actionOptions}
+        </select>
+      </form>`}
+      <span class="filter-count">${logs.length} Eintrag${logs.length !== 1 ? 'e' : ''}</span>
+    </div>`;
+
+  if (!logs.length) {
+    inject(filterBar + `<div class="empty-state"><div class="empty-icon">🛡️</div>
+      <div class="empty-title">Keine Moderationslogs gefunden</div>
+      <p>Für diesen Server wurden noch keine passenden Audit- oder Moderationseinträge importiert.</p></div>`);
+    return;
+  }
+
+  const rows = logs.map(entry => `<tr class="mod-log-row" onclick="showModerationDetails(${entry.id})" tabindex="0"
+      onkeydown="if(event.key==='Enter')showModerationDetails(${entry.id})">
+    <td><span class="module-chip">${escHtml(entry.action || 'unbekannt')}</span></td>
+    <td>${escHtml(entry.target_name || entry.target_id || 'Server')}</td>
+    <td>${escHtml(entry.moderator_name || entry.moderator_id || 'System')}</td>
+    <td title="${escHtml(entry.reason || '')}">${escHtml(entry.reason || '—')}</td>
+    <td><span class="mono">${formatLogDate(entry.created_at)}</span></td>
+    <td><span class="muted">Details ›</span></td>
+  </tr>`).join('');
+  inject(filterBar + `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Aktion</th><th>Ziel</th><th>Ausgeführt von</th><th>Grund</th><th>Zeitpunkt</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`);
+}
+
+function formatLogDate(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('de-DE');
+}
+
+async function showModerationDetails(logId) {
+  try {
+    const res = await fetch(`/api/moderation/${logId}?server_id=${encodeURIComponent(SERVER_ID)}`);
+    if (!res.ok) { showError('Details konnten nicht geladen werden.'); return; }
+    const data = await res.json();
+    const entry = data.log;
+    const auditJson = entry.audit_details ? JSON.stringify(entry.audit_details, null, 2) : 'Keine zusätzlichen Audit-Details vorhanden.';
+    const duration = entry.duration_seconds ? `${entry.duration_seconds} Sekunden` : '—';
+    const modal = document.createElement('div');
+    modal.className = 'sidebar-overlay active';
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:20px;z-index:200;';
+    modal.innerHTML = `<div class="table-wrap" role="dialog" aria-modal="true" style="max-width:760px;width:100%;max-height:88vh;overflow:auto;background:var(--bg-card);padding:22px;box-shadow:var(--shadow);">
+      <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:16px;"><h2 style="margin:0;font-size:1.15rem;">🛡️ Audit-Details</h2><button class="search-clear visible" style="position:static;transform:none;display:block;" onclick="this.closest('.sidebar-overlay').remove()">✕</button></div>
+      <div class="data-table" style="display:grid;grid-template-columns:max-content 1fr;gap:10px 16px;padding:4px 0;"><strong>Aktion</strong><span>${escHtml(entry.action || '—')}</span><strong>Ziel</strong><span>${escHtml(entry.target_name || entry.target_id || '—')} <span class="muted">${escHtml(entry.target_id || '')}</span></span><strong>Moderator</strong><span>${escHtml(entry.moderator_name || entry.moderator_id || 'System')}</span><strong>Grund</strong><span>${escHtml(entry.reason || '—')}</span><strong>Zeitpunkt</strong><span>${escHtml(formatLogDate(entry.created_at))}</span><strong>Quelle</strong><span>${escHtml(entry.source || 'bot')}</span><strong>Dauer</strong><span>${escHtml(duration)}</span></div>
+      <h3 style="margin:22px 0 8px;font-size:1rem;">Discord-Auditdaten</h3><pre style="white-space:pre-wrap;word-break:break-word;background:var(--bg-surface);border:1px solid var(--border);padding:12px;border-radius:var(--r-sm);font-size:.78rem;">${escHtml(auditJson)}</pre>
+    </div>`;
+    modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+  } catch (_) { showError('Netzwerkfehler beim Laden der Details.'); }
 }
 
 // ── Lazy member enrichment ─────────────────────────────────────────────────

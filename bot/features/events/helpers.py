@@ -1,30 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import discord
 
-TZ = timezone(timedelta(hours=1))
+from bot.core.guild_time import get_timezone, parse_local_time, parse_stored_time
 
 
-def parse_event_time(time_str: str):
-    time_str = time_str.strip()
-    if time_str == "-1":
-        return "-1"
-    for fmt in ["%d.%m.%Y %H:%M", "%d.%m. %H:%M"]:
-        try:
-            parsed = datetime.strptime(time_str, fmt)
-            if "%Y" not in fmt:
-                parsed = parsed.replace(year=datetime.now(TZ).year)
-            return parsed.replace(tzinfo=TZ)
-        except ValueError:
-            continue
-    try:
-        parts = time_str.split(":")
-        now = datetime.now(TZ)
-        target = now.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
-        if target < now:
-            target += timedelta(days=1)
-        return target
-    except Exception:
-        return None
+def parse_event_time(time_str: str, timezone_name: str):
+    return parse_local_time(time_str, get_timezone(timezone_name))
 
 
 def build_event_embed(event: dict) -> discord.Embed:
@@ -32,10 +13,10 @@ def build_event_embed(event: dict) -> discord.Embed:
     start_dt = None
     end_dt   = None
     if event.get("start_time"):
-        start_dt = datetime.fromisoformat(event["start_time"]).replace(tzinfo=TZ)
+        start_dt = parse_stored_time(event["start_time"])
     if event.get("end_time"):
-        end_dt = datetime.fromisoformat(event["end_time"]).replace(tzinfo=TZ)
-    now = datetime.now(TZ)
+        end_dt = parse_stored_time(event["end_time"])
+    now = datetime.now(timezone.utc)
 
     color_map = {
         "upcoming":  0x3498DB, "tba": 0x9B59B6,   "live":      0x2ECC71,

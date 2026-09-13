@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Set, List, Dict, Any
+from typing import Optional, Set, List, Dict, Any, Tuple
 from urllib.parse import urlparse
 
 import discord
@@ -28,7 +28,14 @@ from bot.utils.permissions import has_admin_rights
 logger = get_logger("link_protection")
 
 # ── Reguläre Ausdrücke ──────────────────────────────────────────────────────
-URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>]+", re.IGNORECASE)
+# Discord recognises bare domains as links as well.  Do the same here, while
+# deliberately excluding e-mail addresses (the negative lookbehind for @).
+# Final punctuation is removed by _normalise_url rather than by this pattern.
+URL_PATTERN = re.compile(
+    r"(?<![\w@])(?:https?://|www\.)[^\s<>\[\]{}\"']+"
+    r"|(?<![\w@])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:/[^\s<>\[\]{}\"']*)?",
+    re.IGNORECASE,
+)
 
 YOUTUBE_CHANNEL_PATTERN = re.compile(
     r'(?:youtube\.com/(?:channel/|c/|user/|@))([a-zA-Z0-9_-]+)',
@@ -86,13 +93,13 @@ def _get_allowed_links(server_id: str) -> List[dict]:
         return []
 
 
-def _add_allowed_link(server_id: str, url: str, created_by: str, channel_id: Optional[str] = None, user_id: Optional[str] = None):
+def _add_allowed_link(server_id: str, url: str, created_by: str, channel_id: Optional[str] = None, user_id: Optional[str] = None) -> bool:
     """Fügt eine erlaubte Domain/URL hinzu."""
     try:
         sb = get_supabase()
         host, path = _normalise_url(url)
         if not host:
-            return
+            return False
         # Store one canonical value so adding and removing a domain work with
         # or without a scheme and trailing slash.
         base_url = f"{host}{path}"
@@ -105,8 +112,10 @@ def _add_allowed_link(server_id: str, url: str, created_by: str, channel_id: Opt
             "created_by": created_by,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
+        return True
     except Exception as e:
         logger.error(f"[link_protection] _add_allowed_link: {e}")
+        return False
 
 
 def _delete_allowed_link(server_id: str, url: str):
@@ -236,11 +245,32 @@ def _log_action(server_id: str, action: str, user_id: str, target_url: str, mode
 
 # ── Helper-Funktionen ──────────────────────────────────────────────────────
 
-def _normalise_url(value: str):
-    """Return a safe comparable host/path pair for a user supplied URL."""
-    value = value.strip().rstrip(".,!?;:)]}\"'")
+def _strip_url_punctuation(value: str) -> str:
+    """Strip prose punctuation without damaging balanced URL parentheses."""
+    value = value.strip()
+    while value and value[-1] in ".,!?;:\"'}]":
+        value = value[:-1]
+    while value.endswith(")") and value.count(")") > value.count("("):
+        value = value[:-1]
+    return value
+
+
+def _normalise_url(value: str) -> Tuple[str, str]:
+    """Return a validated, canonical host/path pair, or ('', '') if invalid."""
+    value = _strip_url_punctuation(str(value or ""))
+    if not value or any(char.isspace() for char in value):
+        return "", ""
     parsed = urlparse(value if "://" in value else f"//{value}")
-    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+        return "", ""
+    try:
+        host = (parsed.hostname or "").rstrip(".").encode("idna").decode("ascii").lower()
+        # Accessing .port validates malformed and out-of-range port values.
+        _ = parsed.port
+    except (UnicodeError, ValueError):
+        return "", ""
+    if not host or len(host) > 253 or any(not label or len(label) > 63 for label in host.split(".")):
+        return "", ""
     path = parsed.path.rstrip("/")
     return host, path
 
@@ -267,6 +297,9 @@ def _is_allowed_url(url: str, allowed_links: List[dict], channel_id: str, user_i
 
 def _extract_youtube_channel(url: str) -> Optional[str]:
     """Extrahiert die YouTube-Kanal-ID oder den Handle aus einer URL."""
+    host, _ = _normalise_url(url)
+    if host not in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        return None
     match = YOUTUBE_CHANNEL_PATTERN.search(url)
     if match:
         return _normalise_platform_channel("youtube", match.group(1))
@@ -275,6 +308,9 @@ def _extract_youtube_channel(url: str) -> Optional[str]:
 
 def _extract_twitch_channel(url: str) -> Optional[str]:
     """Extrahiert den Twitch-Kanal aus einer URL."""
+    host, _ = _normalise_url(url)
+    if host not in {"twitch.tv", "www.twitch.tv", "m.twitch.tv", "clips.twitch.tv"}:
+        return None
     match = TWITCH_CHANNEL_PATTERN.search(url)
     if match:
         return _normalise_platform_channel("twitch", match.group(1))
@@ -300,6 +336,7 @@ class LinkApprovalView(discord.ui.View):
         self.user_id = user_id
         self.url = url
         self.original_message = original_message
+        self.completed = False
 
     @discord.ui.button(label="⏳ Für User temporär freischalten", style=discord.ButtonStyle.primary)
     async def temp_allow_user(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -335,7 +372,12 @@ class LinkApprovalView(discord.ui.View):
         await interaction.response.send_message(f"❌ Link `{self.url}` wurde abgelehnt.", ephemeral=True)
         await self._finish(interaction)
 
-    async def _handle_approval(self, interaction: discord.Interaction, allowed_until: Optional[datetime]):
+    async def _handle_approval(
+        self,
+        interaction: discord.Interaction,
+        allowed_until: Optional[datetime],
+        approval_message: Optional[discord.Message] = None,
+    ):
         _set_user_allowed_until(self.server_id, self.user_id, allowed_until)
         _log_action(self.server_id, "allow_user", self.user_id, self.url, str(interaction.user.id))
         await interaction.response.send_message(
@@ -343,17 +385,26 @@ class LinkApprovalView(discord.ui.View):
             + (f" bis <t:{int(allowed_until.timestamp())}:F>" if allowed_until else " (unbegrenzt)"),
             ephemeral=True
         )
-        await self._finish(interaction)
+        await self._finish(interaction, approval_message)
 
-    async def _finish(self, interaction: discord.Interaction):
-        embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(
+    async def _finish(self, interaction: discord.Interaction, approval_message: Optional[discord.Message] = None):
+        if self.completed:
+            return
+        # A modal-submit interaction has no message of its own.  Its parent
+        # approval message is passed explicitly by TempAllowModal.
+        message = approval_message or interaction.message
+        if message is None:
+            logger.error("[link_protection] Freigabe-Nachricht nicht verfügbar")
+            return
+        self.completed = True
+        embed = message.embeds[0] if message.embeds else discord.Embed(
             title="Link-Freigabe abgeschlossen",
             description=f"Link: {self.url}\nUser: <@{self.user_id}>",
             color=discord.Color.green()
         )
         for child in self.children:
             child.disabled = True
-        await interaction.message.edit(embed=embed, view=self)
+        await message.edit(embed=embed, view=self)
         self.stop()
 
 
@@ -384,7 +435,7 @@ class TempAllowModal(discord.ui.Modal, title="Temporäre Freischaltung"):
             return
 
         allowed_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-        await self.parent_view._handle_approval(interaction, allowed_until)
+        await self.parent_view._handle_approval(interaction, allowed_until, self.message)
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────
@@ -421,7 +472,9 @@ class LinkProtectionCog(commands.Cog):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
 
-        _add_allowed_link(str(interaction.guild_id), url, str(interaction.user.id))
+        if not _add_allowed_link(str(interaction.guild_id), url, str(interaction.user.id)):
+            await interaction.response.send_message("❌ Ungültige URL/Domain oder der Eintrag existiert bereits.", ephemeral=True)
+            return
         self._allowed_cache.pop(str(interaction.guild_id), None)
         await interaction.response.send_message(f"✅ `{url}` wurde zur Whitelist hinzugefügt.", ephemeral=True)
 
@@ -579,7 +632,9 @@ class LinkProtectionCog(commands.Cog):
                 uid = entry["user_id"]
                 until = entry.get("allowed_until")
                 if until:
-                    dt = datetime.fromisoformat(until)
+                    dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
                     if dt > now:
                         status = f"bis <t:{int(dt.timestamp())}:R>"
                     else:
@@ -607,7 +662,11 @@ class LinkProtectionCog(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        config = _get_link_config(str(message.guild.id))
+        server_id = str(message.guild.id)
+        # The Supabase client is synchronous.  Keep slow database I/O off the
+        # Discord event loop so a temporary database slowdown does not stall
+        # the entire bot.
+        config = await asyncio.to_thread(_get_link_config, server_id)
         if not config.get("enabled", False):
             return
 
@@ -621,11 +680,12 @@ class LinkProtectionCog(commands.Cog):
         if not urls:
             return
 
-        allowed_links = _get_allowed_links(str(message.guild.id))
-        whitelisted_yt = _get_whitelisted_channels(str(message.guild.id), "youtube")
-        whitelisted_tw = _get_whitelisted_channels(str(message.guild.id), "twitch")
-
-        user_is_allowed = _is_user_allowed(str(message.guild.id), str(message.author.id))
+        allowed_links, whitelisted_yt, whitelisted_tw, user_is_allowed = await asyncio.gather(
+            asyncio.to_thread(_get_allowed_links, server_id),
+            asyncio.to_thread(_get_whitelisted_channels, server_id, "youtube"),
+            asyncio.to_thread(_get_whitelisted_channels, server_id, "twitch"),
+            asyncio.to_thread(_is_user_allowed, server_id, str(message.author.id)),
+        )
 
         if message.author.guild_permissions.administrator:
             return
@@ -672,7 +732,7 @@ class LinkProtectionCog(commands.Cog):
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc)
             )
-            _log_action(str(message.guild.id), "block", str(message.author.id), blocked_url)
+            await asyncio.to_thread(_log_action, server_id, "block", str(message.author.id), blocked_url)
             view = LinkBlockedView(str(message.guild.id), str(message.author.id), blocked_url, message)
             try:
                 await message.author.send(embed=embed, view=view)
@@ -682,7 +742,11 @@ class LinkProtectionCog(commands.Cog):
 
             log_channel_id = config.get("moderation_log_channel_id")
             if log_channel_id:
-                log_channel = message.guild.get_channel(int(log_channel_id))
+                try:
+                    log_channel = message.guild.get_channel(int(log_channel_id))
+                except (TypeError, ValueError):
+                    logger.warning("[link_protection] Ungültige Log-Kanal-ID für Server %s", server_id)
+                    log_channel = None
                 if log_channel:
                     log_embed = discord.Embed(
                         title="🔒 Link blockiert",
@@ -691,7 +755,10 @@ class LinkProtectionCog(commands.Cog):
                         timestamp=datetime.now(timezone.utc)
                     )
                     log_embed.set_footer(text=f"User-ID: {message.author.id}")
-                    await log_channel.send(embed=log_embed, view=LinkApprovalView(str(message.guild.id), str(message.author.id), blocked_url, message))
+                    try:
+                        await log_channel.send(embed=log_embed, view=LinkApprovalView(server_id, str(message.author.id), blocked_url, message))
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning("[link_protection] Moderationslog konnte nicht gesendet werden: %s", e)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
@@ -722,7 +789,10 @@ class LinkBlockedView(discord.ui.View):
 
         # This button is shown in a DM, so interaction.guild is always None.
         guild = self.original_message.guild
-        log_channel = guild.get_channel(int(log_channel_id)) if guild else None
+        try:
+            log_channel = guild.get_channel(int(log_channel_id)) if guild else None
+        except (TypeError, ValueError):
+            log_channel = None
         if not log_channel:
             await interaction.response.send_message("❌ Moderation-Channel nicht gefunden.", ephemeral=True)
             return
@@ -733,8 +803,14 @@ class LinkBlockedView(discord.ui.View):
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc)
         )
-        await log_channel.send(embed=embed, view=LinkApprovalView(self.server_id, self.user_id, self.url, self.original_message))
-        await interaction.response.send_message("✅ Freigabe wurde angefragt.", ephemeral=True)
+        try:
+            await log_channel.send(embed=embed, view=LinkApprovalView(self.server_id, self.user_id, self.url, self.original_message))
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message("❌ Freigabe konnte nicht an die Moderation gesendet werden.", ephemeral=True)
+            return
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("✅ Freigabe wurde angefragt.", ephemeral=True)
 
 
 # ── Setup View ─────────────────────────────────────────────────────────────

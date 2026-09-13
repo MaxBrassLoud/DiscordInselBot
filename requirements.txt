@@ -6,3 +6,4 @@ yt-dlp==2024.8.6
 pillow==12.3.0
 imagehash==4.3.2
 aiohttp>=3.9.0
+tzdata

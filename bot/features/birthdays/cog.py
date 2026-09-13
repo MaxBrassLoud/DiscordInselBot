@@ -33,6 +33,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.core.supabase_client import get_supabase
+from bot.core.settings import get_settings
+from bot.core.guild_time import local_now
 from bot.utils.logger import get_logger
 
 logger = get_logger("birthdays")
@@ -54,8 +56,8 @@ BIRTHDAY_MESSAGES = [
 _FALLBACK_CHANNEL_ENV = os.getenv("BIRTHDAY_CHANNEL_ID", "")
 
 
-def _today() -> date:
-    return datetime.now(timezone(timedelta(hours=1))).date()
+def _today(settings: dict | None = None) -> date:
+    return local_now(settings).date()
 
 
 def _parse_birthday(raw: str) -> date | None:
@@ -129,12 +131,6 @@ class BirthdaysCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def birthday_check(self):
-        now = datetime.now(timezone(timedelta(hours=1)))
-        # Nur um 08:00 Uhr (±30s)
-        if now.hour != 8 or now.minute != 0:
-            return
-
-        today = _today()
         try:
             sb = get_supabase()
             r  = sb.table("birthdays")\
@@ -149,6 +145,12 @@ class BirthdaysCog(commands.Cog):
             server_id = row["server_id"]
             user_id   = row["user_id"]
             key       = f"{server_id}:{user_id}"
+            settings = await get_settings(server_id)
+            now = local_now(settings)
+            # Jeder Server erhält die Nachricht um 08:00 seiner eigenen Zeitzone.
+            if now.hour != 8 or now.minute != 0:
+                continue
+            today = now.date()
 
             try:
                 bday = date.fromisoformat(row["birthday"])
@@ -164,8 +166,12 @@ class BirthdaysCog(commands.Cog):
             await self._send_birthday_wish(server_id, user_id, bday, today)
 
         # Cache um Mitternacht leeren
-        if now.hour == 0 and now.minute == 0:
-            self._wished_today.clear()
+        # Der Schlüssel enthält das Datum, daher können alte Markierungen täglich
+        # gefahrlos bereinigt werden, sobald irgendein Server Mitternacht erreicht.
+        for row in rows:
+            if local_now(await get_settings(row["server_id"])).hour == 0:
+                self._wished_today.clear()
+                break
 
     @birthday_check.before_loop
     async def before_check(self):
@@ -305,7 +311,7 @@ class BirthdaysCog(commands.Cog):
             return
 
         bday  = date.fromisoformat(r.data[0]["birthday"])
-        today = _today()
+        today = _today(await get_settings(server_id))
 
         # Nächsten Geburtstag berechnen
         this_year = bday.replace(year=today.year)
@@ -392,7 +398,7 @@ class BirthdaysCog(commands.Cog):
             )
             return
 
-        today = _today()
+        today = _today(await get_settings(server_id))
 
         # Sortieren: nach Datum im Jahr (Monat, Tag)
         def sort_key(row):

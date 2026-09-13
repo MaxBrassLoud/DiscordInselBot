@@ -34,6 +34,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
 FEATURE_COGS = [
+    "bot.features.time.cog",
     "bot.features.spieleabend.cog",
     "bot.features.media.cog",
     "bot.features.events.cog",

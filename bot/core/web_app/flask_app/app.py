@@ -589,6 +589,22 @@ def can_see_application(user: dict, app: dict, server_id: str) -> bool:
 
     return False
 
+
+def can_see_moderation(user: dict, server_id: str) -> bool:
+    """Moderations- und Auditdaten sind ausschließlich für Web-Admins sichtbar."""
+    if _is_mbl(user):
+        return True
+    roles = _get_user_roles_for_server(user, server_id)
+    if not roles:
+        return False
+    ticket_admins = set(_load_ticket_server_perms(server_id)["web_admin_role_ids"])
+    app_admins = set(_load_app_server_perms(server_id)["web_admin_role_ids"])
+    return bool(roles & (ticket_admins | app_admins))
+
+
+def has_moderation_access(user: dict) -> bool:
+    return any(can_see_moderation(user, sid) for sid in _load_all_server_ids())
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Auth Decorator
 # ══════════════════════════════════════════════════════════════════════════════
@@ -764,7 +780,8 @@ def tickets():
     user      = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
     return render_template("dashboard.html",
-        user=user, active_tab="tickets", server_id=server_id)
+        user=user, active_tab="tickets", server_id=server_id,
+        moderation_access=has_moderation_access(user))
 
 @app.route("/dashboard/applications")
 @login_required
@@ -772,7 +789,22 @@ def applications():
     user      = session["user"]
     server_id = request.args.get("server_id") or _first_accessible_server(user)
     return render_template("dashboard.html",
-        user=user, active_tab="applications", server_id=server_id)
+        user=user, active_tab="applications", server_id=server_id,
+        moderation_access=has_moderation_access(user))
+
+@app.route("/dashboard/moderation")
+@login_required
+def moderation():
+    user = session["user"]
+    server_id = request.args.get("server_id") or next(
+        (sid for sid in _load_all_server_ids() if can_see_moderation(user, sid)), ""
+    )
+    if server_id and not can_see_moderation(user, server_id):
+        return render_template("error.html", code="403", title="Kein Zugriff", icon="🔒",
+                               msg="Du hast keine Berechtigung für Moderationslogs."), 403
+    return render_template("dashboard.html",
+        user=user, active_tab="moderation", server_id=server_id,
+        moderation_access=True)
 
 @app.route("/dashboard/tickets/<int:ticket_id>")
 @login_required
@@ -816,11 +848,13 @@ def api_guild():
     if _is_mbl(user):
         user_servers = set(_load_all_server_ids())
 
-    def _enrich(rows):
+    def _enrich(rows, access_check=None):
         out = []
         for row in rows:
             sid = row.get("server_id", "")
             if not _is_mbl(user) and sid not in user_servers:
+                continue
+            if access_check and not access_check(user, sid):
                 continue
             g = _cached_guild(sid)
             out.append({
@@ -839,6 +873,10 @@ def api_guild():
     return jsonify({
         "ticket_servers": _enrich(ticket_rows),
         "app_servers":    _enrich(app_rows),
+        "moderation_servers": _enrich(
+            [{"server_id": sid} for sid in _load_all_server_ids()],
+            can_see_moderation,
+        ),
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1090,6 +1128,65 @@ def api_ticket_detail(ticket_id):
         "participants": participants,
         "server_id": server_id,
     })
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API: /api/moderation
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/moderation")
+@login_required
+def api_moderation():
+    user = session["user"]
+    server_id = request.args.get("server_id") or ""
+    action_f = request.args.get("action", "").strip()
+    query_text = request.args.get("q", "").strip().lower()
+
+    if not server_id:
+        return jsonify({"logs": []})
+    if not can_see_moderation(user, server_id):
+        return jsonify({"error": "Keine Berechtigung für Moderationslogs."}), 403
+
+    try:
+        query = (sb("moderation_logs")
+                 .select("id,server_id,action,audit_action,target_id,target_name,moderator_id,moderator_name,reason,source,created_at")
+                 .eq("server_id", server_id)
+                 .order("created_at", desc=True)
+                 .limit(500))
+        rows = query.execute().data or []
+    except Exception as e:
+        log.error(f"[api_moderation] DB-Fehler: {e}")
+        return jsonify({"error": "Moderationslogs konnten nicht geladen werden."}), 500
+
+    actions = sorted({str(row.get("action") or "") for row in rows if row.get("action")})
+    if action_f:
+        rows = [row for row in rows if str(row.get("action") or "") == action_f]
+    if query_text:
+        def contains(row: dict) -> bool:
+            return query_text in " ".join(str(row.get(k) or "") for k in (
+                "action", "audit_action", "target_id", "target_name", "moderator_id",
+                "moderator_name", "reason", "source",
+            )).lower()
+        rows = [row for row in rows if contains(row)]
+
+    return jsonify({"logs": rows, "actions": actions})
+
+
+@app.route("/api/moderation/<int:log_id>")
+@login_required
+def api_moderation_detail(log_id: int):
+    user = session["user"]
+    server_id = request.args.get("server_id") or ""
+    if not server_id or not can_see_moderation(user, server_id):
+        return jsonify({"error": "Keine Berechtigung für Moderationslogs."}), 403
+    try:
+        rows = (sb("moderation_logs").select("*").eq("server_id", server_id)
+                .eq("id", log_id).limit(1).execute().data or [])
+    except Exception as e:
+        log.error(f"[api_moderation_detail] DB-Fehler: {e}")
+        return jsonify({"error": "Details konnten nicht geladen werden."}), 500
+    if not rows:
+        return jsonify({"error": "Moderationslog nicht gefunden."}), 404
+    return jsonify({"log": rows[0]})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API: /api/applications
