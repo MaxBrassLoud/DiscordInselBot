@@ -867,7 +867,7 @@ class ModerationCog(commands.Cog):
     @moderation.command(name="warn", description="Verwarnt einen User (Log + DM)")
     @app_commands.describe(mitglied="Der User, der verwarnt werden soll")
     async def moderation_warn(self, interaction: discord.Interaction, mitglied: discord.Member):
-        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members:
+        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members and not interaction.user.guild_permissions.manage_permissions:
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
         await interaction.response.send_modal(WarnModal(mitglied))
@@ -875,7 +875,7 @@ class ModerationCog(commands.Cog):
     @moderation.command(name="warnings", description="Zeigt alle Verwarnungen eines Users")
     @app_commands.describe(mitglied="Der User, dessen Verwarnungen angezeigt werden sollen")
     async def moderation_warnings(self, interaction: discord.Interaction, mitglied: discord.Member):
-        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members:
+        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members and not interaction.user.guild_permissions.manage_permissions:
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
         await _list_warnings(interaction, mitglied)
@@ -891,7 +891,7 @@ class ModerationCog(commands.Cog):
         user: discord.Member | None = None,
         limit: int = 20
     ):
-        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members:
+        if not has_admin_rights(interaction) and not interaction.user.guild_permissions.kick_members and not interaction.user.guild_permissions.manage_permissions:
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
         if limit < 1:
