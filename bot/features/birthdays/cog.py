@@ -52,6 +52,9 @@ BIRTHDAY_MESSAGES = [
     "Auf ein weiteres fantastisches Jahr, {mention}! 🎂 Alles Gute zum Geburtstag!",
 ]
 
+# Platzhalter-Jahr, wenn kein Jahr angegeben wurde (Alter bleibt geheim)
+_NO_YEAR = 1800
+
 # Fallback wenn keine Env-Variable und kein DB-Eintrag
 _FALLBACK_CHANNEL_ENV = os.getenv("BIRTHDAY_CHANNEL_ID", "")
 
@@ -63,14 +66,14 @@ def _today(settings: dict | None = None) -> date:
 def _parse_birthday(raw: str) -> date | None:
     """
     Akzeptiert: dd.mm  oder  dd.mm.yyyy
-    Gibt ein date-Objekt zurück (Jahr wird ggf. auf 2000 gesetzt).
+    Gibt ein date-Objekt zurück (Jahr wird ggf. auf _NO_YEAR gesetzt).
     """
     raw = raw.strip()
     parts = raw.split(".")
     if len(parts) == 2:
         try:
             day, month = int(parts[0]), int(parts[1])
-            return date(2000, month, day)
+            return date(_NO_YEAR, month, day)
         except (ValueError, OverflowError):
             return None
     elif len(parts) == 3:
@@ -83,8 +86,8 @@ def _parse_birthday(raw: str) -> date | None:
 
 
 def _format_date(d: date) -> str:
-    if d.year == 2000:
-        return f"{d.day:02d}.{d.month:02d}."
+    if d.year == _NO_YEAR:
+        return f"{d.day:02d}.{d.month:02d}"
     return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
 
@@ -195,7 +198,7 @@ class BirthdaysCog(commands.Cog):
             return
 
         age_str = ""
-        if bday.year != 2000:
+        if bday.year != _NO_YEAR:
             age = today.year - bday.year
             age_str = f" ({age} Jahre 🎂)"
 
@@ -273,7 +276,7 @@ class BirthdaysCog(commands.Cog):
             color=discord.Color.green(),
         )
         embed.add_field(name="📅 Datum", value=_format_date(bday), inline=True)
-        if bday.year != 2000:
+        if bday.year != _NO_YEAR:
             embed.add_field(name="📆 Jahr", value=str(bday.year), inline=True)
         embed.set_footer(text="Du bekommst am Morgen deines Geburtstags eine Nachricht! 🎉")
 
@@ -327,7 +330,7 @@ class BirthdaysCog(commands.Cog):
         )
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="📅 Datum", value=_format_date(bday), inline=True)
-        if bday.year != 2000:
+        if bday.year != _NO_YEAR:
             age_this_year = today.year - bday.year
             if this_year < today:
                 age_this_year += 1
