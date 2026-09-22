@@ -226,3 +226,5 @@ backups/
 test/
 
 *.log.*
+
+data/
