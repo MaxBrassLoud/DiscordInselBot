@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meine Feature-Vorschläge – Insel Bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .mv-wrap { max-width: 960px; margin: 0 auto; padding: 24px 22px 60px; }
+    .mv-title { font-family: 'Rajdhani', sans-serif; font-size: 1.5rem; font-weight: 700; margin-bottom: 4px; }
+    .mv-sub   { color: var(--text3); font-size: 0.86rem; margin-bottom: 22px; }
+    .mv-empty { text-align: center; padding: 60px 20px; color: var(--text3); }
+    .mv-empty-icon { font-size: 2.4rem; opacity: .4; margin-bottom: 10px; }
+
+    .s-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    .s-head {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      cursor: pointer;
+      transition: background var(--fast);
+    }
+    .s-head:hover { background: var(--bg-hover); }
+    .s-head-main { flex: 1; min-width: 0; }
+    .s-title { font-family: 'Rajdhani', sans-serif; font-size: 1.05rem; font-weight: 700; margin-bottom: 3px; }
+    .s-meta  { font-size: 0.74rem; color: var(--text3); display: flex; gap: 10px; flex-wrap: wrap; }
+
+    .s-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 0.72rem; font-weight: 700;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+    .pill-proposed    { background: rgba(96,165,250,0.12); color: #60a5fa; border-color: rgba(96,165,250,0.28); }
+    .pill-accepted    { background: var(--green-g2);        color: var(--green); border-color: rgba(74,222,128,0.28); }
+    .pill-in_progress { background: var(--orange-bg);       color: var(--orange); border-color: rgba(251,146,60,0.28); }
+    .pill-done        { background: rgba(74,222,128,0.18);  color: #22c55e; border-color: rgba(74,222,128,0.4); }
+    .pill-rejected    { background: var(--red-bg);          color: var(--red); border-color: var(--red-border); }
+
+    .prio-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 12px;
+      font-size: 0.66rem; font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .prio-important { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
+    .prio-normal    { background: rgba(96,165,250,0.10); color: #60a5fa; border-color: rgba(96,165,250,0.25); }
+    .prio-can_wait  { background: var(--green-g2); color: var(--green); border-color: rgba(74,222,128,0.25); }
+    .prio-bug       { background: var(--orange-bg); color: var(--orange); border-color: rgba(251,146,60,0.25); }
+
+    .s-body {
+      padding: 0 18px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.35s ease, padding 0.35s ease;
+    }
+    .s-card.open .s-body {
+      max-height: 2400px;
+      padding: 16px 18px 20px;
+    }
+    .s-desc-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--green2);
+      border-radius: var(--r);
+      padding: 12px 15px;
+      font-size: 0.87rem;
+      color: var(--text2);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .s-section-title {
+      font-size: 0.66rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text3); margin-bottom: 10px;
+    }
+    .timeline { position: relative; padding-left: 22px; }
+    .timeline::before {
+      content: ''; position: absolute;
+      left: 7px; top: 6px; bottom: 6px;
+      width: 2px; background: var(--border);
+      border-radius: 1px;
+    }
+    .tl-item { position: relative; padding-bottom: 14px; }
+    .tl-item:last-child { padding-bottom: 0; }
+    .tl-dot {
+      position: absolute;
+      left: -22px; top: 3px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 2px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.55rem;
+    }
+    .tl-item.status-change .tl-dot {
+      border-color: var(--green2);
+      background: var(--green-g3);
+      color: var(--green);
+    }
+    .tl-item.user-comment .tl-dot {
+      border-color: #60a5fa;
+      background: rgba(96,165,250,0.12);
+    }
+    .tl-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 3px;
+    }
+    .tl-author { font-size: 0.8rem; font-weight: 700; color: var(--text2); }
+    .tl-badge-mbl {
+      background: var(--green-g2); color: var(--green);
+      font-size: 0.58rem; font-weight: 700;
+      padding: 1px 5px; border-radius: 3px;
+    }
+    .tl-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem; color: var(--text3);
+      margin-left: auto;
+    }
+    .tl-status-change {
+      font-size: 0.76rem; color: var(--text3);
+      margin-bottom: 3px;
+      display: flex; align-items: center; gap: 5px;
+      flex-wrap: wrap;
+    }
+    .tl-arrow { color: var(--green); font-weight: 700; }
+    .tl-text {
+      font-size: 0.84rem; color: var(--text2);
+      white-space: pre-wrap; word-break: break-word;
+      line-height: 1.55;
+    }
+    .s-footer {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-raised);
+      font-size: 0.72rem;
+      color: var(--text3);
+      display: flex; gap: 12px; flex-wrap: wrap;
+      justify-content: space-between;
+    }
+    .loading { text-align: center; padding: 40px; color: var(--text3); }
+    .spinner {
+      display: inline-block;
+      width: 22px; height: 22px;
+      border: 2px solid var(--border2);
+      border-top-color: var(--green2);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="detail-body">
+
+<div class="detail-topbar">
+  <a href="/dashboard" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    Dashboard
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">💡 Meine Feature-Vorschläge</span>
+</div>
+
+<div class="mv-wrap">
+  <div class="mv-title">Meine Feature-Vorschläge</div>
+  <div class="mv-sub">Alle deine eingereichten Vorschläge inklusive kompletter Historie und Kommentare.</div>
+
+  <div id="content">
+    <div class="loading"><div class="spinner"></div><div style="margin-top:10px;font-size:.83rem;">Lade Vorschläge…</div></div>
+  </div>
+</div>
+
+<script>
+const STATUS_LABELS = {
+  proposed:    '💡 Vorgeschlagen',
+  accepted:    '✅ Angenommen',
+  in_progress: '🔧 In Bearbeitung',
+  done:        '🎉 Erledigt',
+  rejected:    '❌ Abgelehnt',
+};
+const PRIO_LABELS = {
+  important: '🔴 Wichtig',
+  normal:    '🟡 Normal',
+  can_wait:  '🟢 Kann warten',
+  bug:       '🐛 Bug',
+};
+
+function esc(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtDate(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleString('de-DE', {dateStyle:'short', timeStyle:'short'}); }
+  catch { return s; }
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/feature-suggest/mine');
+    if (r.status === 401) { window.location.href = '/login'; return; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    render(d.suggestions || []);
+  } catch(e) {
+    document.getElementById('content').innerHTML =
+      `<div class="mv-empty"><div class="mv-empty-icon">⚠️</div><p>Fehler beim Laden: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function render(items) {
+  if (items.length === 0) {
+    document.getElementById('content').innerHTML = `
+      <div class="mv-empty">
+        <div class="mv-empty-icon">📭</div>
+        <div style="font-family:'Rajdhani';font-size:1.05rem;font-weight:700;color:var(--text2);margin-bottom:4px;">Noch keine Vorschläge</div>
+        <p>Nutze <code>/suggest</code> im Discord, um einen Vorschlag zu machen.</p>
+      </div>`;
+    return;
+  }
+  document.getElementById('content').innerHTML = items.map((s, idx) => renderCard(s, idx)).join('');
+}
+
+function renderCard(s, idx) {
+  const statusLabel = STATUS_LABELS[s.status] || s.status;
+  const prioLabel   = PRIO_LABELS[s.priority] || s.priority;
+  const comments    = s.comments || [];
+  const sorted = [...comments].sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+
+  const timeline = sorted.map(c => {
+    const isStatusChange = c.from_status && c.to_status;
+    const fromLbl = c.from_status ? (STATUS_LABELS[c.from_status] || c.from_status) : '';
+    const toLbl   = c.to_status   ? (STATUS_LABELS[c.to_status]   || c.to_status)   : '';
+    const cls = isStatusChange ? 'status-change' : 'user-comment';
+    const icon = isStatusChange ? '↻' : '💬';
+
+    return `<div class="tl-item ${cls}">
+      <div class="tl-dot">${icon}</div>
+      <div class="tl-head">
+        <span class="tl-author">${esc(c.author_name || '?')}</span>
+        ${c.author_is_mbl ? '<span class="tl-badge-mbl">MBL</span>' : ''}
+        <span class="tl-time">${fmtDate(c.created_at)}</span>
+      </div>
+      ${isStatusChange ? `<div class="tl-status-change">
+        Status: ${esc(fromLbl)} <span class="tl-arrow">→</span> ${esc(toLbl)}
+      </div>` : ''}
+      ${c.content ? `<div class="tl-text">${esc(c.content)}</div>` : ''}
+    </div>`;
+  }).join('') || '<div style="color:var(--text3);font-size:.82rem;">Noch keine Aktivität.</div>';
+
+  return `<div class="s-card" id="card-${idx}">
+    <div class="s-head" onclick="toggleCard(${idx})">
+      <div class="s-head-main">
+        <div class="s-title">#${s.id} · ${esc(s.title)}</div>
+        <div class="s-meta">
+          <span>📅 ${fmtDate(s.created_at)}</span>
+          <span>💬 ${comments.length} Einträge</span>
+          ${s.is_mbl_created ? '<span style="color:var(--green);">MBL-erstellt</span>' : ''}
+        </div>
+      </div>
+      <div class="s-badges">
+        <span class="pill pill-${s.status}">${statusLabel}</span>
+        <span class="prio-pill prio-${s.priority}">${prioLabel}</span>
+      </div>
+    </div>
+
+    <div class="s-body">
+      <div class="s-section-title">Beschreibung</div>
+      <div class="s-desc-box">${esc(s.description)}</div>
+
+      <div class="s-section-title">Verlauf</div>
+      <div class="timeline">${timeline}</div>
+    </div>
+
+    <div class="s-footer">
+      <span>Eingereicht: ${fmtDate(s.created_at)}</span>
+      <span>Letzte Änderung: ${fmtDate(s.updated_at)}</span>
+    </div>
+  </div>`;
+}
+
+function toggleCard(idx) {
+  const el = document.getElementById('card-' + idx);
+  if (el) el.classList.toggle('open');
+}
+
+load();
+</script>
+</body>
+</html>

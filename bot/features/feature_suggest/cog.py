@@ -4,10 +4,14 @@ bot/features/feature_suggest/cog.py
 Feature Suggest System – Discord Cog
 
 Commands:
-  /suggest  – Feature vorschlagen (DM mit Web-Link)
+  /suggest  – Feature vorschlagen (DM mit Web-Links)
 
 Fix: Loop wird in cog_load() gespeichert (läuft garantiert im Bot-Loop).
      Thread-safe dispatch_notify_* Methoden für Aufrufe aus dem Flask-Thread.
+
+DM enthält zwei Links:
+  - Vorschlag einreichen  → /feature-suggest?token=…
+  - Übersicht & Verlauf   → /feature-suggest/view?token=…
 """
 from __future__ import annotations
 
@@ -51,14 +55,15 @@ class FeatureSuggest(commands.Cog):
         self.bot = bot
         self._loop: asyncio.AbstractEventLoop | None = None
 
+    # ── Lifecycle ────────────────────────────────────────────────────────────
     async def cog_load(self):
         """Wird vom Bot innerhalb des Loops aufgerufen."""
         self._loop = asyncio.get_running_loop()
         logger.info("[FeatureSuggest] Cog geladen, Loop gespeichert.")
 
-    # Fallback falls cog_load nicht unterstützt wird
     @commands.Cog.listener()
     async def on_ready(self):
+        """Fallback, falls cog_load nicht unterstützt wird."""
         if self._loop is None or self._loop.is_closed():
             self._loop = asyncio.get_running_loop()
             logger.info("[FeatureSuggest] Loop in on_ready gesetzt.")
@@ -104,7 +109,7 @@ class FeatureSuggest(commands.Cog):
     # ── /suggest ─────────────────────────────────────────────────────────────
     @app_commands.command(
         name="suggest",
-        description="Schlage ein neues Bot-Feature vor (Link kommt per DM).",
+        description="Schlage ein neues Bot-Feature vor (Links kommen per DM).",
     )
     async def suggest(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -128,25 +133,29 @@ class FeatureSuggest(commands.Cog):
             )
             return
 
-        link = f"{WEB_BASE}/feature-suggest?token={token}"
+        suggest_link = f"{WEB_BASE}/feature-suggest?token={token}"
+        view_link    = f"{WEB_BASE}/feature-suggest/view?token={token}"
 
         embed = discord.Embed(
             title="💡 Feature-Vorschlag",
             description=(
                 "Du kannst jetzt ein neues Feature vorschlagen!\n\n"
-                f"**Dein persönlicher Link:**\n{link}\n\n"
-                f"⏱ Gültig für {TOKEN_TTL_H} Stunden."
+                f"**📝 Vorschlag einreichen:**\n{suggest_link}\n\n"
+                f"**📊 Meine Vorschläge & Verlauf:**\n{view_link}\n\n"
+                f"⏱ Beide Links sind {TOKEN_TTL_H} Stunden gültig."
             ),
             color=0x4ade80,
         )
         try:
             await user.send(embed=embed)
             await interaction.followup.send(
-                "✅ Link wurde dir per DM geschickt!", ephemeral=True,
+                "✅ Links wurden dir per DM geschickt!", ephemeral=True,
             )
         except discord.Forbidden:
             await interaction.followup.send(
-                f"⚠️ Ich konnte dir keine DM schicken. Hier ist der Link:\n{link}",
+                f"⚠️ Ich konnte dir keine DM schicken. Hier sind deine Links:\n"
+                f"📝 Vorschlag: {suggest_link}\n"
+                f"📊 Übersicht: {view_link}",
                 ephemeral=True,
             )
 

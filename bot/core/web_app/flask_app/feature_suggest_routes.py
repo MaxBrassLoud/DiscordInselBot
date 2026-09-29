@@ -218,6 +218,79 @@ def register_feature_suggest_routes(app, login_required, get_bot=None):
             result.append({**s, "comments": comments})
         return jsonify({"suggestions": result})
 
+    # ── GET /feature-suggest/view (Token-basiert, kein Login) ────────────────
+    @app.route("/feature-suggest/view")
+    def feature_suggest_view():
+        token = request.args.get("token", "").strip()
+        if not token:
+            return render_template(
+                "error.html", code=400, title="Ungültiger Link",
+                icon="🔗", msg="Es fehlt ein gültiger Token.",
+            ), 400
+
+        sb = get_supabase()
+        row = (sb.table("feature_suggestion_tokens")
+                 .select("*").eq("token", token).execute())
+        if not row.data:
+            return render_template(
+                "error.html", code=404, title="Link ungültig",
+                icon="🔗", msg="Dieser Link existiert nicht.",
+            ), 404
+
+        tk = row.data[0]
+
+        try:
+            exp = datetime.fromisoformat(tk["expires_at"].replace("Z", "+00:00"))
+            if exp < datetime.now(timezone.utc):
+                return render_template(
+                    "error.html", code=410, title="Link abgelaufen",
+                    icon="⏰", msg="Dieser Link ist abgelaufen. Nutze /suggest erneut.",
+                ), 410
+        except Exception:
+            pass
+
+        return render_template(
+            "feature_suggest_view.html",
+            token=token,
+            user_id=tk["user_id"],
+        )
+
+    # ── GET /api/feature-suggest/mine-by-token ───────────────────────────────
+    @app.route("/api/feature-suggest/mine-by-token")
+    def feature_suggest_mine_by_token():
+        token = request.args.get("token", "").strip()
+        if not token:
+            return jsonify({"error": "Kein Token."}), 400
+
+        sb = get_supabase()
+        tk_row = (sb.table("feature_suggestion_tokens")
+                    .select("*").eq("token", token).execute())
+        if not tk_row.data:
+            return jsonify({"error": "Token ungültig."}), 404
+
+        uid = tk_row.data[0]["user_id"]
+        rows = (sb.table("feature_suggestions")
+                  .select("*").eq("creator_id", uid)
+                  .order("created_at", desc=True).execute().data or [])
+
+        result = []
+        for s in rows:
+            s["comments"] = (sb.table("feature_suggestion_comments")
+                               .select("*").eq("suggestion_id", s["id"])
+                               .order("created_at").execute().data or [])
+            result.append(s)
+
+        return jsonify({"suggestions": result})
+
+    # ── GET /dashboard/my-features (eingeloggt) ──────────────────────────────
+    @app.route("/dashboard/my-features")
+    @login_required
+    def dashboard_my_features():
+        return render_template("feature_my_view.html", user=session["user"])
+
+    # ── GET /api/feature-suggest/mine (bereits vorhanden) ────────────────────
+    # bleibt unverändert
+
     # ══════════════════════════════════════════════════════════════════════════
     # MBL-Bereich
     # ══════════════════════════════════════════════════════════════════════════
@@ -375,3 +448,13 @@ def register_feature_suggest_routes(app, login_required, get_bot=None):
                 if not ok:
                     log.warning("[feature_suggest] DM (Kommentar) konnte nicht gesendet werden.")
         return jsonify({"ok": True})
+
+    def _load_suggestion_with_comments(sb, sid: int) -> dict | None:
+        row = sb.table("feature_suggestions").select("*").eq("id", sid).execute()
+        if not row.data:
+            return None
+        s = row.data[0]
+        s["comments"] = (sb.table("feature_suggestion_comments")
+                         .select("*").eq("suggestion_id", sid)
+                         .order("created_at").execute().data or [])
+        return s
