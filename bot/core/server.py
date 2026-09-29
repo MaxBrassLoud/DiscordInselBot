@@ -33,6 +33,9 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
+import bot.core.web_app.flask_app.app as _webapp
+_webapp.set_bot_instance(bot)
+
 FEATURE_COGS = [
     "bot.features.time.cog",
     "bot.features.spieleabend.cog",
@@ -54,7 +57,8 @@ FEATURE_COGS = [
     "bot.features.faq.cog",
     "bot.features.backups_feature.cog",
     "bot.features.moderation.raid_protection",
-#    "bot.features.moderation.link_protection"
+#    "bot.features.moderation.link_protection",
+    "bot.features.feature_suggest.cog"
 ]
 
 

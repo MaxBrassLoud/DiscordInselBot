@@ -36,6 +36,17 @@ from flask import (
 
 app = Flask(__name__)
 
+_bot_instance = None
+
+def set_bot_instance(bot):
+    """Wird von server.py aufgerufen, sobald der Bot erstellt wurde."""
+    global _bot_instance
+    _bot_instance = bot
+
+def get_bot_instance():
+    """Callback für Feature-Routen und andere Module."""
+    return _bot_instance
+
 # ── [FIX CRITICAL] Secret-Key Pflichtprüfung ─────────────────────────────────
 _SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 if not _SECRET_KEY:
@@ -1890,3 +1901,6 @@ from .feature_setup_routes import register_feature_setup_routes
 register_feature_setup_routes(
     app, login_required, _is_mbl, _bot_get, _cached_guild, _guild_icon_url,
 )
+from .feature_suggest_routes import register_feature_suggest_routes
+register_feature_suggest_routes(
+    app, login_required, get_bot=get_bot_instance)

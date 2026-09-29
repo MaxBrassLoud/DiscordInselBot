@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feature vorschlagen – Insel Bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .fs-wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px; }
+    .fs-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 28px; }
+    .fs-title { font-family: 'Rajdhani', sans-serif; font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; }
+    .fs-sub { color: var(--text3); font-size: 0.85rem; margin-bottom: 22px; }
+    .f { margin-bottom: 16px; }
+    .f label { display: block; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text3); margin-bottom: 6px; }
+    .f input, .f textarea {
+      width: 100%; background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text); font-family: 'Outfit', sans-serif; font-size: 0.9rem;
+      padding: 10px 12px; border-radius: var(--r-sm); outline: none;
+      transition: border-color var(--fast);
+    }
+    .f input:focus, .f textarea:focus { border-color: var(--green2); box-shadow: 0 0 0 3px rgba(34,197,94,0.12); }
+    .f textarea { resize: vertical; min-height: 140px; }
+    .f-hint { font-size: 0.72rem; color: var(--text3); margin-top: 4px; }
+    .submit-btn {
+      width: 100%; padding: 12px;
+      background: var(--green2); color: #000;
+      font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 1rem;
+      border: none; border-radius: var(--r-sm); cursor: pointer;
+      transition: all var(--mid);
+    }
+    .submit-btn:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .ok-box { display: none; background: var(--green-glow); border: 1px solid rgba(74,222,128,0.3); border-radius: var(--r); padding: 16px; margin-top: 16px; color: var(--green); font-size: 0.9rem; }
+    .ok-box.show { display: block; }
+  </style>
+</head>
+<body class="detail-body">
+<div class="page-bg"><div class="bg-grid"></div><div class="bg-radial"></div></div>
+
+<div class="fs-wrap">
+  <div class="fs-card">
+    <div class="fs-title">💡 Feature vorschlagen</div>
+    <div class="fs-sub">Dein Vorschlag wird dem Bot-Team zugestellt. Du wirst über jede Statusänderung per DM informiert.</div>
+
+    <div class="f">
+      <label>Titel *</label>
+      <input type="text" id="fsTitle" maxlength="200" placeholder="Kurz und knackig…">
+    </div>
+
+    <div class="f">
+      <label>Beschreibung *</label>
+      <textarea id="fsDesc" maxlength="5000" placeholder="Was soll das Feature tun? Warum wäre es nützlich? So detailliert wie du magst…"></textarea>
+      <div class="f-hint"><span id="charCount">0</span> / 5000 Zeichen</div>
+    </div>
+
+    <button class="submit-btn" id="fsSubmit" onclick="submitSuggestion()">📨 Vorschlag absenden</button>
+
+    <div class="ok-box" id="fsOk">
+      ✅ Danke! Dein Vorschlag wurde eingereicht. Du erhältst eine DM sobald sich etwas ändert.
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN = {{ token | tojson }};
+
+const descEl = document.getElementById('fsDesc');
+descEl.addEventListener('input', () => {
+  document.getElementById('charCount').textContent = descEl.value.length;
+});
+
+async function submitSuggestion() {
+  const title = document.getElementById('fsTitle').value.trim();
+  const desc  = descEl.value.trim();
+  const btn   = document.getElementById('fsSubmit');
+
+  if (!title || !desc) { alert('Bitte Titel und Beschreibung ausfüllen.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Wird gesendet…';
+
+  try {
+    const r = await fetch('/api/feature-suggest/submit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: TOKEN, title, description: desc}),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Fehler');
+
+    document.getElementById('fsOk').classList.add('show');
+    btn.style.display = 'none';
+    document.getElementById('fsTitle').disabled = true;
+    descEl.disabled = true;
+  } catch(e) {
+    alert('Fehler: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '📨 Vorschlag absenden';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feature-Board – Insel Bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    .fb-body { padding: 18px 22px; }
+    .fb-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+    .fb-title { font-family: 'Rajdhani', sans-serif; font-size: 1.4rem; font-weight: 700; }
+    .fb-add-btn {
+      margin-left: auto; padding: 8px 18px;
+      background: var(--green2); color: #000;
+      border: none; border-radius: var(--r-sm); cursor: pointer;
+      font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 0.9rem;
+      transition: all var(--mid);
+    }
+    .fb-add-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+    .kanban {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(240px, 1fr));
+      gap: 12px;
+      align-items: start;
+      overflow-x: auto;
+      padding-bottom: 12px;
+    }
+    .col {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      min-height: 300px;
+      display: flex;
+      flex-direction: column;
+    }
+    .col-head {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text2);
+    }
+    .col-count {
+      margin-left: auto;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text3);
+    }
+    .col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 11px 13px;
+      cursor: pointer;
+      transition: all var(--mid);
+    }
+    .card:hover { border-color: var(--green2); transform: translateY(-1px); }
+    .card-title { font-weight: 600; font-size: 0.88rem; margin-bottom: 4px; }
+    .card-desc  { font-size: 0.76rem; color: var(--text3); margin-bottom: 6px;
+                  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                  overflow: hidden; }
+    .card-meta  { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .prio { font-size: 0.66rem; padding: 1px 7px; border-radius: 10px; border: 1px solid transparent; }
+    .prio-important { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
+    .prio-normal    { background: rgba(96,165,250,0.10); color: #60a5fa; border-color: rgba(96,165,250,0.25); }
+    .prio-can_wait  { background: var(--green-g2); color: var(--green); border-color: rgba(74,222,128,0.25); }
+    .prio-bug       { background: var(--orange-bg); color: var(--orange); border-color: rgba(251,146,60,0.25); }
+    .card-author { font-size: 0.7rem; color: var(--text3); margin-left: auto; }
+
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; z-index: 500; align-items: center; justify-content: center; padding: 20px; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--bg-card); border: 1px solid var(--border2); border-radius: var(--r-lg); max-width: 700px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: var(--shadow-xl); }
+    .modal h2 { font-family: 'Rajdhani', sans-serif; font-size: 1.2rem; margin-bottom: 6px; }
+    .modal .sub { color: var(--text3); font-size: 0.8rem; margin-bottom: 16px; }
+    .m-field { margin-bottom: 12px; }
+    .m-field label { display: block; font-size: 0.63rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text3); margin-bottom: 5px; }
+    .m-field input, .m-field textarea, .m-field select {
+      width: 100%; background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text); font-family: 'Outfit', sans-serif; font-size: 0.86rem;
+      padding: 9px 12px; border-radius: var(--r-sm); outline: none;
+    }
+    .m-field textarea { resize: vertical; min-height: 90px; }
+    .m-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .m-comments { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; background: var(--bg-base); margin-bottom: 10px; }
+    .m-comment { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .m-comment:last-child { border-bottom: none; }
+    .m-comment .head { display: flex; align-items: center; gap: 6px; font-size: 0.74rem; margin-bottom: 3px; }
+    .m-comment .who { font-weight: 600; color: var(--text2); }
+    .m-comment .when { color: var(--text3); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; margin-left: auto; }
+    .m-comment .txt { font-size: 0.83rem; color: var(--text2); white-space: pre-wrap; word-break: break-word; }
+    .m-comment .badge-mbl { background: var(--green-g2); color: var(--green); font-size: 0.6rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+    .m-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .m-btn { padding: 9px 16px; border-radius: var(--r-sm); border: none; cursor: pointer; font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 0.88rem; transition: all var(--mid); }
+    .m-btn.primary { background: var(--green2); color: #000; }
+    .m-btn.primary:hover { filter: brightness(1.1); }
+    .m-btn.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+    .m-btn.ghost:hover { border-color: var(--green2); color: var(--green2); }
+  </style>
+</head>
+<body class="detail-body">
+
+<div class="detail-topbar">
+  <a href="/dashboard/setup" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    Setup
+  </a>
+  <span class="topbar-sep">/</span>
+  <span class="topbar-title">💡 Feature-Board</span>
+</div>
+
+<div class="fb-body">
+  <div class="fb-head">
+    <div class="fb-title">Feature-Board</div>
+    <button class="fb-add-btn" onclick="openNewModal()">+ Neues Feature</button>
+  </div>
+
+  <div class="kanban" id="kanban"></div>
+</div>
+
+<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalContent"></div>
+</div>
+
+<script>
+const STATUS_LABELS = {
+  proposed:    '💡 Vorgeschlagen',
+  accepted:    '✅ Angenommen',
+  in_progress: '🔧 In Bearbeitung',
+  done:        '🎉 Erledigt',
+  rejected:    '❌ Abgelehnt',
+};
+const STATUS_ORDER = ['proposed','accepted','in_progress','done','rejected'];
+const PRIO_LABELS = { important:'🔴 Wichtig', normal:'🟡 Normal', can_wait:'🟢 Kann warten', bug:'🐛 Bug' };
+
+let _data = [];
+let _currentId = null;
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtDate(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleString('de-DE'); } catch { return s; }
+}
+
+async function load() {
+  const r = await fetch('/api/features');
+  const d = await r.json();
+  _data = d.suggestions || [];
+  render();
+}
+
+function render() {
+  const kanban = document.getElementById('kanban');
+  kanban.innerHTML = STATUS_ORDER.map(st => {
+    const items = _data.filter(s => s.status === st);
+    const cards = items.length === 0
+      ? `<div style="color:var(--text3);font-size:.76rem;text-align:center;padding:18px;">leer</div>`
+      : items.map(s => renderCard(s)).join('');
+    return `<div class="col">
+      <div class="col-head">${STATUS_LABELS[st]} <span class="col-count">${items.length}</span></div>
+      <div class="col-body">${cards}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderCard(s) {
+  return `<div class="card" onclick="openDetail(${s.id})">
+    <div class="card-title">#${s.id} · ${esc(s.title)}</div>
+    <div class="card-desc">${esc(s.description)}</div>
+    <div class="card-meta">
+      <span class="prio prio-${s.priority}">${PRIO_LABELS[s.priority] || s.priority}</span>
+      ${s.is_mbl_created ? '<span class="badge-legacy">MBL</span>' : ''}
+      <span class="card-author">${esc(s.creator_name || '?')}</span>
+    </div>
+  </div>`;
+}
+
+function openModal(html) {
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  _currentId = null;
+}
+
+function openNewModal() {
+  openModal(`
+    <h2>Neues Feature</h2>
+    <div class="sub">Wird direkt als „Angenommen" ins Board eingetragen.</div>
+    <div class="m-field"><label>Titel</label><input id="nTitle" maxlength="200"></div>
+    <div class="m-field"><label>Beschreibung</label><textarea id="nDesc" maxlength="5000"></textarea></div>
+    <div class="m-field"><label>Priorität</label>
+      <select id="nPrio">
+        ${Object.entries(PRIO_LABELS).map(([k,v]) => `<option value="${k}">${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="m-actions">
+      <button class="m-btn primary" onclick="createNew()">Anlegen</button>
+      <button class="m-btn ghost" onclick="closeModal()">Abbrechen</button>
+    </div>
+  `);
+}
+
+async function createNew() {
+  const title = document.getElementById('nTitle').value.trim();
+  const desc  = document.getElementById('nDesc').value.trim();
+  const prio  = document.getElementById('nPrio').value;
+  if (!title || !desc) { alert('Titel und Beschreibung nötig.'); return; }
+
+  const r = await fetch('/api/features', {
+    method: 'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({title, description: desc, priority: prio}),
+  });
+  const d = await r.json();
+  if (!r.ok) { alert(d.error || 'Fehler'); return; }
+  closeModal();
+  load();
+}
+
+function openDetail(id) {
+  const s = _data.find(x => x.id === id);
+  if (!s) return;
+  _currentId = id;
+
+  const comments = (s.comments || []).map(c => `
+    <div class="m-comment">
+      <div class="head">
+        <span class="who">${esc(c.author_name || '?')}</span>
+        ${c.author_is_mbl ? '<span class="badge-mbl">MBL</span>' : ''}
+        ${c.from_status ? `<span style="color:var(--text3);font-size:.7rem;">${STATUS_LABELS[c.from_status]||c.from_status} → ${STATUS_LABELS[c.to_status]||c.to_status}</span>` : ''}
+        <span class="when">${fmtDate(c.created_at)}</span>
+      </div>
+      <div class="txt">${esc(c.content)}</div>
+    </div>`).join('') || '<div style="color:var(--text3);font-size:.78rem;">Keine Kommentare.</div>';
+
+  openModal(`
+    <h2>#${s.id} · ${esc(s.title)}</h2>
+    <div class="sub">Vorgeschlagen von ${esc(s.creator_name || '?')} · ${fmtDate(s.created_at)}</div>
+    <div class="m-field"><label>Beschreibung</label>
+      <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;font-size:.85rem;color:var(--text2);white-space:pre-wrap;">${esc(s.description)}</div>
+    </div>
+
+    <div class="m-row">
+      <div class="m-field"><label>Status</label>
+        <select id="dStatus">
+          ${STATUS_ORDER.map(st => `<option value="${st}" ${s.status===st?'selected':''}>${STATUS_LABELS[st]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="m-field"><label>Priorität</label>
+        <select id="dPrio">
+          ${Object.entries(PRIO_LABELS).map(([k,v]) => `<option value="${k}" ${s.priority===k?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="m-field"><label>Kommentar (optional)</label>
+      <textarea id="dComment" placeholder="Begründung / Notiz zum Statuswechsel…"></textarea>
+    </div>
+
+    <div class="m-actions">
+      <button class="m-btn primary" onclick="saveDetail()">Speichern</button>
+      <button class="m-btn ghost" onclick="closeModal()">Schließen</button>
+    </div>
+
+    <h3 style="margin:20px 0 8px;font-family:'Rajdhani';font-size:1rem;">Verlauf</h3>
+    <div class="m-comments">${comments}</div>
+  `);
+}
+
+async function saveDetail() {
+  const status  = document.getElementById('dStatus').value;
+  const prio    = document.getElementById('dPrio').value;
+  const comment = document.getElementById('dComment').value.trim();
+
+  const r = await fetch(`/api/features/${_currentId}`, {
+    method: 'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status, priority: prio, comment}),
+  });
+  const d = await r.json();
+  if (!r.ok) { alert(d.error || 'Fehler'); return; }
+  closeModal();
+  load();
+}
+
+load();
+</script>
+</body>
+</html>
