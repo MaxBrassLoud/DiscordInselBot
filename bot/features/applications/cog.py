@@ -6,7 +6,10 @@ from discord import app_commands
 
 from bot.utils.permissions import has_admin_rights
 from bot.utils.logger import get_logger
-from .views import ApplicationSetupView, ApplicationPanelView, ApplicationChannelView
+from .views import (
+    ApplicationSetupView, ApplicationPanelView, ApplicationChannelView,
+    get_server_config_cached,
+)
 from .app_edit_views import AppEditMainView
 from .manager import (
     ApplicationManager, load_application, update_application,
@@ -56,7 +59,7 @@ class ApplicationsCog(commands.Cog):
             count = 0
             for app in apps:
                 try:
-                    await self._restore_single_app(supabase, app)
+                    await self._restore_single_app(app)
                     count += 1
                 except Exception as inner_e:
                     logger.error(
@@ -67,15 +70,16 @@ class ApplicationsCog(commands.Cog):
         except Exception as e:
             logger.error(f"[_restore_channel_views] {e}")
 
-    async def _restore_single_app(self, supabase, app: dict):
+    async def _restore_single_app(self, app: dict):
         server_id = str(app.get("server_id") or "")
         app_id    = app.get("app_id")
         if not server_id or app_id is None:
             return
 
-        cfg_r = supabase.table("application_servers").select("*") \
-            .eq("server_id", server_id).execute()
-        cfg = cfg_r.data[0] if cfg_r.data else {}
+        # Config laden und für die Klick-Pfade mit cachen: Supabase-Aufrufe sind
+        # synchron – ein DB-Aufruf beim Button-Klick kann das 3-Sekunden-Fenster
+        # der Interaktion sprengen (10062 Unknown interaction).
+        cfg = await get_server_config_cached(server_id)
 
         row    = load_application(server_id, app_id) or app
         status = row.get("status") or app.get("status") or "open"

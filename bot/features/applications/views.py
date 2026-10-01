@@ -6,6 +6,8 @@ All Discord UI views for the application system.
 
 from __future__ import annotations
 
+import time
+
 import discord
 from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
@@ -149,7 +151,8 @@ class ApplicationSetupView(discord.ui.View):
         return v
 
     async def _cb_save(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
+            return
         try:
             supabase = get_supabase()
             cfg = {
@@ -459,7 +462,8 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
+            return
         try:
             guild     = interaction.guild
             applicant = interaction.user
@@ -545,6 +549,73 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
 # APPLICATION CHANNEL VIEW (dynamisch)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Server-Configs werden kurz gecacht: Supabase-Aufrufe sind synchron und
+# blockieren den Event-Loop. Discord erlaubt nur 3 Sekunden bis zur ersten
+# Antwort auf eine Interaktion – ein langsamer DB-Aufruf im Klickpfad führt
+# sonst zu "404 Not Found (10062): Unknown interaction".
+_CFG_CACHE: dict[str, tuple[float, dict]] = {}
+_CFG_CACHE_TTL = 60.0
+
+
+async def get_server_config_cached(server_id: str) -> dict:
+    """Bewerbungs-Config eines Servers (max. 60 s gecacht)."""
+    key = str(server_id)
+    now = time.monotonic()
+    cached = _CFG_CACHE.get(key)
+    if cached and (now - cached[0]) < _CFG_CACHE_TTL:
+        return cached[1]
+    cfg = await ApplicationManager.get_server_config(key) or {}
+    _CFG_CACHE[key] = (now, cfg)
+    return cfg
+
+
+async def acknowledge(interaction: discord.Interaction, *, ephemeral: bool = False) -> bool:
+    """Interaktion sofort bestätigen (3-Sekunden-Fenster von Discord).
+
+    Gibt False zurück, wenn die Interaktion bereits abgelaufen ist – dann wird
+    die Aktion verworfen, statt einen 10062-Traceback zu erzeugen.
+    """
+    try:
+        await interaction.response.defer(ephemeral=ephemeral)
+        return True
+    except discord.HTTPException as e:
+        logger.warning(
+            f"[applications.views] Interaktion konnte nicht bestätigt werden "
+            f"({e}) – Aktion abgebrochen"
+        )
+        return False
+
+
+async def resolve_server_context(interaction: discord.Interaction,
+                                 fallback_server_id: str,
+                                 fallback_cfg: dict) -> tuple[str, dict]:
+    """Server-ID + Config anhand der Interaktion ermitteln.
+
+    app_ids werden pro Server vergeben, die custom_ids enthalten aber nur die
+    app_id. Bei mehreren Servern kann dieselbe custom_id existieren – dann
+    gewinnt die zuletzt registrierte View. Die Server-ID darf deshalb nicht aus
+    der View, sondern muss aus der Interaktion kommen.
+    """
+    server_id = str(interaction.guild_id) if interaction.guild_id else str(fallback_server_id)
+    if server_id == str(fallback_server_id):
+        return server_id, fallback_cfg
+    try:
+        cfg = await get_server_config_cached(server_id)
+    except Exception as e:
+        logger.error(
+            f"[applications.views] Config für Server {server_id} nicht ladbar ({e}) "
+            f"– nutze vorhandene Config"
+        )
+        return server_id, fallback_cfg
+    if not cfg:
+        logger.warning(
+            f"[applications.views] Keine Config für Server {server_id} gefunden "
+            f"– nutze vorhandene Config"
+        )
+        return server_id, fallback_cfg
+    return server_id, cfg
+
+
 class ApplicationChannelView(discord.ui.View):
     def __init__(self, app_id: int, server_id: str, applicant_id: str,
                  cfg: dict, bot: discord.Client, status: str = "open",
@@ -569,31 +640,47 @@ class ApplicationChannelView(discord.ui.View):
     def _is_staff_member(member: discord.Member, cfg: dict) -> bool:
         if member is None:
             return False
-        if getattr(member, "guild_permissions", None) is not None and member.guild_permissions.administrator:
+        perms = getattr(member, "guild_permissions", None)
+        if perms is not None and (getattr(perms, "administrator", False)
+                                  or getattr(perms, "manage_guild", False)):
             return True
         staff_ids = {r.strip() for r in ((cfg or {}).get("staff_role_ids") or "").split(",") if r.strip()}
+        if not staff_ids:
+            return False
         return bool(staff_ids & {str(r.id) for r in getattr(member, "roles", [])})
 
     def _is_staff(self, member: discord.Member, cfg: dict | None = None) -> bool:
         return self._is_staff_member(member, self.cfg if cfg is None else cfg)
 
     async def _resolve(self, interaction: discord.Interaction) -> tuple[str, dict]:
-        """Server-ID und Config anhand der Interaktion ermitteln.
+        return await resolve_server_context(interaction, self.server_id, self.cfg)
 
-        app_ids werden pro Server vergeben, die custom_ids enthalten aber nur die
-        app_id. Bei mehreren Servern kann dieselbe custom_id existieren – dann
-        gewinnt die zuletzt registrierte View. Die Server-ID darf deshalb nicht
-        aus der View kommen, sondern muss aus der Interaktion stammen.
-        """
-        server_id = str(interaction.guild_id) if interaction.guild_id else self.server_id
-        cfg = self.cfg
-        if server_id != self.server_id:
-            try:
-                cfg = await ApplicationManager.get_server_config(server_id) or {}
-            except Exception as e:
-                logger.error(f"[ApplicationChannelView] Config für {server_id}: {e}")
-                cfg = {}
-        return server_id, cfg
+    def _log_denied(self, interaction: discord.Interaction, cfg: dict):
+        """Protokolliert, WARUM ein Klick abgelehnt wurde (Rollen/Permissions)."""
+        user  = getattr(interaction, "user", None)
+        perms = getattr(user, "guild_permissions", None)
+        try:
+            roles = [str(r.id) for r in getattr(user, "roles", [])]
+        except Exception:
+            roles = []
+        logger.warning(
+            f"[ApplicationChannelView] Zugriff verweigert: Bewerbung #{self.app_id} "
+            f"guild={interaction.guild_id} user={getattr(user, 'id', '?')} "
+            f"admin={getattr(perms, 'administrator', None)} "
+            f"manage_guild={getattr(perms, 'manage_guild', None)} "
+            f"user_roles={roles} staff_roles={(cfg or {}).get('staff_role_ids')!r}"
+        )
+
+    async def _deny(self, interaction: discord.Interaction, cfg: dict, text: str):
+        """Ablehnung beantworten – egal ob schon geantwortet/deferred wurde."""
+        self._log_denied(interaction, cfg)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                await interaction.response.send_message(text, ephemeral=True)
+        except discord.HTTPException as e:
+            logger.warning(f"[ApplicationChannelView] Antwort nicht möglich ({e})")
 
     def _build(self):
         self.clear_items()
@@ -663,9 +750,13 @@ class ApplicationChannelView(discord.ui.View):
         add(f"app_close_{i}",   "🔒 Ticket schließen", discord.ButtonStyle.danger,    self._close)
 
     async def _claim(self, interaction: discord.Interaction):
+        # Erst bestätigen, dann arbeiten: DB-Aufrufe sind synchron und dürfen
+        # das 3-Sekunden-Fenster der Interaktion nicht sprengen.
+        if not await acknowledge(interaction):
+            return
         server_id, cfg = await self._resolve(interaction)
         if not self._is_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
+            await self._deny(interaction, cfg, "❌ Nur Staff.")
             return
         from .manager import update_application
         self.server_id   = server_id
@@ -674,17 +765,19 @@ class ApplicationChannelView(discord.ui.View):
         update_application(server_id, self.app_id, {"claimed_by": self._claimed_by})
         self._tolerant = False   # ab jetzt wieder normal rendern
         self._build()
-        await interaction.response.edit_message(view=self)
+        await interaction.message.edit(view=self)
         await interaction.channel.send(f"✅ {interaction.user.mention} hat die Bewerbung übernommen.")
 
     async def _unclaim(self, interaction: discord.Interaction):
+        if not await acknowledge(interaction):
+            return
         server_id, cfg = await self._resolve(interaction)
         claimed_by = self._claimed_by
         if server_id != self.server_id:
             row = load_application(server_id, self.app_id) or {}
             claimed_by = row.get("claimed_by")
         if str(interaction.user.id) != str(claimed_by) and not self._is_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Nur der Bearbeiter.", ephemeral=True)
+            await self._deny(interaction, cfg, "❌ Nur der Bearbeiter.")
             return
         from .manager import update_application
         self.server_id   = server_id
@@ -693,17 +786,19 @@ class ApplicationChannelView(discord.ui.View):
         update_application(server_id, self.app_id, {"claimed_by": None})
         self._tolerant = False   # ab jetzt wieder normal rendern
         self._build()
-        await interaction.response.edit_message(view=self)
+        await interaction.message.edit(view=self)
         await interaction.channel.send("🔄 Bewerbung freigegeben.")
 
     async def _accept(self, interaction: discord.Interaction):
+        if not await acknowledge(interaction, ephemeral=True):
+            return
         server_id, cfg = await self._resolve(interaction)
         if not self._is_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
+            await self._deny(interaction, cfg, "❌ Nur Staff.")
             return
         app = load_application(server_id, self.app_id)
         if not app:
-            await interaction.response.send_message("❌ Bewerbung nicht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ Bewerbung nicht gefunden.", ephemeral=True)
             return
         view = AcceptConfirmView(
             app=app,
@@ -711,7 +806,7 @@ class ApplicationChannelView(discord.ui.View):
             bot=self.bot,
             channel=interaction.channel,
         )
-        await interaction.response.send_message("Bestätigung wurde in den Bewerbungskanal gesendet.", ephemeral=True)
+        await interaction.followup.send("Bestätigung wurde in den Bewerbungskanal gesendet.", ephemeral=True)
         # Neutrale Nachricht ohne Erwähnung des auslösenden Staffs
         await interaction.channel.send(
             "⚠️ Bitte bestätige die Annahme dieser Bewerbung.",
@@ -719,25 +814,29 @@ class ApplicationChannelView(discord.ui.View):
         )
 
     async def _reject(self, interaction: discord.Interaction):
+        # Kein defer(): ein Modal MUSS die erste Antwort sein. Der Staff-Check
+        # nutzt die (beim Start gefüllte) Config-Cache und braucht keine DB.
         server_id, cfg = await self._resolve(interaction)
         if not self._is_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
-            return
-        app = load_application(server_id, self.app_id)
-        if not app:
-            await interaction.response.send_message("❌ Bewerbung nicht gefunden.", ephemeral=True)
+            await self._deny(interaction, cfg, "❌ Nur Staff.")
             return
         await interaction.response.send_modal(
-            RejectModal(app=app, cfg=cfg, bot=self.bot, channel=interaction.channel)
+            RejectModal(app_id=self.app_id, server_id=server_id, cfg=cfg,
+                        bot=self.bot, channel=interaction.channel)
         )
 
     async def _close(self, interaction: discord.Interaction):
+        if not await acknowledge(interaction, ephemeral=True):
+            return
         server_id, cfg = await self._resolve(interaction)
         if not self._is_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Nur Staff kann das Ticket schließen.", ephemeral=True)
+            await self._deny(interaction, cfg, "❌ Nur Staff kann das Ticket schließen.")
             return
         view = CloseConfirmView(self.app_id, server_id, cfg, self.bot, interaction.channel)
-        await interaction.response.send_message("Bist du sicher, dass du das Ticket schließen willst?", view=view, ephemeral=True)
+        await interaction.followup.send(
+            "Bist du sicher, dass du das Ticket schließen willst?",
+            view=view, ephemeral=True,
+        )
 
 
 # ── ANONYME ANNAHMEBESTÄTIGUNG ────────────────────────────────────────────────
@@ -753,11 +852,20 @@ class AcceptConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Bewerbung bestätigen", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Prüfe, ob der Benutzer Staff ist
-        if not self._is_staff(interaction.user):
-            await interaction.response.send_message("❌ Nur Staff kann bestätigen.", ephemeral=True)
+        # Zuerst bestätigen, danach prüfen/arbeiten (verhindert 10062)
+        if not await acknowledge(interaction, ephemeral=True):
             return
-        await interaction.response.defer(ephemeral=True)
+        server_id, cfg = await resolve_server_context(
+            interaction, self.app.get("server_id", ""), self.cfg
+        )
+        if not ApplicationChannelView._is_staff_member(interaction.user, cfg):
+            logger.warning(
+                f"[AcceptConfirmView] Zugriff verweigert: Bewerbung "
+                f"#{self.app.get('app_id')} user={interaction.user.id} guild={interaction.guild_id}"
+            )
+            await interaction.followup.send("❌ Nur Staff kann bestätigen.", ephemeral=True)
+            return
+        self.cfg = cfg
         for item in self.children:
             item.disabled = True
         try:
@@ -769,24 +877,26 @@ class AcceptConfirmView(discord.ui.View):
             channel=self.channel,
             app=self.app,
             acceptor=interaction.user,
-            cfg=self.cfg,
+            cfg=cfg,
             bot=self.bot,
         )
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._is_staff(interaction.user):
-            await interaction.response.send_message("❌ Nur Staff kann abbrechen.", ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
+            return
+        server_id, cfg = await resolve_server_context(
+            interaction, self.app.get("server_id", ""), self.cfg
+        )
+        if not ApplicationChannelView._is_staff_member(interaction.user, cfg):
+            await interaction.followup.send("❌ Nur Staff kann abbrechen.", ephemeral=True)
             return
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="Annahme abgebrochen.", view=self)
-
-    def _is_staff(self, member: discord.Member) -> bool:
-        if member.guild_permissions.administrator:
-            return True
-        staff_ids = {r.strip() for r in (self.cfg.get("staff_role_ids") or "").split(",") if r.strip()}
-        return bool(staff_ids & {str(r.id) for r in member.roles})
+        try:
+            await interaction.message.edit(content="Annahme abgebrochen.", view=self)
+        except Exception:
+            pass
 
 
 class RejectModal(discord.ui.Modal, title="Bewerbung ablehnen"):
@@ -797,19 +907,33 @@ class RejectModal(discord.ui.Modal, title="Bewerbung ablehnen"):
         required=True, max_length=500,
     )
 
-    def __init__(self, app: dict, cfg: dict, bot: discord.Client, channel):
+    def __init__(self, app_id: int, server_id: str, cfg: dict, bot: discord.Client, channel):
         super().__init__()
-        self.app     = app
-        self.cfg     = cfg
-        self.bot     = bot
-        self.channel = channel
+        self.app_id    = app_id
+        self.server_id = server_id
+        self.cfg       = cfg
+        self.bot       = bot
+        self.channel   = channel
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
+            return
+        server_id, cfg = await resolve_server_context(interaction, self.server_id, self.cfg)
+        if not ApplicationChannelView._is_staff_member(interaction.user, cfg):
+            logger.warning(
+                f"[RejectModal] Zugriff verweigert: Bewerbung #{self.app_id} "
+                f"user={interaction.user.id} guild={interaction.guild_id}"
+            )
+            await interaction.followup.send("❌ Nur Staff kann ablehnen.", ephemeral=True)
+            return
+        app = load_application(server_id, self.app_id)
+        if not app:
+            await interaction.followup.send("❌ Bewerbung nicht gefunden.", ephemeral=True)
+            return
         await ApplicationManager.reject_application(
             guild=interaction.guild, channel=self.channel,
-            app=self.app, rejector=interaction.user,
-            reason=self.reason.value, cfg=self.cfg,
+            app=app, rejector=interaction.user,
+            reason=self.reason.value, cfg=cfg,
         )
 
 
@@ -824,14 +948,23 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Ja, Ticket schließen", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._is_staff(interaction.user):
-            await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
             return
+        server_id, cfg = await resolve_server_context(interaction, self.server_id, self.cfg)
+        if not ApplicationChannelView._is_staff_member(interaction.user, cfg):
+            logger.warning(
+                f"[CloseConfirmView] Zugriff verweigert: Bewerbung #{self.app_id} "
+                f"user={interaction.user.id} guild={interaction.guild_id}"
+            )
+            await interaction.followup.send("❌ Nur Staff.", ephemeral=True)
+            return
+        self.server_id = server_id
+        self.cfg       = cfg
 
-        # 🔧 FIX: Sofortige Bestätigung (bevor der Kanal gelöscht wird)
-        await interaction.response.send_message("🔒 Ticket wird geschlossen...", ephemeral=True)
+        # 🔧 Sofortige Bestätigung (bevor der Kanal gelöscht wird)
+        await interaction.followup.send("🔒 Ticket wird geschlossen...", ephemeral=True)
 
-        app = load_application(self.server_id, self.app_id)
+        app = load_application(server_id, self.app_id)
         if not app:
             # Nachricht wurde bereits gesendet, aber wir können noch eine followup senden (Kanal existiert noch)
             await interaction.followup.send("Bewerbung nicht gefunden.", ephemeral=True)
@@ -847,13 +980,9 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self._is_staff(interaction.user):
-            await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
+        if not await acknowledge(interaction, ephemeral=True):
             return
-        await interaction.response.edit_message(content="Vorgang abgebrochen.", view=None)
-
-    def _is_staff(self, member: discord.Member) -> bool:
-        if member.guild_permissions.administrator:
-            return True
-        staff_ids = {r.strip() for r in (self.cfg.get("staff_role_ids") or "").split(",") if r.strip()}
-        return bool(staff_ids & {str(r.id) for r in member.roles})
+        try:
+            await interaction.message.edit(content="Vorgang abgebrochen.", view=None)
+        except Exception:
+            pass
