@@ -547,7 +547,8 @@ class MinecraftNameModal(discord.ui.Modal, title="Bewerbung einreichen"):
 
 class ApplicationChannelView(discord.ui.View):
     def __init__(self, app_id: int, server_id: str, applicant_id: str,
-                 cfg: dict, bot: discord.Client, status: str = "open"):
+                 cfg: dict, bot: discord.Client, status: str = "open",
+                 claimed_by: str | None = None, tolerant: bool = False):
         super().__init__(timeout=None)
         self.app_id       = app_id
         self.server_id    = server_id
@@ -555,14 +556,44 @@ class ApplicationChannelView(discord.ui.View):
         self.cfg          = cfg
         self.bot          = bot
         self.status       = status          # "open" oder "accepted"
-        self._claimed_by: str | None = None
+        # claimed_by MUSS vor _build() gesetzt sein: _build() entscheidet anhand
+        # dieses Wertes, ob "Übernehmen" oder "Abgeben" registriert wird.
+        self._claimed_by: str | None = claimed_by
+        # tolerant=True registriert zusätzlich alle Custom-IDs, die auf einer
+        # bereits gesendeten Control-Nachricht vorkommen können
+        # (siehe _add_tolerant_items). Wird nur beim Wiederherstellen genutzt.
+        self._tolerant    = tolerant
         self._build()
 
-    def _is_staff(self, member: discord.Member) -> bool:
-        if member.guild_permissions.administrator:
+    @staticmethod
+    def _is_staff_member(member: discord.Member, cfg: dict) -> bool:
+        if member is None:
+            return False
+        if getattr(member, "guild_permissions", None) is not None and member.guild_permissions.administrator:
             return True
-        staff_ids = {r.strip() for r in (self.cfg.get("staff_role_ids") or "").split(",") if r.strip()}
-        return bool(staff_ids & {str(r.id) for r in member.roles})
+        staff_ids = {r.strip() for r in ((cfg or {}).get("staff_role_ids") or "").split(",") if r.strip()}
+        return bool(staff_ids & {str(r.id) for r in getattr(member, "roles", [])})
+
+    def _is_staff(self, member: discord.Member, cfg: dict | None = None) -> bool:
+        return self._is_staff_member(member, self.cfg if cfg is None else cfg)
+
+    async def _resolve(self, interaction: discord.Interaction) -> tuple[str, dict]:
+        """Server-ID und Config anhand der Interaktion ermitteln.
+
+        app_ids werden pro Server vergeben, die custom_ids enthalten aber nur die
+        app_id. Bei mehreren Servern kann dieselbe custom_id existieren – dann
+        gewinnt die zuletzt registrierte View. Die Server-ID darf deshalb nicht
+        aus der View kommen, sondern muss aus der Interaktion stammen.
+        """
+        server_id = str(interaction.guild_id) if interaction.guild_id else self.server_id
+        cfg = self.cfg
+        if server_id != self.server_id:
+            try:
+                cfg = await ApplicationManager.get_server_config(server_id) or {}
+            except Exception as e:
+                logger.error(f"[ApplicationChannelView] Config für {server_id}: {e}")
+                cfg = {}
+        return server_id, cfg
 
     def _build(self):
         self.clear_items()
@@ -575,66 +606,108 @@ class ApplicationChannelView(discord.ui.View):
             )
             btn_close.callback = self._close
             self.add_item(btn_close)
-            return
-
-        # Normale Buttons für offene Bewerbungen
-        if self._claimed_by:
-            btn_claim = discord.ui.Button(label="🔄 Abgeben",
-                                          style=discord.ButtonStyle.secondary,
-                                          custom_id=f"app_unclaim_{self.app_id}")
-            btn_claim.callback = self._unclaim
         else:
-            btn_claim = discord.ui.Button(label="📥 Übernehmen",
-                                          style=discord.ButtonStyle.primary,
-                                          custom_id=f"app_claim_{self.app_id}")
-            btn_claim.callback = self._claim
-        self.add_item(btn_claim)
+            # Normale Buttons für offene Bewerbungen
+            if self._claimed_by:
+                btn_claim = discord.ui.Button(label="🔄 Abgeben",
+                                              style=discord.ButtonStyle.secondary,
+                                              custom_id=f"app_unclaim_{self.app_id}")
+                btn_claim.callback = self._unclaim
+            else:
+                btn_claim = discord.ui.Button(label="📥 Übernehmen",
+                                              style=discord.ButtonStyle.primary,
+                                              custom_id=f"app_claim_{self.app_id}")
+                btn_claim.callback = self._claim
+            self.add_item(btn_claim)
 
-        btn_accept = discord.ui.Button(label="✅ Annehmen",
-                                       style=discord.ButtonStyle.success,
-                                       custom_id=f"app_accept_{self.app_id}")
-        btn_accept.callback = self._accept
-        self.add_item(btn_accept)
+            btn_accept = discord.ui.Button(label="✅ Annehmen",
+                                           style=discord.ButtonStyle.success,
+                                           custom_id=f"app_accept_{self.app_id}")
+            btn_accept.callback = self._accept
+            self.add_item(btn_accept)
 
-        btn_reject = discord.ui.Button(label="❌ Ablehnen",
-                                       style=discord.ButtonStyle.danger,
-                                       custom_id=f"app_reject_{self.app_id}")
-        btn_reject.callback = self._reject
-        self.add_item(btn_reject)
+            btn_reject = discord.ui.Button(label="❌ Ablehnen",
+                                           style=discord.ButtonStyle.danger,
+                                           custom_id=f"app_reject_{self.app_id}")
+            btn_reject.callback = self._reject
+            self.add_item(btn_reject)
+
+        if self._tolerant:
+            self._add_tolerant_items()
+
+    def _add_tolerant_items(self):
+        """Registriert zusätzlich ALLE Custom-IDs der Control-Nachricht.
+
+        Diese Instanz wird nie gerendert – sie sorgt nach einem Neustart nur
+        dafür, dass die Buttons auf den bereits gesendeten Nachrichten wieder
+        bedient werden können. Der auf der Nachricht sichtbare Zustand kann vom
+        DB-Zustand abweichen (z. B. wenn das Bearbeiten der Nachricht beim
+        Annehmen fehlgeschlagen ist) – dann sind sonst genau die dort sichtbaren
+        Buttons tot.
+        """
+        existing = {getattr(item, "custom_id", None) for item in self.children}
+
+        def add(custom_id: str, label: str, style, callback):
+            if custom_id in existing:
+                return
+            btn = discord.ui.Button(label=label, style=style, custom_id=custom_id, row=1)
+            btn.callback = callback
+            self.add_item(btn)
+            existing.add(custom_id)
+
+        i = self.app_id
+        add(f"app_claim_{i}",   "📥 Übernehmen",       discord.ButtonStyle.primary,   self._claim)
+        add(f"app_unclaim_{i}", "🔄 Abgeben",          discord.ButtonStyle.secondary, self._unclaim)
+        add(f"app_accept_{i}",  "✅ Annehmen",         discord.ButtonStyle.success,   self._accept)
+        add(f"app_reject_{i}",  "❌ Ablehnen",         discord.ButtonStyle.danger,    self._reject)
+        add(f"app_close_{i}",   "🔒 Ticket schließen", discord.ButtonStyle.danger,    self._close)
 
     async def _claim(self, interaction: discord.Interaction):
-        if not self._is_staff(interaction.user):
+        server_id, cfg = await self._resolve(interaction)
+        if not self._is_staff(interaction.user, cfg):
             await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
             return
-        self._claimed_by = str(interaction.user.id)
         from .manager import update_application
-        update_application(self.server_id, self.app_id, {"claimed_by": self._claimed_by})
+        self.server_id   = server_id
+        self.cfg         = cfg
+        self._claimed_by = str(interaction.user.id)
+        update_application(server_id, self.app_id, {"claimed_by": self._claimed_by})
+        self._tolerant = False   # ab jetzt wieder normal rendern
         self._build()
         await interaction.response.edit_message(view=self)
         await interaction.channel.send(f"✅ {interaction.user.mention} hat die Bewerbung übernommen.")
 
     async def _unclaim(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != self._claimed_by and not self._is_staff(interaction.user):
+        server_id, cfg = await self._resolve(interaction)
+        claimed_by = self._claimed_by
+        if server_id != self.server_id:
+            row = load_application(server_id, self.app_id) or {}
+            claimed_by = row.get("claimed_by")
+        if str(interaction.user.id) != str(claimed_by) and not self._is_staff(interaction.user, cfg):
             await interaction.response.send_message("❌ Nur der Bearbeiter.", ephemeral=True)
             return
-        self._claimed_by = None
         from .manager import update_application
-        update_application(self.server_id, self.app_id, {"claimed_by": None})
+        self.server_id   = server_id
+        self.cfg         = cfg
+        self._claimed_by = None
+        update_application(server_id, self.app_id, {"claimed_by": None})
+        self._tolerant = False   # ab jetzt wieder normal rendern
         self._build()
         await interaction.response.edit_message(view=self)
         await interaction.channel.send("🔄 Bewerbung freigegeben.")
 
     async def _accept(self, interaction: discord.Interaction):
-        if not self._is_staff(interaction.user):
+        server_id, cfg = await self._resolve(interaction)
+        if not self._is_staff(interaction.user, cfg):
             await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
             return
-        app = load_application(self.server_id, self.app_id)
+        app = load_application(server_id, self.app_id)
         if not app:
             await interaction.response.send_message("❌ Bewerbung nicht gefunden.", ephemeral=True)
             return
         view = AcceptConfirmView(
             app=app,
-            cfg=self.cfg,
+            cfg=cfg,
             bot=self.bot,
             channel=interaction.channel,
         )
@@ -646,22 +719,24 @@ class ApplicationChannelView(discord.ui.View):
         )
 
     async def _reject(self, interaction: discord.Interaction):
-        if not self._is_staff(interaction.user):
+        server_id, cfg = await self._resolve(interaction)
+        if not self._is_staff(interaction.user, cfg):
             await interaction.response.send_message("❌ Nur Staff.", ephemeral=True)
             return
-        app = load_application(self.server_id, self.app_id)
+        app = load_application(server_id, self.app_id)
         if not app:
             await interaction.response.send_message("❌ Bewerbung nicht gefunden.", ephemeral=True)
             return
         await interaction.response.send_modal(
-            RejectModal(app=app, cfg=self.cfg, bot=self.bot, channel=interaction.channel)
+            RejectModal(app=app, cfg=cfg, bot=self.bot, channel=interaction.channel)
         )
 
     async def _close(self, interaction: discord.Interaction):
-        if not self._is_staff(interaction.user):
+        server_id, cfg = await self._resolve(interaction)
+        if not self._is_staff(interaction.user, cfg):
             await interaction.response.send_message("❌ Nur Staff kann das Ticket schließen.", ephemeral=True)
             return
-        view = CloseConfirmView(self.app_id, self.server_id, self.cfg, self.bot, interaction.channel)
+        view = CloseConfirmView(self.app_id, server_id, cfg, self.bot, interaction.channel)
         await interaction.response.send_message("Bist du sicher, dass du das Ticket schließen willst?", view=view, ephemeral=True)
 
 

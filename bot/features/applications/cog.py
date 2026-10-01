@@ -9,7 +9,7 @@ from bot.utils.logger import get_logger
 from .views import ApplicationSetupView, ApplicationPanelView, ApplicationChannelView
 from .app_edit_views import AppEditMainView
 from .manager import (
-    ApplicationManager, load_application,
+    ApplicationManager, load_application, update_application,
     mark_app_message_deleted, append_app_message_edit,
     append_app_message,
 )
@@ -20,10 +20,16 @@ logger = get_logger("applications")
 class ApplicationsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._channel_views_restored = False
 
     @commands.Cog.listener()
     async def on_ready(self):
         await self._restore_panel_view()
+        # on_ready feuert bei jedem Reconnect erneut – die Kanal-Views
+        # (inkl. Abgleich der Control-Nachrichten) nur einmal pro Prozess.
+        if self._channel_views_restored:
+            return
+        self._channel_views_restored = True
         await self._restore_channel_views()
 
     async def _restore_panel_view(self):
@@ -31,28 +37,150 @@ class ApplicationsCog(commands.Cog):
         logger.info("✅ ApplicationPanelView wiederhergestellt")
 
     async def _restore_channel_views(self):
+        """Registriert die persistenten Views aller laufenden Bewerbungen.
+
+        Wichtig:
+          * Es müssen ALLE nicht abgeschlossenen Bewerbungen geladen werden –
+            auch die bereits angenommenen ("accepted"). Nur dort gibt es den
+            "🔒 Ticket schließen"-Button; fehlte die View, war er nach einem
+            Neustart ohne Funktion.
+          * tolerant=True registriert zusätzlich alle Custom-IDs, die auf der
+            bereits gesendeten Control-Nachricht stehen können.
+          * Ein Fehler bei einer Bewerbung darf die restlichen nicht verhindern.
+        """
         from bot.core.supabase_client import get_supabase
         try:
             supabase = get_supabase()
-            apps = supabase.table("applications").select("*").eq("status", "open").execute().data or []
+            apps = supabase.table("applications").select("*") \
+                .in_("status", ["open", "accepted"]).execute().data or []
             count = 0
             for app in apps:
-                cfg_r = supabase.table("application_servers")\
-                    .select("*").eq("server_id", app["server_id"]).execute()
-                cfg = cfg_r.data[0] if cfg_r.data else {}
-                local = load_application(app["server_id"], app["app_id"])
-                view = ApplicationChannelView(
-                    app_id=app["app_id"], server_id=app["server_id"],
-                    applicant_id=app["creator_id"], cfg=cfg, bot=self.bot,
-                    status=app.get("status", "open"),
-                )
-                if local and local.get("claimed_by"):
-                    view._claimed_by = local["claimed_by"]
-                self.bot.add_view(view)
-                count += 1
+                try:
+                    await self._restore_single_app(supabase, app)
+                    count += 1
+                except Exception as inner_e:
+                    logger.error(
+                        f"[_restore_channel_views] Bewerbung "
+                        f"{app.get('server_id')}/{app.get('app_id')}: {inner_e}"
+                    )
             logger.info(f"✅ {count} ApplicationChannelView(s) wiederhergestellt")
         except Exception as e:
             logger.error(f"[_restore_channel_views] {e}")
+
+    async def _restore_single_app(self, supabase, app: dict):
+        server_id = str(app.get("server_id") or "")
+        app_id    = app.get("app_id")
+        if not server_id or app_id is None:
+            return
+
+        cfg_r = supabase.table("application_servers").select("*") \
+            .eq("server_id", server_id).execute()
+        cfg = cfg_r.data[0] if cfg_r.data else {}
+
+        row    = load_application(server_id, app_id) or app
+        status = row.get("status") or app.get("status") or "open"
+
+        view = ApplicationChannelView(
+            app_id=app_id,
+            server_id=server_id,
+            applicant_id=str(row.get("creator_id") or ""),
+            cfg=cfg,
+            bot=self.bot,
+            status=status,
+            claimed_by=row.get("claimed_by"),
+            tolerant=True,
+        )
+        self.bot.add_view(view)
+        # Die Custom-IDs sind jetzt registriert (der Store hält die Items);
+        # ab hier wird wieder normal gerendert.
+        view._tolerant = False
+
+        await self._sync_control_message(server_id, app_id, row, cfg)
+
+    async def _sync_control_message(self, server_id: str, app_id: int, app: dict, cfg: dict):
+        """Bringt die Buttons der Control-Nachricht mit dem DB-Status in Einklang.
+
+        Ältere Bewerbungen haben keine gespeicherte control_message_id. Wurde
+        eine solche Bewerbung angenommen, blieben in der Nachricht die alten
+        Buttons (Übernehmen/Annehmen/Ablehnen) stehen – ein "Schließen"-Button
+        fehlt dort komplett. Das wird hier nachgeholt.
+        """
+        status  = app.get("status") or "open"
+        channel = None
+        if app.get("channel_id"):
+            try:
+                channel = self.bot.get_channel(int(app["channel_id"]))
+            except (TypeError, ValueError):
+                channel = None
+        if channel is None:
+            return   # Kanal existiert nicht mehr
+
+        message = await self._find_control_message(channel, app_id, app.get("control_message_id"))
+        if message is None:
+            return
+
+        if status == "accepted":
+            expected = {f"app_close_{app_id}"}
+        else:
+            expected = {
+                f"app_accept_{app_id}",
+                f"app_reject_{app_id}",
+                f"app_unclaim_{app_id}" if app.get("claimed_by") else f"app_claim_{app_id}",
+            }
+
+        if not expected.issubset(self._component_custom_ids(message)):
+            view = ApplicationChannelView(
+                app_id=app_id,
+                server_id=server_id,
+                applicant_id=str(app.get("creator_id") or ""),
+                cfg=cfg,
+                bot=self.bot,
+                status=status,
+                claimed_by=app.get("claimed_by"),
+            )
+            await message.edit(view=view)
+            logger.info(
+                f"[_restore_channel_views] Buttons von Bewerbung #{app_id} "
+                f"({server_id}) an Status '{status}' angepasst"
+            )
+
+        if str(app.get("control_message_id") or "") != str(message.id):
+            update_application(server_id, app_id, {"control_message_id": str(message.id)})
+
+    @staticmethod
+    def _component_custom_ids(message: discord.Message) -> set:
+        out = set()
+        for action_row in getattr(message, "components", []) or []:
+            for child in getattr(action_row, "children", []) or []:
+                cid = getattr(child, "custom_id", None)
+                if cid:
+                    out.add(cid)
+        return out
+
+    async def _find_control_message(self, channel, app_id: int, message_id):
+        """Findet die Control-Nachricht der Bewerbung (Buttons des Bots)."""
+        if message_id:
+            try:
+                return await channel.fetch_message(int(message_id))
+            except Exception as e:
+                logger.warning(
+                    f"[_restore_channel_views] Control-Nachricht {message_id} "
+                    f"nicht abrufbar ({e}) – suche im Kanal"
+                )
+
+        wanted = {
+            f"app_claim_{app_id}", f"app_unclaim_{app_id}",
+            f"app_accept_{app_id}", f"app_reject_{app_id}", f"app_close_{app_id}",
+        }
+        try:
+            async for msg in channel.history(limit=100, oldest_first=True):
+                if self.bot.user and msg.author.id != self.bot.user.id:
+                    continue
+                if wanted & self._component_custom_ids(msg):
+                    return msg
+        except Exception as e:
+            logger.warning(f"[_restore_channel_views] Suche in Kanal {getattr(channel, 'id', '?')}: {e}")
+        return None
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
