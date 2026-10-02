@@ -58,7 +58,8 @@ FEATURE_COGS = [
     "bot.features.backups_feature.cog",
     "bot.features.moderation.raid_protection",
 #    "bot.features.moderation.link_protection",
-    "bot.features.feature_suggest.cog"
+    "bot.features.feature_suggest.cog",
+    "bot.features.moderation.raid.word_filter"
 ]
 
 
