@@ -131,9 +131,31 @@ def _audit_entry_details(entry: discord.AuditLogEntry) -> dict[str, Any]:
 
 async def _import_audit_entry(guild: discord.Guild, entry: discord.AuditLogEntry) -> bool:
     """Speichert einen Audit-Eintrag genau einmal. True bedeutet: neu importiert."""
-    target = entry.target
-    target_id = str(getattr(target, "id", guild.id))
-    target_name = str(target) if target is not None else guild.name
+    # ─────────────────────────────────────────────────────────────────────────
+    # SICHERES AUFLÖSEN VON entry.target
+    # entry.target kann bei bestimmten Aktionen (role_update, member_disconnect,
+    # etc.) crashen, wenn entry._target_id None ist. Deshalb: target_id direkt
+    # lesen und entry.target nur in try/except auflösen.
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_target_id = getattr(entry, "target_id", None)
+
+    target = None
+    if raw_target_id is not None:
+        try:
+            target = entry.target
+        except (TypeError, AttributeError, discord.NotFound):
+            target = None
+
+    if target is not None:
+        target_id = str(getattr(target, "id", raw_target_id))
+        target_name = str(target)
+    elif raw_target_id is not None:
+        target_id = str(raw_target_id)
+        target_name = None
+    else:
+        target_id = str(guild.id)
+        target_name = guild.name
+
     moderator = entry.user
     audit_id = str(entry.id)
     payload = {
@@ -792,8 +814,17 @@ class ModerationCog(commands.Cog):
                 after = discord.Object(id=latest_id) if latest_id else None
                 imported = 0
                 async for entry in guild.audit_logs(limit=None, after=after, oldest_first=True):
-                    if await _import_audit_entry(guild, entry):
-                        imported += 1
+                    # Pro Eintrag absichern, damit ein einzelner kaputter
+                    # Audit-Eintrag (z. B. role_update ohne target_id) nicht
+                    # die restlichen blockiert.
+                    try:
+                        if await _import_audit_entry(guild, entry):
+                            imported += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[audit-import] Eintrag {getattr(entry, 'id', '?')} "
+                            f"(action={_audit_action_name(entry.action)}) übersprungen: {e}"
+                        )
                 logger.info(
                     f"[audit-import] {guild.name} ({guild.id}): {imported} neue Audit-Einträge"
                 )
