@@ -29,11 +29,19 @@ Bereitstellung
 2. Cog wird ueber `bot.features.moderation.raid_protection` mitgeladen.
 3. `/wordfilter setup` -> Log-Kanal + Default-Aktion waehlen, aktivieren,
    danach `/wordfilter add` fuer die Liste (oder `/wordfilter import`).
+
+Sticker-Bug-Fix
+---------------
+Discord stellt Custom-Emojis und Mentions als Markup dar, das die Snowflake-ID
+enthaelt (z. B. `<:67:1481966896105394237>`).  Eine verbotene Zahl wie "67"
+konnte dadurch faelschlich Treffer ausloesen.  Mit `FIX_STICKER_BUG = True`
+werden Sticker, Custom-Emojis und Mentions vor der Pruefung entfernt.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -76,6 +84,21 @@ ACTION_CHOICES = [
 CACHE_TTL_SECONDS = 60
 # Schneidet Discord-Reasons auf das erlaubte Mass.
 MAX_REASON_LENGTH = 400
+
+# ── Sticker-Bug-Fix ─────────────────────────────────────────────────────────
+# Wenn True, werden Discord-Sticker, Custom-Emojis und Mentions vor der
+# Filterpruefung aus dem Nachrichteninhalt entfernt.  Damit kann eine
+# verbotene Zahl wie "67" nicht mehr ueber einen Sticker
+# `<:67:1481966896105394237>` oder eine Mention ausgeloest werden.
+#
+# Auf False setzen, um das alte Verhalten (Content wird roh geprueft)
+# wiederherzustellen.
+FIX_STICKER_BUG = False
+
+# Discord-Custom-Emoji / Sticker:  <a:name:id>  oder  <:name:id>
+_CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>")
+# User-/Rollen-/Kanal-Mentions:  <@123>  <@!123>  <@&123>  <#123>
+_MENTION_RE = re.compile(r"<[@#][!&]?\d+>")
 
 
 # ── Cache ───────────────────────────────────────────────────────────────────
@@ -178,6 +201,24 @@ class WordFilterCog(commands.Cog):
             }
 
     # ------------------------------------------------------------------
+    # Sticker-Bug-Fix
+    # ------------------------------------------------------------------
+    def _sanitize_content(self, message: discord.Message) -> str:
+        """
+        Entfernt Discord-Markup (Sticker, Custom-Emojis, Mentions), damit
+        IDs und Namen nicht versehentlich den Wortfilter ausloesen.
+
+        Wird nur ausgefuehrt, wenn FIX_STICKER_BUG aktiv ist.  Bei False
+        wird der rohe Content zurueckgegeben (altes Verhalten).
+        """
+        if not FIX_STICKER_BUG:
+            return message.content or ""
+        content = message.content or ""
+        content = _CUSTOM_EMOJI_RE.sub(" ", content)
+        content = _MENTION_RE.sub(" ", content)
+        return content
+
+    # ------------------------------------------------------------------
     # Berechtigungspruefung fuer Commands
     # ------------------------------------------------------------------
     async def _require_moderator(self, interaction: discord.Interaction) -> bool:
@@ -233,7 +274,15 @@ class WordFilterCog(commands.Cog):
             return
 
         config = state.config
-        content = message.content or ""
+
+        # Sticker-Bug-Fix: eine Nachricht, die NUR aus Stickern besteht,
+        # hat keinen pruefbaren Text.  Ohne diesen Check wuerde der leere
+        # Content durch die min_message_length-Pruefung fallen, aber wir
+        # wollen hier explizit frueh raus.
+        if FIX_STICKER_BUG and not (message.content or "").strip() and message.stickers:
+            return
+
+        content = self._sanitize_content(message)
         if len(content.strip()) < int(config.get("min_message_length") or 1):
             return
         if str(message.channel.id) in state.exempt_channels():
@@ -466,7 +515,9 @@ class WordFilterCog(commands.Cog):
             ),
             inline=False,
         )
-        snippet = (message.content or "").strip()
+        # Auch hier die bereinigte Sicht verwenden, damit im Log-Embed nicht
+        # wieder die Sticker-/Mention-IDs auftauchen.
+        snippet = self._sanitize_content(message).strip()
         if len(snippet) > 900:
             snippet = snippet[:900] + "..."
         if snippet:
@@ -596,20 +647,53 @@ class WordFilterCog(commands.Cog):
             )
             return
 
-        matches = await asyncio.to_thread(state.matcher.check_all, text)
+        # Zwei Sichten:
+        #   raw       = was der Moderator eingetippt hat
+        #   sanitized = was der Filter bei einer echten Nachricht sehen wuerde
+        #               (Sticker/Emojis/Mentions entfernt, falls FIX_STICKER_BUG)
+        raw_text = text or ""
+        if FIX_STICKER_BUG:
+            sanitized_text = _CUSTOM_EMOJI_RE.sub(" ", raw_text)
+            sanitized_text = _MENTION_RE.sub(" ", sanitized_text)
+        else:
+            sanitized_text = raw_text
+
+        matches_raw = await asyncio.to_thread(state.matcher.check_all, raw_text)
+        if sanitized_text != raw_text:
+            matches_effective = await asyncio.to_thread(
+                state.matcher.check_all, sanitized_text
+            )
+        else:
+            matches_effective = matches_raw
+
         embed = discord.Embed(
             title="🧪 Wortfilter-Test",
-            color=discord.Color.red() if matches else discord.Color.green(),
+            color=discord.Color.red() if matches_effective else discord.Color.green(),
             timestamp=datetime.now(timezone.utc),
         )
-        snippet = text if len(text) <= 900 else text[:900] + "..."
+
+        # Eingabe + ggf. bereinigte Sicht
+        snippet = raw_text if len(raw_text) <= 900 else raw_text[:900] + "..."
         embed.add_field(name="Eingabe", value=f"```\n{snippet}\n```", inline=False)
+
+        if FIX_STICKER_BUG and sanitized_text != raw_text:
+            clean_snippet = (
+                sanitized_text if len(sanitized_text) <= 900 else sanitized_text[:900] + "..."
+            )
+            embed.add_field(
+                name="Nach Sticker-/Mention-Fix",
+                value=f"```\n{clean_snippet or '-'}\n```",
+                inline=False,
+            )
+
         embed.add_field(
             name="Normalisiert",
-            value=f"```\n{reduce_text(text)[:900] or '-'}\n```",
+            value=f"```\n{reduce_text(sanitized_text)[:900] or '-'}\n```",
             inline=False,
         )
-        if matches:
+
+        # Treffer-Listen: Roh vs. Effektiv
+        def _render_matches(matches) -> str:
             lines = []
             for match in matches[:15]:
                 action = _effective_action(state.config, match.entry)
@@ -619,32 +703,41 @@ class WordFilterCog(commands.Cog):
                     f"→ {ACTION_LABELS.get(action, action)}\n"
                     f"  erkannt als `{discord.utils.escape_markdown(match.matched_text)}`"
                 )
-            embed.add_field(name="Treffer", value="\n".join(lines)[:1024], inline=False)
+            return "\n".join(lines)[:1024]
+
+        if matches_effective:
+            embed.add_field(
+                name="Treffer (effektiv)",
+                value=_render_matches(matches_effective),
+                inline=False,
+            )
+            if matches_raw and sanitized_text != raw_text:
+                # Roh-Treffer, die durch den Fix wegfallen, sind fuer Mods
+                # interessant - sonst wundert man sich, warum der Bot nicht
+                # reagiert, obwohl der Test-Text Treffer hat.
+                raw_only = [
+                    m for m in matches_raw
+                    if m.pattern not in {x.pattern for x in matches_effective}
+                ]
+                if raw_only:
+                    embed.add_field(
+                        name="⚠️ Nur im Roh-Text (durch Sticker-Fix entfernt)",
+                        value=_render_matches(raw_only),
+                        inline=False,
+                    )
         else:
             embed.add_field(name="Treffer", value="Kein Treffer.", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            if matches_raw and sanitized_text != raw_text:
+                embed.add_field(
+                    name="ℹ️ Hinweis",
+                    value=(
+                        "Der rohe Text hätte Treffer, aber der Sticker-/Mention-Fix "
+                        "entfernt sie (siehe `FIX_STICKER_BUG`)."
+                    ),
+                    inline=False,
+                )
 
-    @wordfilter.command(
-        name="analyze",
-        description="[Mod] Zeichen eines Textes analysieren (Homoglyphe finden)",
-    )
-    @app_commands.describe(text="Text mit verdächtigen Zeichen")
-    async def wordfilter_analyze(self, interaction: discord.Interaction, text: str):
-        if not await self._require_moderator(interaction):
-            return
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🔬 Zeichenanalyse",
-                description=(
-                    f"**Original**\n```\n{text[:800]}\n```\n"
-                    f"**Skeleton**\n```\n{reduce_text(text)[:800]}\n```\n"
-                    f"**Zeichen**\n```\n{describe_characters(text)[:800]}\n```"
-                ),
-                color=discord.Color.blurple(),
-                timestamp=datetime.now(timezone.utc),
-            ),
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ---------- Einträge ----------
     @wordfilter.command(name="add", description="[Mod] Verbotenes Wort/Zahl hinzufügen")
@@ -1018,6 +1111,15 @@ class WordFilterSetupView(discord.ui.View):
                 ),
                 inline=False,
             )
+            if FIX_STICKER_BUG:
+                embed.add_field(
+                    name="Sticker-Fix",
+                    value=(
+                        "Sticker, Custom-Emojis und Mentions werden vor der "
+                        "Prüfung entfernt (`FIX_STICKER_BUG = True`)."
+                    ),
+                    inline=False,
+                )
         else:
             embed.add_field(
                 name="Kanäle ohne Prüfung",
