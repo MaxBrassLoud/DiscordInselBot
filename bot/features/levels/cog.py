@@ -49,7 +49,7 @@ VOICE_XP_PER_MINUTE = 2             # XP pro Minute im Voice (wenn nicht taub)
 MSG_XP = 30
 REACTION_XP = 5
 
-VOICE_SOLO_XP_ENABLED = True        # True = auch allein im Voice XP sammeln, False = nur mit min. 1 anderen Person
+VOICE_SOLO_XP_ENABLED = False      # True = auch allein im Voice XP sammeln, False = nur mit min. 1 anderen Person
 
 FLUSH_INTERVAL_SECONDS = 600
 FLUSH_EVENT_THRESHOLD = 200
