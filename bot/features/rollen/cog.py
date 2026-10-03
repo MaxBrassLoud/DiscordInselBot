@@ -19,13 +19,12 @@ def _member_count(guild: discord.Guild, role: discord.Role) -> int:
 
 
 def _build_roles_embed(guild: discord.Guild, modules: list[dict]) -> discord.Embed:
-    """Eine Embed-Nachricht mit allen Modulen inkl. Beschreibung."""
+    """Öffentliche Rollenvergabe-Nachricht (Embed)."""
     embed = discord.Embed(
         title=HEADER_TITLE,
         description="Reagiere mit dem passenden Emoji, um die Rolle zu erhalten oder zu entfernen.",
         color=discord.Color.blurple(),
     )
-
     if not modules:
         embed.add_field(name="Hinweis", value="*Keine Rollen konfiguriert.*", inline=False)
         return embed
@@ -35,207 +34,237 @@ def _build_roles_embed(guild: discord.Guild, modules: list[dict]) -> discord.Emb
         role = guild.get_role(int(mod["role_id"]))
         if not role:
             continue
-
         emoji = mod.get("emoji", "🎭")
         desc  = (mod.get("role_desc") or "").strip()
-
         lines.append(f"{emoji} = {role.mention}")
         if desc:
             for dl in desc.splitlines():
                 if dl.strip():
                     lines.append(f"   └ *{dl.strip()}*")
         lines.append("")
-
     embed.description += "\n\n" + "\n".join(lines).rstrip()
     return embed
 
 
-async def refresh_role_message(bot: discord.Client, guild: discord.Guild):
-    """Aktualisiert Embed + Reactions der öffentlichen Rollenvergabe-Nachricht."""
+def _build_editor_embed(guild: discord.Guild,
+                        modules: list[dict],
+                        channel_id: str | None,
+                        dirty: bool = False) -> discord.Embed:
+    """Editor-Embed mit nummerierter Modul-Liste."""
+    title = "🛠️ Rollenvergabe bearbeiten" + (" • *ungespeichert*" if dirty else "")
+    embed = discord.Embed(title=title, color=discord.Color.orange() if dirty else discord.Color.blurple())
+
+    if modules:
+        for i, mod in enumerate(modules, 1):
+            role = guild.get_role(int(mod["role_id"]))
+            role_txt = role.mention if role else "❓ gelöscht"
+            emoji = mod.get("emoji", "🎭")
+            desc  = (mod.get("role_desc") or "*keine Beschreibung*")[:100]
+            embed.add_field(
+                name=f"{i}. {emoji} {mod.get('display_name', '?')} → {role_txt}",
+                value=desc,
+                inline=False,
+            )
+    else:
+        embed.add_field(name="Module", value="*Keine Module – füge eins hinzu.*", inline=False)
+
+    embed.add_field(
+        name="📢 Zielkanal",
+        value=f"<#{channel_id}>" if channel_id else "*nicht gesetzt*",
+        inline=False,
+    )
+    embed.set_footer(text="Änderungen erst mit 💾 Speichern wirksam.")
+    return embed
+
+
+async def _apply_to_public_message(bot: discord.Client, guild: discord.Guild,
+                                   modules: list[dict], channel_id: str):
+    """Schreibt Module + Kanal in die DB und aktualisiert die öffentliche Nachricht."""
     supabase = get_supabase()
+
+    # 1) Alte role_modules-Zeilen der Gilde löschen und neu schreiben
+    supabase.table("role_modules").delete().eq("guild_id", str(guild.id)).execute()
+
+    saved = []
+    for mod in modules:
+        role = guild.get_role(int(mod["role_id"]))
+        if not role:
+            continue
+        row = {
+            "guild_id":     str(guild.id),
+            "role_id":      str(role.id),
+            "role_name":    mod.get("role_name", role.name),
+            "display_name": mod.get("display_name", role.name),
+            "role_desc":    mod.get("role_desc", ""),
+            "emoji":        mod.get("emoji", "🎭"),
+            "channel_id":   str(channel_id),
+        }
+        supabase.table("role_modules").insert(row).execute()
+        saved.append(row)
+
+    # 2) Bestehende öffentliche Nachricht suchen
     rm = supabase.table("role_message").select("*").eq(
         "guild_id", str(guild.id)
     ).execute()
-    if not rm.data:
-        return
 
-    rm = rm.data[0]
-    channel = guild.get_channel(int(rm["channel_id"]))
-    if not channel:
-        return
-
-    try:
-        msg = await channel.fetch_message(int(rm["message_id"]))
-    except (discord.NotFound, discord.Forbidden):
-        return
-
-    mods = supabase.table("role_modules").select("*").eq(
-        "guild_id", str(guild.id)
-    ).execute().data
-
-    # 1) Embed aktualisieren
-    try:
-        await msg.edit(embed=_build_roles_embed(guild, mods))
-    except Exception as e:
-        logger.warning(f"Embed-Update fehlgeschlagen: {e}")
-
-    # 2) Reactions synchronisieren: fehlende hinzufügen, überflüssige entfernen
-    wanted = {m.get("emoji", "🎭") for m in mods}
-    existing = {str(r.emoji) for r in msg.reactions}
-
-    # entfernen
-    for reaction in list(msg.reactions):
-        if str(reaction.emoji) not in wanted:
+    old_msg = None
+    old_channel = None
+    if rm.data:
+        old_channel = guild.get_channel(int(rm.data[0]["channel_id"]))
+        if old_channel:
             try:
-                await msg.clear_reaction(reaction.emoji)
-            except discord.HTTPException:
-                pass
+                old_msg = await old_channel.fetch_message(int(rm.data[0]["message_id"]))
+            except (discord.NotFound, discord.Forbidden):
+                old_msg = None
 
-    # hinzufügen
-    for emoji in wanted - existing:
+    target_channel = guild.get_channel(int(channel_id))
+    if not target_channel:
+        raise RuntimeError("Zielkanal nicht gefunden.")
+
+    embed = _build_roles_embed(guild, saved)
+
+    # 3) Wenn Kanal gewechselt: alte Nachricht löschen, neue senden
+    if old_msg and old_channel and old_channel.id != target_channel.id:
         try:
-            await msg.add_reaction(emoji)
-        except discord.HTTPException as e:
-            logger.warning(f"Konnte Emoji {emoji} nicht setzen: {e}")
+            await old_msg.delete()
+        except Exception:
+            pass
+        msg = await target_channel.send(embed=embed)
+        # Reactions setzen
+        for mod in saved:
+            try:
+                await msg.add_reaction(mod["emoji"])
+            except discord.HTTPException as e:
+                logger.warning(f"Emoji {mod['emoji']} konnte nicht gesetzt werden: {e}")
+
+    elif old_msg:
+        # 4) Gleicher Kanal: Nachricht editieren
+        try:
+            await old_msg.edit(embed=embed)
+        except Exception as e:
+            logger.warning(f"Edit fehlgeschlagen: {e}")
+
+        # Reactions abgleichen
+        wanted   = {m["emoji"] for m in saved}
+        existing = {str(r.emoji) for r in old_msg.reactions}
+        for reaction in list(old_msg.reactions):
+            if str(reaction.emoji) not in wanted:
+                try:
+                    await old_msg.clear_reaction(reaction.emoji)
+                except discord.HTTPException:
+                    pass
+        for emoji in wanted - existing:
+            try:
+                await old_msg.add_reaction(emoji)
+            except discord.HTTPException as e:
+                logger.warning(f"Emoji {emoji} konnte nicht gesetzt werden: {e}")
+        msg = old_msg
+
+    else:
+        # 5) Keine Nachricht vorhanden → neue senden
+        msg = await target_channel.send(embed=embed)
+        for mod in saved:
+            try:
+                await msg.add_reaction(mod["emoji"])
+            except discord.HTTPException as e:
+                logger.warning(f"Emoji {mod['emoji']} konnte nicht gesetzt werden: {e}")
+
+    # 6) role_message-Eintrag upserten
+    supabase.table("role_message").upsert({
+        "guild_id":   str(guild.id),
+        "channel_id": str(target_channel.id),
+        "message_id": str(msg.id),
+    }).execute()
+
+    return msg
 
 
 # ──────────────────────────────────────────────────────────────
-#  Modal: neues Modul anlegen
+#  Modal: Modul hinzufügen (mit vorausgefüllten Feldern beim Edit)
 # ──────────────────────────────────────────────────────────────
-class AddRoleModuleModal(discord.ui.Modal, title="Rollenmodul hinzufügen"):
-    role_name = discord.ui.TextInput(
-        label="Anzeigename",
-        placeholder="z.B. Server-Ping",
-        required=True, max_length=100,
-    )
-    role_emoji = discord.ui.TextInput(
-        label="Emoji (Reaction)",
-        placeholder="z.B. 🔔  oder  <:name:1234567890>",
-        required=True, max_length=60,
-    )
+class ModuleModal(discord.ui.Modal):
+    role_name = discord.ui.TextInput(label="Anzeigename", required=True, max_length=100)
+    role_emoji = discord.ui.TextInput(label="Emoji (Reaction)", required=True, max_length=60)
     role_desc = discord.ui.TextInput(
-        label="Beschreibung",
-        placeholder="Was bekommt man durch diese Rolle?",
-        required=True, style=discord.TextStyle.paragraph, max_length=300,
+        label="Beschreibung", required=True,
+        style=discord.TextStyle.paragraph, max_length=300,
     )
 
-    def __init__(self, setup_view: "SetupRoleView"):
-        super().__init__()
-        self.setup_view = setup_view
+    def __init__(self, editor: "RoleEditorView", index: int | None = None):
+        """
+        index=None → neues Modul
+        index=int  → bestehendes Modul bearbeiten
+        """
+        super().__init__(title="Modul hinzufügen" if index is None else "Modul bearbeiten")
+        self.editor = editor
+        self.index  = index
+
+        if index is not None:
+            mod = editor.modules[index]
+            self.role_name.default  = mod.get("display_name", "")
+            self.role_emoji.default = mod.get("emoji", "🎭")
+            self.role_desc.default  = mod.get("role_desc", "") or ""
 
     async def on_submit(self, interaction: discord.Interaction):
-        for mod in self.setup_view.modules:
-            if mod["display_name"].lower() == self.role_name.value.lower():
-                await interaction.response.send_message(
-                    "❌ Ein Modul mit diesem Namen existiert bereits.", ephemeral=True
-                )
-                return
-            if mod.get("emoji") == self.role_emoji.value.strip():
-                await interaction.response.send_message(
-                    "❌ Dieses Emoji wird bereits verwendet.", ephemeral=True
-                )
-                return
+        name  = self.role_name.value.strip()
+        emoji = self.role_emoji.value.strip()
+        desc  = self.role_desc.value.strip()
 
-        view = RolePickerView(
-            display_name=self.role_name.value,
-            role_desc=self.role_desc.value.strip(),
-            emoji=self.role_emoji.value.strip(),
-            setup_view=self.setup_view,
-        )
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🎭 Rolle auswählen",
-                description=(
-                    f"Modul **{self.role_name.value}** wird angelegt.\n"
-                    f"Emoji: {self.role_emoji.value}\n"
-                    f"Beschreibung: *{self.role_desc.value.strip()}*\n\n"
-                    f"Wähle nun die **Discord-Rolle**."
-                ),
-                color=discord.Color.blurple(),
-            ),
-            view=view, ephemeral=True,
-        )
-
-
-# ──────────────────────────────────────────────────────────────
-#  Modal: bestehendes Modul bearbeiten
-# ──────────────────────────────────────────────────────────────
-class EditModuleModal(discord.ui.Modal, title="Rollenmodul bearbeiten"):
-    role_name = discord.ui.TextInput(
-        label="Anzeigename", required=True, max_length=100
-    )
-    role_emoji = discord.ui.TextInput(
-        label="Emoji (Reaction)", required=True, max_length=60
-    )
-    role_desc = discord.ui.TextInput(
-        label="Beschreibung",
-        required=True, style=discord.TextStyle.paragraph, max_length=300,
-    )
-
-    def __init__(self, module: dict, guild: discord.Guild):
-        super().__init__()
-        self.module = module
-        self.guild  = guild
-
-        # Vorbelegung
-        self.role_name.default  = module.get("display_name", "")
-        self.role_emoji.default = module.get("emoji", "🎭")
-        self.role_desc.default  = module.get("role_desc", "") or ""
-
-    async def on_submit(self, interaction: discord.Interaction):
-        supabase = get_supabase()
-        new_name  = self.role_name.value.strip()
-        new_emoji = self.role_emoji.value.strip()
-        new_desc  = self.role_desc.value.strip()
-
-        # Duplikat-Check (andere Module)
-        others = supabase.table("role_modules").select("*").eq(
-            "guild_id", str(self.guild.id)
-        ).execute().data
-        for m in others:
-            if m["id"] == self.module["id"]:
+        # Duplikat-Check
+        for i, mod in enumerate(self.editor.modules):
+            if self.index is not None and i == self.index:
                 continue
-            if (m.get("display_name") or "").lower() == new_name.lower():
+            if (mod.get("display_name") or "").lower() == name.lower():
                 await interaction.response.send_message(
                     "❌ Ein anderes Modul hat diesen Namen schon.", ephemeral=True
                 )
                 return
-            if m.get("emoji") == new_emoji:
+            if mod.get("emoji") == emoji:
                 await interaction.response.send_message(
                     "❌ Ein anderes Modul nutzt dieses Emoji schon.", ephemeral=True
                 )
                 return
 
-        # Update in DB
-        supabase.table("role_modules").update({
-            "display_name": new_name,
-            "emoji":        new_emoji,
-            "role_desc":    new_desc,
-        }).eq("id", self.module["id"]).execute()
-
-        # Öffentliche Nachricht aktualisieren
-        await refresh_role_message(interaction.client, self.guild)
-
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="✅ Modul aktualisiert",
-                description=f"{new_emoji} **{new_name}**\n*{new_desc}*",
-                color=discord.Color.green(),
-            ),
-            ephemeral=True,
-        )
+        if self.index is None:
+            # Neu → Rolle auswählen
+            view = RolePickerView(
+                display_name=name, role_desc=desc, emoji=emoji,
+                editor=self.editor,
+            )
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="🎭 Rolle auswählen",
+                    description=(
+                        f"Modul **{name}** wird angelegt.\n"
+                        f"Emoji: {emoji}\n"
+                        f"Beschreibung: *{desc}*\n\n"
+                        f"Wähle nun die **Discord-Rolle**."
+                    ),
+                    color=discord.Color.blurple(),
+                ),
+                view=view, ephemeral=True,
+            )
+        else:
+            # Bestehend → Werte übernehmen, Rolle bleibt
+            self.editor.modules[self.index]["display_name"] = name
+            self.editor.modules[self.index]["emoji"]        = emoji
+            self.editor.modules[self.index]["role_desc"]    = desc
+            self.editor.mark_dirty()
+            await interaction.response.edit_message(
+                embed=self.editor.build_embed(), view=self.editor
+            )
 
 
 # ──────────────────────────────────────────────────────────────
-#  Role-Picker (Setup)
+#  Role-Picker (beim Hinzufügen)
 # ──────────────────────────────────────────────────────────────
 class RolePickerView(discord.ui.View):
-    def __init__(self, display_name: str, role_desc: str, emoji: str, setup_view: "SetupRoleView"):
+    def __init__(self, display_name: str, role_desc: str, emoji: str, editor: "RoleEditorView"):
         super().__init__(timeout=120)
         self.display_name = display_name
         self.role_desc    = role_desc
         self.emoji        = emoji
-        self.setup_view   = setup_view
+        self.editor       = editor
 
         role_sel = discord.ui.RoleSelect(placeholder="Wähle die Discord-Rolle...", min_values=1, max_values=1)
         role_sel.callback = self.role_selected
@@ -246,192 +275,187 @@ class RolePickerView(discord.ui.View):
         role_obj = interaction.guild.get_role(int(role_id))
         role_name = role_obj.name if role_obj else "?"
 
-        for mod in self.setup_view.modules:
+        for mod in self.editor.modules:
             if mod["role_id"] == role_id:
                 await interaction.response.send_message(
                     "❌ Diese Rolle ist bereits zugewiesen.", ephemeral=True
                 )
                 return
 
-        self.setup_view.modules.append({
+        if len(self.editor.modules) >= MAX_ROLE_MODULES:
+            await interaction.response.send_message(
+                f"❌ Maximal {MAX_ROLE_MODULES} Module.", ephemeral=True
+            )
+            return
+
+        self.editor.modules.append({
             "display_name": self.display_name,
             "role_desc":    self.role_desc,
             "emoji":        self.emoji,
             "role_id":      role_id,
             "role_name":    role_name,
         })
-        self.setup_view._rebuild()
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="✅ Modul hinzugefügt",
-                description=f"{self.emoji} **{self.display_name}** → {role_name}",
-                color=discord.Color.green(),
-            ),
-            view=None,
-        )
+        self.editor.mark_dirty()
+
+        # Editor-Nachricht aktualisieren
         try:
-            await self.setup_view._original_interaction.edit_original_response(
-                embed=self.setup_view._build_embed(), view=self.setup_view
+            await self.editor._original_interaction.edit_original_response(
+                embed=self.editor.build_embed(), view=self.editor
             )
         except Exception:
             pass
 
+        await interaction.response.send_message(
+            f"✅ Modul {self.emoji} **{self.display_name}** hinzugefügt.", ephemeral=True
+        )
+
 
 # ──────────────────────────────────────────────────────────────
-#  Setup-View
+#  Select: Modul zum Bearbeiten / Löschen auswählen
 # ──────────────────────────────────────────────────────────────
-class SetupRoleView(discord.ui.View):
-    def __init__(self, guild_id: int, bot: discord.Client):
-        super().__init__(timeout=300)
-        self.guild_id              = guild_id
-        self.bot                   = bot
-        self.modules: list         = []
-        self.target_channel_id: str | None = None
-        self._original_interaction = None
+class ModuleNumberSelect(discord.ui.Select):
+    def __init__(self, editor: "RoleEditorView", mode: str):
+        self.editor = editor
+        self.mode   = mode  # "edit" oder "delete"
+
+        options = []
+        for i, mod in enumerate(editor.modules[:25]):
+            options.append(discord.SelectOption(
+                label=f"{i+1}. {mod.get('display_name','?')[:80]}",
+                value=str(i),
+                emoji=mod.get("emoji", "🎭") if len(mod.get("emoji", "")) <= 4 else None,
+                description=(mod.get("role_desc") or "")[:90] or None,
+            ))
+        if not options:
+            options = [discord.SelectOption(label="Keine Module", value="-1")]
+
+        super().__init__(
+            placeholder="✏️ Modul zum Bearbeiten wählen" if mode == "edit"
+                        else "🗑️ Modul zum Löschen wählen",
+            min_values=1, max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "-1":
+            await interaction.response.send_message("Keine Module vorhanden.", ephemeral=True)
+            return
+
+        idx = int(self.values[0])
+
+        if self.mode == "edit":
+            await interaction.response.send_modal(ModuleModal(self.editor, index=idx))
+        else:
+            removed = self.editor.modules.pop(idx)
+            self.editor.mark_dirty()
+            await interaction.response.edit_message(
+                embed=self.editor.build_embed(), view=self.editor
+            )
+
+
+# ──────────────────────────────────────────────────────────────
+#  Editor-View
+# ──────────────────────────────────────────────────────────────
+class RoleEditorView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, bot: discord.Client,
+                 modules: list[dict], channel_id: str | None):
+        super().__init__(timeout=600)
+        self.guild        = guild
+        self.bot          = bot
+        self.modules      = modules          # in-memory; erst bei Save in DB
+        self.channel_id   = channel_id
+        self.dirty        = False
+        self._original_interaction: discord.Interaction | None = None
         self._rebuild()
 
+    # ── Helpers ──
+    def mark_dirty(self):
+        self.dirty = True
+        self._rebuild()
+
+    def build_embed(self) -> discord.Embed:
+        return _build_editor_embed(self.guild, self.modules, self.channel_id, self.dirty)
+
+    # ── UI-Aufbau ──
     def _rebuild(self):
         self.clear_items()
 
-        if len(self.modules) < MAX_ROLE_MODULES:
-            add_btn = discord.ui.Button(
-                label=f"➕ Modul hinzufügen ({len(self.modules)}/{MAX_ROLE_MODULES})",
-                style=discord.ButtonStyle.primary,
-            )
-
-            async def add_cb(interaction: discord.Interaction):
-                await interaction.response.send_modal(AddRoleModuleModal(self))
-            add_btn.callback = add_cb
-            self.add_item(add_btn)
+        # Reihe 1: Hinzufügen / Bearbeiten / Löschen
+        add_btn = discord.ui.Button(
+            label="➕ Modul hinzufügen", style=discord.ButtonStyle.success,
+            disabled=len(self.modules) >= MAX_ROLE_MODULES,
+        )
+        async def add_cb(interaction: discord.Interaction):
+            await interaction.response.send_modal(ModuleModal(self, index=None))
+        add_btn.callback = add_cb
+        self.add_item(add_btn)
 
         if self.modules:
-            remove_btn = discord.ui.Button(
-                label="🗑️ Letztes Modul entfernen",
-                style=discord.ButtonStyle.secondary,
-            )
+            edit_sel = ModuleNumberSelect(self, mode="edit")
+            self.add_item(edit_sel)
 
-            async def remove_cb(interaction: discord.Interaction):
-                if self.modules:
-                    self.modules.pop()
-                self._rebuild()
-                await interaction.response.edit_message(embed=self._build_embed(), view=self)
-            remove_btn.callback = remove_cb
-            self.add_item(remove_btn)
+            del_sel = ModuleNumberSelect(self, mode="delete")
+            self.add_item(del_sel)
 
+        # Reihe 2: Kanal ändern
         ch_sel = discord.ui.ChannelSelect(
-            placeholder="📢 Kanal für die Rollenvergabe",
+            placeholder="📢 Zielkanal ändern",
             min_values=1, max_values=1,
             channel_types=[discord.ChannelType.text],
         )
-
         async def ch_cb(interaction: discord.Interaction):
-            self.target_channel_id = interaction.data["values"][0]
-            self._rebuild()
-            await interaction.response.edit_message(embed=self._build_embed(), view=self)
+            self.channel_id = interaction.data["values"][0]
+            self.mark_dirty()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
         ch_sel.callback = ch_cb
         self.add_item(ch_sel)
 
-        send_btn = discord.ui.Button(
-            label="🚀 Senden & speichern",
-            style=discord.ButtonStyle.success,
-            disabled=not (self.modules and self.target_channel_id),
+        # Reihe 3: Speichern / Abbrechen
+        save_btn = discord.ui.Button(
+            label="💾 Speichern", style=discord.ButtonStyle.primary,
+            disabled=not (self.modules and self.channel_id),
         )
-        send_btn.callback = self.send_callback
-        self.add_item(send_btn)
+        save_btn.callback = self._save
+        self.add_item(save_btn)
 
-    def _build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="⚙️ Rollenvergabe Setup", color=discord.Color.blurple())
-        if self.modules:
-            for i, mod in enumerate(self.modules, 1):
-                embed.add_field(
-                    name=f"{mod.get('emoji','🎭')} Modul {i}: {mod['display_name']} → @{mod['role_name']}",
-                    value=(mod.get("role_desc") or "*keine Beschreibung*")[:200],
-                    inline=False,
-                )
-        else:
-            embed.add_field(name="Module", value="*Noch keine Module*", inline=False)
-        embed.add_field(
-            name="📢 Kanal",
-            value=f"<#{self.target_channel_id}>" if self.target_channel_id else "*Nicht ausgewählt*",
-            inline=False,
+        cancel_btn = discord.ui.Button(
+            label="❌ Abbrechen", style=discord.ButtonStyle.danger,
         )
-        return embed
+        cancel_btn.callback = self._cancel
+        self.add_item(cancel_btn)
 
-    async def send_callback(self, interaction: discord.Interaction):
+    # ── Speichern ──
+    async def _save(self, interaction: discord.Interaction):
         if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer(ephemeral=False)
 
         try:
-            supabase = get_supabase()
-            guild    = interaction.guild
-            channel  = self.bot.get_channel(int(self.target_channel_id))
-            if not channel:
-                await interaction.followup.send("❌ Kanal nicht gefunden!", ephemeral=True)
-                return
-
-            # Alte Nachricht dieser Gilde entfernen (falls vorhanden)
-            old = supabase.table("role_message").select("*").eq(
-                "guild_id", str(guild.id)
-            ).execute()
-            if old.data:
-                old_ch = guild.get_channel(int(old.data[0]["channel_id"]))
-                if old_ch:
-                    try:
-                        old_msg = await old_ch.fetch_message(int(old.data[0]["message_id"]))
-                        await old_msg.delete()
-                    except Exception:
-                        pass
-
-            # Module neu speichern
-            supabase.table("role_modules").delete().eq(
-                "guild_id", str(guild.id)
-            ).execute()
-
-            saved_modules = []
-            for mod in self.modules:
-                role = guild.get_role(int(mod["role_id"]))
-                if not role:
-                    continue
-                db_data = {
-                    "guild_id":     str(guild.id),
-                    "role_id":      str(role.id),
-                    "role_name":    mod["role_name"],
-                    "display_name": mod["display_name"],
-                    "role_desc":    mod.get("role_desc", ""),
-                    "emoji":        mod.get("emoji", "🎭"),
-                    "channel_id":   str(self.target_channel_id),
-                }
-                supabase.table("role_modules").insert(db_data).execute()
-                saved_modules.append(db_data)
-
-            if not saved_modules:
-                await interaction.followup.send("❌ Keine gültigen Module vorhanden.", ephemeral=True)
-                return
-
-            # Übersichts-Nachricht senden
-            embed = _build_roles_embed(guild, saved_modules)
-            msg = await channel.send(embed=embed)
-
-            # Bot reagiert mit allen Emojis
-            for mod in saved_modules:
-                try:
-                    await msg.add_reaction(mod["emoji"])
-                except discord.HTTPException as e:
-                    logger.warning(f"Konnte Emoji {mod['emoji']} nicht hinzufügen: {e}")
-
-            # role_message speichern
-            supabase.table("role_message").upsert({
-                "guild_id":   str(guild.id),
-                "channel_id": str(self.target_channel_id),
-                "message_id": str(msg.id),
-            }).execute()
-
+            await _apply_to_public_message(
+                self.bot, self.guild, self.modules, self.channel_id
+            )
+            self.dirty = False
+            self._rebuild()
+            await interaction.edit_original_response(
+                embed=self.build_embed(), view=self
+            )
             await interaction.followup.send(
-                f"✅ Rollenvergabe gesendet mit {len(saved_modules)} Modulen!", ephemeral=True
+                "✅ Gespeichert und öffentliche Nachricht aktualisiert!", ephemeral=True
             )
         except Exception as e:
-            logger.exception("send_callback")
+            logger.exception("save")
             await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+    # ── Abbrechen ──
+    async def _cancel(self, interaction: discord.Interaction):
+        self.dirty = False
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ Abgebrochen",
+                description="Es wurden keine Änderungen gespeichert.",
+                color=discord.Color.red(),
+            ),
+            view=None,
+        )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -600,8 +624,7 @@ class RollenCog(commands.Cog):
             if not role:
                 continue
 
-            users_who_reacted = reacted_users.get(emoji, set())
-            for uid in users_who_reacted:
+            for uid in reacted_users.get(emoji, set()):
                 member = guild.get_member(uid)
                 if member and role not in member.roles:
                     try:
@@ -615,70 +638,65 @@ class RollenCog(commands.Cog):
     # ──────────────────────────────────────────────────────────
     rollen = app_commands.Group(name="rollen", description="Rollen System")
 
-    @rollen.command(name="setup", description="Richte die Rollenvergabe ein")
+    @rollen.command(name="setup", description="Erstellt die Rollenvergabe (nur wenn noch keine existiert)")
     async def setup_rollen(self, interaction: discord.Interaction):
-        if not has_admin_rights(interaction):
-            await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
-            return
-        view = SetupRoleView(interaction.guild_id, self.bot)
-        view._original_interaction = interaction
-        await interaction.response.send_message(
-            embed=view._build_embed(), view=view, ephemeral=True
-        )
-
-    @rollen.command(name="bearbeiten", description="Bearbeite ein Rollenmodul nach ID")
-    @app_commands.describe(module_id="Die ID des Moduls (siehe /rollen liste)")
-    async def rollen_bearbeiten(self, interaction: discord.Interaction, module_id: int):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
 
         supabase = get_supabase()
-        result = supabase.table("role_modules").select("*").eq(
-            "id", module_id
-        ).eq("guild_id", str(interaction.guild_id)).execute()
-
-        if not result.data:
+        rm = supabase.table("role_message").select("*").eq(
+            "guild_id", str(interaction.guild_id)
+        ).execute()
+        if rm.data:
             await interaction.response.send_message(
-                "❌ Kein Modul mit dieser ID gefunden. Nutze `/rollen liste`.", ephemeral=True
+                "ℹ️ Es existiert schon eine Rollenvergabe. Nutze `/rollen bearbeiten`.",
+                ephemeral=True,
             )
             return
 
-        module = result.data[0]
-        await interaction.response.send_modal(EditModuleModal(module, interaction.guild))
+        # Direkt in Editor springen
+        view = RoleEditorView(interaction.guild, self.bot, modules=[], channel_id=None)
+        view._original_interaction = interaction
+        await interaction.response.send_message(
+            embed=view.build_embed(), view=view, ephemeral=True
+        )
 
-    @rollen.command(name="liste", description="Zeigt alle Rollenmodule mit ID")
-    async def rollen_liste(self, interaction: discord.Interaction):
+    @rollen.command(name="bearbeiten", description="Öffnet den Editor für die Rollenvergabe-Nachricht")
+    async def rollen_bearbeiten(self, interaction: discord.Interaction):
         if not has_admin_rights(interaction):
             await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
-        try:
-            supabase = get_supabase()
-            result = supabase.table("role_modules").select("*").eq(
-                "guild_id", str(interaction.guild_id)
-            ).execute()
-            if not result.data:
-                await interaction.followup.send(
-                    "❌ Keine Module gefunden. Nutze `/rollen setup` zuerst.", ephemeral=True
-                )
-                return
-            embed = discord.Embed(title="✏️ Rollenvergabe Module", color=discord.Color.blurple())
-            for m in result.data:
-                display = m.get("display_name") or m.get("role_name", "?")
-                emoji   = m.get("emoji", "🎭")
-                role    = interaction.guild.get_role(int(m["role_id"]))
-                count   = _member_count(interaction.guild, role) if role else 0
-                desc    = (m.get("role_desc") or "*keine Beschreibung*")[:120]
-                embed.add_field(
-                    name=f"{emoji} ID `{m['id']}` — {display}",
-                    value=f"Rolle: {role.mention if role else '❓'} | Mitglieder: {count}\n{desc}",
-                    inline=False,
-                )
-            embed.set_footer(text="Bearbeiten mit: /rollen bearbeiten <ID>")
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Fehler: {e}", ephemeral=True)
+
+        supabase = get_supabase()
+
+        # bestehende Module + Kanal laden
+        mods = supabase.table("role_modules").select("*").eq(
+            "guild_id", str(interaction.guild_id)
+        ).execute().data or []
+
+        rm = supabase.table("role_message").select("*").eq(
+            "guild_id", str(interaction.guild_id)
+        ).execute()
+        channel_id = rm.data[0]["channel_id"] if rm.data else None
+
+        # Module in Editor-Format bringen
+        modules = [
+            {
+                "display_name": m.get("display_name") or m.get("role_name", "?"),
+                "role_desc":    m.get("role_desc", ""),
+                "emoji":        m.get("emoji", "🎭"),
+                "role_id":      str(m["role_id"]),
+                "role_name":    m.get("role_name", "?"),
+            }
+            for m in mods
+        ]
+
+        view = RoleEditorView(interaction.guild, self.bot, modules=modules, channel_id=channel_id)
+        view._original_interaction = interaction
+        await interaction.response.send_message(
+            embed=view.build_embed(), view=view, ephemeral=True
+        )
 
 
 async def setup(bot: commands.Bot):
