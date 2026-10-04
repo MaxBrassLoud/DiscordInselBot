@@ -54,7 +54,7 @@ FEATURE_COGS = [
     "bot.features.levels.cog",
     "bot.features.voting.cog",
     "bot.features.moderation.cog",
-#    "bot.features.stream_notifications.cog",
+    "bot.features.stream_notifications.cog",
     "bot.features.faq.cog",
     "bot.features.backups_feature.cog",
     "bot.features.moderation.raid_protection",
