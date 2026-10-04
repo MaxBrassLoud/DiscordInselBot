@@ -31,6 +31,7 @@ init_supabase(
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
 import bot.core.web_app.flask_app.app as _webapp
