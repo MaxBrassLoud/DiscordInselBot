@@ -1904,3 +1904,6 @@ register_feature_setup_routes(
 from .feature_suggest_routes import register_feature_suggest_routes
 register_feature_suggest_routes(
     app, login_required, get_bot=get_bot_instance)
+
+from .open_api_routes import register_open_api_routes
+register_open_api_routes(app)
