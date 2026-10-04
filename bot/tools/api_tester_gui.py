@@ -1,7 +1,7 @@
 # bot/tools/api_tester_gui.py
 """
-API-Tester – Tkinter UI (überarbeitet)
-========================================
+API-Tester – Tkinter UI
+========================
 Moderner API-Tester mit Sidebar-Navigation und Live-Endpunkt-Erkennung.
 
 Layout:
@@ -33,14 +33,14 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STYLE-TOKENS (passend zu main.css)
+# STYLE-TOKENS
 # ══════════════════════════════════════════════════════════════════════════════
 
-BG        = "#0a0b0d"   # Basis
-SURFACE   = "#111318"   # Sidebar / Topbar
-CARD      = "#181c22"   # Panels
-CARD2     = "#1d2128"   # Eingabe-Hintergrund
-HOVER     = "#22272f"   # Hover
+BG        = "#0a0b0d"
+SURFACE   = "#111318"
+CARD      = "#181c22"
+CARD2     = "#1d2128"
+HOVER     = "#22272f"
 BORDER    = "#252b35"
 BORDER2   = "#2e3540"
 
@@ -50,7 +50,7 @@ TEXT3     = "#555f6e"
 
 GREEN     = "#4ade80"
 GREEN2    = "#22c55e"
-GREEN_BG  = "#0f2418"   # aktive Auswahl
+GREEN_BG  = "#0f2418"
 RED       = "#f87171"
 ORANGE    = "#fb923c"
 BLUE      = "#60a5fa"
@@ -67,17 +67,17 @@ FONT_MONO = "Consolas"
 # ══════════════════════════════════════════════════════════════════════════════
 
 class RoundedEntry(tk.Frame):
-    """Ein Eingabefeld mit umrahmter Border und Fokus-Highlight."""
+    """Eingabefeld mit Fokus-Highlight."""
     def __init__(self, parent, textvariable, width=30, show=None, bg=CARD2):
         super().__init__(parent, bg=BORDER2, bd=0)
-        self._inner_bg = bg
         self.entry = tk.Entry(
             self, textvariable=textvariable,
             font=(FONT_UI, 10), width=width, show=show,
             bg=bg, fg=TEXT, insertbackground=TEXT,
             relief="flat", bd=0,
         )
-        self.entry.pack(fill="both", expand=True, padx=1, pady=1, ipady=6, ipadx=8)
+        self.entry.pack(fill="both", expand=True, padx=1, pady=1,
+                        ipady=6, ipadx=8)
         self.entry.bind("<FocusIn>",  lambda e: self.configure(bg=GREEN2))
         self.entry.bind("<FocusOut>", lambda e: self.configure(bg=BORDER2))
 
@@ -90,7 +90,7 @@ class RoundedEntry(tk.Frame):
 
 
 class FlatButton(tk.Button):
-    """Ein Button mit Hover-Effekt und optionaler Primärfarbe."""
+    """Button mit Hover-Effekt."""
     def __init__(self, parent, text, command, *, primary=False, danger=False,
                  ghost=False, width=None, **kw):
         if primary:
@@ -102,10 +102,9 @@ class FlatButton(tk.Button):
         else:
             bg, fg, hover = CARD2, TEXT, HOVER
 
-        font = (FONT_UI, 9, "bold")
         super().__init__(
             parent, text=text, command=command,
-            font=font, bg=bg, fg=fg,
+            font=(FONT_UI, 9, "bold"), bg=bg, fg=fg,
             activebackground=hover, activeforeground=fg,
             relief="flat", bd=0, padx=14, pady=8, cursor="hand2",
             **kw,
@@ -122,7 +121,6 @@ class FlatButton(tk.Button):
 
 
 def make_card(parent, padx=16, pady=14):
-    """Standard-Karte mit Border."""
     return tk.Frame(parent, bg=CARD, padx=padx, pady=pady,
                     highlightthickness=1, highlightbackground=BORDER)
 
@@ -139,7 +137,6 @@ class ApiTesterApp(tk.Tk):
         self.minsize(1080, 720)
         self.configure(bg=BG)
 
-        # Zustand
         self._last_response: requests.Response | None = None
         self._history: list[dict] = []
         self._endpoints: list[dict] = []
@@ -159,7 +156,6 @@ class ApiTesterApp(tk.Tk):
         except Exception:
             pass
 
-        # Combobox
         style.configure(
             "Dark.TCombobox",
             fieldbackground=CARD2, background=CARD2, foreground=TEXT,
@@ -180,7 +176,6 @@ class ApiTesterApp(tk.Tk):
         self.option_add("*TCombobox*Listbox.selectForeground", GREEN)
         self.option_add("*TCombobox*Listbox.font", f"{{{FONT_UI}}} 10")
 
-        # Notebook
         style.configure(
             "Dark.TNotebook",
             background=BG, borderwidth=0, tabmargins=0,
@@ -196,7 +191,6 @@ class ApiTesterApp(tk.Tk):
             foreground=[("selected", GREEN)],
         )
 
-        # Treeview
         style.configure(
             "Dark.Treeview",
             background=CARD2, fieldbackground=CARD2, foreground=TEXT,
@@ -217,7 +211,6 @@ class ApiTesterApp(tk.Tk):
             foreground=[("selected", GREEN)],
         )
 
-        # Scrollbar
         style.configure(
             "Dark.Vertical.TScrollbar",
             background=CARD2, troughcolor=BG, bordercolor=BG,
@@ -252,7 +245,7 @@ class ApiTesterApp(tk.Tk):
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
-        # ── Brand ─────────────────────────────────────────────────────────────
+        # Brand
         brand = tk.Frame(sidebar, bg=SURFACE, padx=20, pady=20)
         brand.pack(fill="x")
 
@@ -279,10 +272,9 @@ class ApiTesterApp(tk.Tk):
             font=(FONT_UI, 8), bg=SURFACE, fg=TEXT3,
         ).pack(anchor="w")
 
-        # Trennlinie
         tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x")
 
-        # ── Verbindung ────────────────────────────────────────────────────────
+        # Verbindung
         conn = tk.Frame(sidebar, bg=SURFACE, padx=20, pady=16)
         conn.pack(fill="x")
 
@@ -340,10 +332,9 @@ class ApiTesterApp(tk.Tk):
         )
         self.conn_status.pack(anchor="w")
 
-        # Trennlinie
         tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
 
-        # ── Endpunkt-Header ──────────────────────────────────────────────────
+        # Endpunkt-Header
         ep_header = tk.Frame(sidebar, bg=SURFACE, padx=20, pady=8)
         ep_header.pack(fill="x", pady=(14, 8))
 
@@ -358,7 +349,7 @@ class ApiTesterApp(tk.Tk):
         )
         self.ep_count_label.pack(side="right")
 
-        # ── Suche ─────────────────────────────────────────────────────────────
+        # Suche
         search_row = tk.Frame(sidebar, bg=SURFACE, padx=20)
         search_row.pack(fill="x", pady=(0, 8))
 
@@ -368,7 +359,7 @@ class ApiTesterApp(tk.Tk):
         search_entry.entry.configure(font=(FONT_UI, 9))
         self.search_var.trace_add("write", lambda *a: self._render_endpoint_list())
 
-        # ── Endpunkt-Liste (scrollbar) ────────────────────────────────────────
+        # Endpunkt-Liste
         list_wrap = tk.Frame(sidebar, bg=SURFACE)
         list_wrap.pack(fill="both", expand=True, padx=(12, 8), pady=(0, 16))
 
@@ -456,7 +447,6 @@ class ApiTesterApp(tk.Tk):
         wrap = tk.Frame(parent, bg=BG)
         wrap.pack(fill="x", padx=24, pady=(18, 8))
 
-        # Methode + URL-Zeile
         row1 = tk.Frame(wrap, bg=BG)
         row1.pack(fill="x")
 
@@ -501,7 +491,6 @@ class ApiTesterApp(tk.Tk):
             side="left", padx=(10, 0),
         )
 
-        # Beschreibung
         self.endpoint_desc = tk.Label(
             wrap, text="",
             font=(FONT_UI, 9), bg=BG, fg=TEXT2,
@@ -619,7 +608,7 @@ class ApiTesterApp(tk.Tk):
         self.notebook = ttk.Notebook(wrap, style="Dark.TNotebook")
         self.notebook.pack(fill="both", expand=True)
 
-        # ── Tab: JSON ────────────────────────────────────────────────────────
+        # Tab: JSON
         raw = tk.Frame(self.notebook, bg=CARD)
         self.notebook.add(raw, text="  JSON  ")
 
@@ -649,7 +638,7 @@ class ApiTesterApp(tk.Tk):
         self.raw_text.tag_configure("null",   foreground=TEXT3)
         self.raw_text.tag_configure("punct",  foreground=TEXT3)
 
-        # ── Tab: Users ───────────────────────────────────────────────────────
+        # Tab: Users
         users_frame = tk.Frame(self.notebook, bg=CARD)
         self.notebook.add(users_frame, text="  Users  ")
         self.tree = ttk.Treeview(
@@ -680,7 +669,7 @@ class ApiTesterApp(tk.Tk):
         self.tree.tag_configure("online",  foreground=GREEN)
         self.tree.tag_configure("offline", foreground=TEXT3)
 
-        # ── Tab: Leaderboard ─────────────────────────────────────────────────
+        # Tab: Leaderboard
         lb_frame = tk.Frame(self.notebook, bg=CARD)
         self.notebook.add(lb_frame, text="  Leaderboard  ")
         self.lb_tree = ttk.Treeview(
@@ -712,7 +701,7 @@ class ApiTesterApp(tk.Tk):
         self.lb_tree.tag_configure("silver", foreground=TEXT2)
         self.lb_tree.tag_configure("bronze", foreground=ORANGE)
 
-        # ── Tab: Verlauf ─────────────────────────────────────────────────────
+        # Tab: Verlauf
         hist_frame = tk.Frame(self.notebook, bg=CARD)
         self.notebook.add(hist_frame, text="  Verlauf  ")
 
@@ -906,7 +895,6 @@ class ApiTesterApp(tk.Tk):
         inner = tk.Frame(frame, bg=bg, padx=12, pady=8)
         inner.pack(fill="x")
 
-        # Method-Dot
         dot_wrap = tk.Frame(inner, bg=bg, width=4, height=4)
         dot_wrap.pack(side="left", padx=(0, 8), pady=(6, 0))
         dot_wrap.pack_propagate(False)
@@ -1294,7 +1282,6 @@ class ApiTesterApp(tk.Tk):
         self.history_list.see(tk.END)
 
     def _insert_json_pretty(self, text: str):
-        """Fügt JSON mit einfachem Syntax-Highlighting ein."""
         token_re = re.compile(
             r'("(?:[^"\\]|\\.)*")\s*:|'
             r'("(?:[^"\\]|\\.)*")|'

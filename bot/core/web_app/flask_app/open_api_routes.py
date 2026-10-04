@@ -5,28 +5,29 @@ open_api_routes.py
 Öffentliche API mit API-Key-Authentifizierung.
 
 ENDPUNKTE:
-  GET  /open-api/users?role=<role_id>&online=<true|false>
-  GET  /open-api/users?role=<role_id>&guild_id=<guild_id>&online=true
+  GET  /open-api/users?role=<role_id>
+  GET  /open-api/users?role=<role_id>&guild_id=<guild_id>
   GET  /open-api/guild?guild_id=<guild_id>
   GET  /open-api/guild/roles?guild_id=<guild_id>
   GET  /open-api/leaderboard?guild_id=<guild_id>&limit=25&offset=0
   GET  /open-api/events?guild_id=<guild_id>&status=upcoming&limit=10
   GET  /open-api/version
   GET  /open-api/whoami
+  GET  /open-api/endpoints
   GET  /open-api/health
-  GET  /open-api/_debug/bot          (Diagnose)
+  GET  /open-api/_debug/bot
 
 AUTHENTIFIZIERUNG:
   Header:  X-API-Key: insel_xxxxxxxxxxxx
   ODER:    Authorization: Bearer insel_xxxxxxxxxxxx
-  ODER:    ?api_key=insel_xxxxxxxxxxxx   (nur wenn Header nicht möglich)
+  ODER:    ?api_key=insel_xxxxxxxxxxxx
 
 RATE-LIMIT:
   Pro API-Key, Standard 60 Anfragen/Minute (konfigurierbar pro Key).
 
 BEISPIEL:
   curl -H "X-API-Key: insel_..." \\
-       "https://domain.com/open-api/users?role=1410628676499800196&online=true"
+       "https://domain.com/open-api/users?role=1410628676499800196"
 """
 from __future__ import annotations
 
@@ -44,9 +45,8 @@ from bot.core.supabase_client import get_supabase
 
 log = logging.getLogger("open_api")
 
-# API-Version – bei inkompatiblen Änderungen erhöhen
-API_VERSION  = "1.0.0"
-BOT_VERSION  = "1.4.2"
+API_VERSION = "1.0.0"
+BOT_VERSION = "1.4.2"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -188,20 +188,12 @@ def require_api_key(scope: str = "users.read"):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _guild_icon_url(guild) -> str | None:
-    """Icon-URL eines discord.Guild-Objekts."""
     if guild is None or guild.icon is None:
         return None
     return str(guild.icon.url)
 
 
 def _resolve_guild_id(requested: str | None, api_key: dict) -> tuple[str | None, tuple | None]:
-    """
-    Bestimmt die effektive guild_id.
-
-    Rückgabe: (guild_id, error_response)
-      - guild_id gesetzt   → (id, None)
-      - error_response     → (None, (jsonify(...), status))
-    """
     key_guild = api_key.get("guild_id")
 
     if key_guild and requested and str(key_guild) != str(requested):
@@ -241,27 +233,30 @@ def register_open_api_routes(app):
 
     # ══════════════════════════════════════════════════════════════════════════
     # GET /open-api/users
+    # Query-Parameter:
+    #   role      (Pflicht)  Discord-Rollen-ID
+    #   guild_id  (optional) Discord-Server-ID (nur nötig, wenn API-Key für alle Server)
+    #
+    # Rückgabe: ALLE User mit dieser Rolle.  Jeder Eintrag enthält `is_online`
+    # und `status`, damit Clients selbst filtern können.
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/users", methods=["GET"])
     @require_api_key(scope="users.read")
     def open_api_users():
         api_key = request.api_key_data  # type: ignore[attr-defined]
 
-        role_id  = (request.args.get("role") or "").strip()
-        online_s = (request.args.get("online") or "").strip().lower()
+        role_id      = (request.args.get("role") or "").strip()
         guild_id_req = (request.args.get("guild_id") or "").strip()
 
         if not role_id or not role_id.isdigit():
             return jsonify({
                 "error": "Missing or invalid parameter 'role'",
-                "example": "/open-api/users?role=1410628676499800196&online=true",
+                "example": "/open-api/users?role=1410628676499800196",
             }), 400
 
         guild_id, err = _resolve_guild_id(guild_id_req, api_key)
         if err:
             return err
-
-        online_only = online_s in ("1", "true", "yes", "ja")
 
         bot = _get_bot()
         if bot is None:
@@ -287,13 +282,15 @@ def register_open_api_routes(app):
 
         try:
             result = []
+            online_count = 0
             for m in guild.members:
                 if role not in m.roles:
                     continue
                 status = str(m.status)
                 is_online = status in ("online", "idle", "dnd")
-                if online_only and not is_online:
-                    continue
+                if is_online:
+                    online_count += 1
+
                 result.append({
                     "id":           str(m.id),
                     "username":     m.name,
@@ -311,22 +308,23 @@ def register_open_api_routes(app):
             result.sort(key=lambda x: (not x["is_online"], x["display_name"].lower()))
 
             return jsonify({
-                "ok":           True,
-                "guild_id":     guild_id,
-                "guild_name":   guild.name,
-                "role_id":      role_id,
-                "role_name":    role.name,
-                "online_only":  online_only,
-                "count":        len(result),
-                "users":        result,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "ok":            True,
+                "guild_id":      guild_id,
+                "guild_name":    guild.name,
+                "role_id":       role_id,
+                "role_name":     role.name,
+                "count":         len(result),
+                "online_count":  online_count,
+                "offline_count": len(result) - online_count,
+                "users":         result,
+                "generated_at":  datetime.now(timezone.utc).isoformat(),
             })
         except Exception as e:
             log.exception("[open_api] Fehler beim Filtern der Mitglieder")
             return jsonify({"error": f"Internal error: {e}"}), 500
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/guild   (Route 1)
+    # GET /open-api/guild
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/guild", methods=["GET"])
     @require_api_key(scope="guild.read")
@@ -349,41 +347,38 @@ def register_open_api_routes(app):
                 "guild_id": guild_id,
             }), 404
 
-        # Online-Zähler
         online_count = sum(
             1 for m in guild.members
             if str(m.status) in ("online", "idle", "dnd") and not m.bot
         )
 
-        # Boost-Tier lesen (discord.py: guild.premium_tier)
-        boost_tier = getattr(guild, "premium_tier", 0)
+        boost_tier  = getattr(guild, "premium_tier", 0)
         boost_count = getattr(guild, "premium_subscription_count", 0) or 0
-
-        owner_id = str(guild.owner_id) if guild.owner_id else None
+        owner_id    = str(guild.owner_id) if guild.owner_id else None
 
         return jsonify({
-            "ok":            True,
-            "id":            str(guild.id),
-            "name":          guild.name,
-            "description":   guild.description,
-            "icon_url":      _guild_icon_url(guild),
-            "member_count":  guild.member_count,
-            "human_count":   sum(1 for m in guild.members if not m.bot),
-            "bot_count":     sum(1 for m in guild.members if m.bot),
-            "online_count":  online_count,
-            "boost_tier":    boost_tier,
-            "boost_count":   boost_count,
-            "created_at":    guild.created_at.isoformat() if guild.created_at else None,
-            "owner_id":      owner_id,
-            "owner_name":    str(guild.owner) if guild.owner else None,
-            "preferred_locale": str(guild.preferred_locale) if guild.preferred_locale else None,
+            "ok":                True,
+            "id":                str(guild.id),
+            "name":              guild.name,
+            "description":       guild.description,
+            "icon_url":          _guild_icon_url(guild),
+            "member_count":      guild.member_count,
+            "human_count":       sum(1 for m in guild.members if not m.bot),
+            "bot_count":         sum(1 for m in guild.members if m.bot),
+            "online_count":      online_count,
+            "boost_tier":        boost_tier,
+            "boost_count":       boost_count,
+            "created_at":        guild.created_at.isoformat() if guild.created_at else None,
+            "owner_id":          owner_id,
+            "owner_name":        str(guild.owner) if guild.owner else None,
+            "preferred_locale":  str(guild.preferred_locale) if guild.preferred_locale else None,
             "verification_level": str(guild.verification_level),
-            "features":      list(guild.features) if guild.features else [],
-            "generated_at":  datetime.now(timezone.utc).isoformat(),
+            "features":          list(guild.features) if guild.features else [],
+            "generated_at":      datetime.now(timezone.utc).isoformat(),
         })
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/guild/roles   (Route 2)
+    # GET /open-api/guild/roles
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/guild/roles", methods=["GET"])
     @require_api_key(scope="guild.read")
@@ -407,7 +402,6 @@ def register_open_api_routes(app):
                 "guild_id": guild_id,
             }), 404
 
-        # Anzahl Mitglieder pro Rolle in einem Durchlauf
         role_counts: dict[str, int] = {}
         for m in guild.members:
             for r in m.roles:
@@ -427,7 +421,6 @@ def register_open_api_routes(app):
                 "created_at":   r.created_at.isoformat() if r.created_at else None,
             }
 
-        # Einzelne Rolle
         if single_role:
             if not single_role.isdigit():
                 return jsonify({"error": "'role_id' must be numeric"}), 400
@@ -436,7 +429,6 @@ def register_open_api_routes(app):
                 return jsonify({"error": "Role not found", "role_id": single_role}), 404
             return jsonify({"ok": True, "role": _role_payload(role)})
 
-        # Alle Rollen (@everyone zuerst ausschließen, dann nach Position desc)
         roles = [r for r in guild.roles if r.name != "@everyone"]
         roles.sort(key=lambda r: r.position, reverse=True)
 
@@ -449,7 +441,7 @@ def register_open_api_routes(app):
         })
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/leaderboard   (Route 5)
+    # GET /open-api/leaderboard
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/leaderboard", methods=["GET"])
     @require_api_key(scope="users.read")
@@ -475,8 +467,6 @@ def register_open_api_routes(app):
                 .execute()
                 .data or []
             )
-
-            # Gesamtzahl für Pagination
             try:
                 total_r = (
                     sb.table("user_levels")
@@ -487,7 +477,6 @@ def register_open_api_routes(app):
                 total_entries = total_r.count or len(rows)
             except Exception:
                 total_entries = len(rows)
-
         except Exception as e:
             log.error(f"[open_api] leaderboard DB-Fehler: {e}")
             return jsonify({"error": "Leaderboard konnte nicht geladen werden."}), 500
@@ -495,7 +484,6 @@ def register_open_api_routes(app):
         bot = _get_bot()
         guild = bot.get_guild(int(guild_id)) if bot else None
 
-        # Discord-Display-Namen anreichern
         out = []
         for idx, row in enumerate(rows):
             uid = str(row.get("user_id") or "")
@@ -532,7 +520,7 @@ def register_open_api_routes(app):
         })
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/events   (Route 6)
+    # GET /open-api/events
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/events", methods=["GET"])
     @require_api_key(scope="users.read")
@@ -564,8 +552,6 @@ def register_open_api_routes(app):
             if status_f:
                 q = q.eq("status", status_f)
 
-            # Für "upcoming": nach Startzeit aufsteigend (nächste zuerst)
-            # Sonst: neueste zuerst
             if status_f in ("upcoming", "tba") or not status_f:
                 q = q.order("start_time", desc=False)
             else:
@@ -617,24 +603,24 @@ def register_open_api_routes(app):
             })
 
         return jsonify({
-            "ok":           True,
-            "guild_id":     guild_id,
+            "ok":            True,
+            "guild_id":      guild_id,
             "status_filter": status_f or None,
-            "count":        len(out),
-            "events":       out,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "count":         len(out),
+            "events":        out,
+            "generated_at":  datetime.now(timezone.utc).isoformat(),
         })
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/version   (Route 14)
+    # GET /open-api/version
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/version", methods=["GET"])
     @require_api_key(scope="users.read")
     def open_api_version():
         return jsonify({
-            "ok":               True,
-            "api_version":      API_VERSION,
-            "bot_version":      BOT_VERSION,
+            "ok":          True,
+            "api_version": API_VERSION,
+            "bot_version": BOT_VERSION,
             "features": [
                 "users",
                 "guild",
@@ -656,13 +642,14 @@ def register_open_api_routes(app):
                 "/open-api/events",
                 "/open-api/version",
                 "/open-api/whoami",
+                "/open-api/endpoints",
                 "/open-api/health",
             ],
             "generated_at": datetime.now(timezone.utc).isoformat(),
         })
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/whoami   (Route 15)
+    # GET /open-api/whoami
     # ══════════════════════════════════════════════════════════════════════════
     @app.route("/open-api/whoami", methods=["GET"])
     @require_api_key(scope="users.read")
@@ -671,65 +658,18 @@ def register_open_api_routes(app):
         scopes = sorted({s.strip() for s in (api_key.get("scopes") or "").split(",") if s.strip()})
 
         return jsonify({
-            "ok":              True,
-            "label":           api_key.get("label"),
-            "guild_bound":     api_key.get("guild_id"),
-            "scopes":          scopes,
-            "rate_limit":      int(api_key.get("rate_limit") or 60),
-            "enabled":         bool(api_key.get("enabled", True)),
-            "expires_at":      api_key.get("expires_at"),
-            "last_used_at":    api_key.get("last_used_at"),
-            "created_at":      api_key.get("created_at"),
-            "generated_at":    datetime.now(timezone.utc).isoformat(),
+            "ok":           True,
+            "label":        api_key.get("label"),
+            "guild_bound":  api_key.get("guild_id"),
+            "scopes":       scopes,
+            "rate_limit":   int(api_key.get("rate_limit") or 60),
+            "enabled":      bool(api_key.get("enabled", True)),
+            "expires_at":   api_key.get("expires_at"),
+            "last_used_at": api_key.get("last_used_at"),
+            "created_at":   api_key.get("created_at"),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         })
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/health
-    # ══════════════════════════════════════════════════════════════════════════
-    @app.route("/open-api/health", methods=["GET"])
-    @require_api_key(scope="users.read")
-    def open_api_health():
-        bot = _get_bot()
-        return jsonify({
-            "ok":          True,
-            "bot_ready":   bool(bot and bot.is_ready()),
-            "bot_user":    str(bot.user) if (bot and bot.user) else None,
-            "guild_count": len(bot.guilds) if bot else 0,
-            "api_version": API_VERSION,
-            "bot_version": BOT_VERSION,
-            "time":        datetime.now(timezone.utc).isoformat(),
-        })
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # GET /open-api/_debug/bot
-    # ══════════════════════════════════════════════════════════════════════════
-    @app.route("/open-api/_debug/bot", methods=["GET"])
-    @require_api_key(scope="users.read")
-    def open_api_debug_bot():
-        import importlib
-        info: dict = {
-            "app_attrs":   {},
-            "module_vars": {},
-            "resolved":    None,
-        }
-
-        for attr in ("_bot_instance", "bot", "discord_bot", "bot_instance"):
-            b = getattr(app, attr, None)
-            info["app_attrs"][attr] = repr(b) if b is not None else None
-
-        try:
-            app_mod = importlib.import_module("bot.core.web_app.flask_app.app")
-            for attr in ("_bot_instance", "bot", "bot_instance"):
-                b = getattr(app_mod, attr, None)
-                info["module_vars"][attr] = repr(b) if b is not None else None
-        except Exception as e:
-            info["module_vars"]["error"] = str(e)
-
-        resolved = _get_bot()
-        info["resolved"]    = repr(resolved) if resolved is not None else None
-        info["resolved_ok"] = resolved is not None
-
-        return jsonify(info)
     # ══════════════════════════════════════════════════════════════════════════
     # GET /open-api/endpoints
     # Liefert eine maschinenlesbare Beschreibung aller Endpunkte.
@@ -738,21 +678,6 @@ def register_open_api_routes(app):
     @app.route("/open-api/endpoints", methods=["GET"])
     @require_api_key(scope="users.read")
     def open_api_endpoints():
-        """
-        Strukturierte Endpunkt-Beschreibung.  Ein Eintrag enthält alles,
-        was ein generischer Client braucht, um die Route aufzurufen:
-
-          id          – eindeutiger Bezeichner
-          label       – menschenlesbarer Name (für Dropdown)
-          method      – HTTP-Methode
-          path        – Pfad relativ zur Basis-URL (kann <platzhalter> enthalten)
-          scope       – benötigter Scope
-          description – kurze Erklärung
-          params      – Liste von Query-Parametern
-                          name, required, type, default, description, example
-          placeholders – (nur bei Pfad-Platzhaltern) gleiche Struktur wie params
-          tags        – Kategorien wie ['users','admin']
-        """
         endpoints = [
             # ── Users ─────────────────────────────────────────────────────
             {
@@ -762,16 +687,13 @@ def register_open_api_routes(app):
                 "path":        "/open-api/users",
                 "scope":       "users.read",
                 "description": "Liste aller User mit einer bestimmten Rolle. "
-                               "Optional nur die, die gerade online sind.",
+                               "Der Online-Status ist pro Eintrag enthalten "
+                               "(`is_online`, `status`).",
                 "tags":        ["users"],
                 "params": [
                     {"name": "role",     "required": True,  "type": "snowflake",
                      "description": "Discord-Rollen-ID",
                      "example": "1410628676499800196"},
-                    {"name": "online",   "required": False, "type": "bool",
-                     "default": "false",
-                     "description": "Nur online User zurückgeben",
-                     "example": "true"},
                     {"name": "guild_id", "required": False, "type": "snowflake",
                      "description": "Server-ID (nur nötig, wenn Key nicht servergebunden)",
                      "example": "1253751493513969735"},
@@ -919,9 +841,58 @@ def register_open_api_routes(app):
             "generated_at": datetime.now(timezone.utc).isoformat(),
         })
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # GET /open-api/health
+    # ══════════════════════════════════════════════════════════════════════════
+    @app.route("/open-api/health", methods=["GET"])
+    @require_api_key(scope="users.read")
+    def open_api_health():
+        bot = _get_bot()
+        return jsonify({
+            "ok":          True,
+            "bot_ready":   bool(bot and bot.is_ready()),
+            "bot_user":    str(bot.user) if (bot and bot.user) else None,
+            "guild_count": len(bot.guilds) if bot else 0,
+            "api_version": API_VERSION,
+            "bot_version": BOT_VERSION,
+            "time":        datetime.now(timezone.utc).isoformat(),
+        })
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # GET /open-api/_debug/bot
+    # ══════════════════════════════════════════════════════════════════════════
+    @app.route("/open-api/_debug/bot", methods=["GET"])
+    @require_api_key(scope="users.read")
+    def open_api_debug_bot():
+        import importlib
+        info: dict = {
+            "app_attrs":   {},
+            "module_vars": {},
+            "resolved":    None,
+        }
+
+        for attr in ("_bot_instance", "bot", "discord_bot", "bot_instance"):
+            b = getattr(app, attr, None)
+            info["app_attrs"][attr] = repr(b) if b is not None else None
+
+        try:
+            app_mod = importlib.import_module("bot.core.web_app.flask_app.app")
+            for attr in ("_bot_instance", "bot", "bot_instance"):
+                b = getattr(app_mod, attr, None)
+                info["module_vars"][attr] = repr(b) if b is not None else None
+        except Exception as e:
+            info["module_vars"]["error"] = str(e)
+
+        resolved = _get_bot()
+        info["resolved"]    = repr(resolved) if resolved is not None else None
+        info["resolved_ok"] = resolved is not None
+
+        return jsonify(info)
+
     log.info(
         "✅ Open-API Routen registriert: "
         "/open-api/users, /open-api/guild, /open-api/guild/roles, "
         "/open-api/leaderboard, /open-api/events, /open-api/version, "
-        "/open-api/whoami, /open-api/health, /open-api/_debug/bot"
+        "/open-api/whoami, /open-api/endpoints, /open-api/health, "
+        "/open-api/_debug/bot"
     )
