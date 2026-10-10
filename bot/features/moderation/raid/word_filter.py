@@ -93,7 +93,7 @@ MAX_REASON_LENGTH = 400
 #
 # Auf False setzen, um das alte Verhalten (Content wird roh geprueft)
 # wiederherzustellen.
-FIX_STICKER_BUG = False
+FIX_STICKER_BUG = True
 
 # Discord-Custom-Emoji / Sticker:  <a:name:id>  oder  <:name:id>
 _CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>")
