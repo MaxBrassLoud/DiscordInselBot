@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 from datetime import datetime, timezone
 
@@ -22,7 +23,10 @@ logger = get_logger("backup_cog")
 
 
 def _is_mbl(interaction: discord.Interaction) -> bool:
-    return str(interaction.user.id) == str(os.getenv("MBL", "")).strip()
+    return (
+        str(interaction.user.id)
+        == str(os.getenv("MBL", "")).strip()
+    )
 
 
 async def backup_name_autocomplete(
@@ -34,11 +38,14 @@ async def backup_name_autocomplete(
 
     current_lower = current.lower()
     backups = list_database_backups()
-    choices = []
-    for path in backups:
-        if current_lower and current_lower not in path.name.lower():
+    choices: list[app_commands.Choice[str]] = []
+    for entry in backups:
+        name = entry["name"]
+        if current_lower and current_lower not in name.lower():
             continue
-        choices.append(app_commands.Choice(name=path.name[:100], value=path.name))
+        choices.append(
+            app_commands.Choice(name=name[:100], value=name)
+        )
         if len(choices) >= 25:
             break
     return choices
@@ -50,7 +57,9 @@ class BackupCog(commands.Cog):
         self._last_result = None
         self._last_error: str | None = None
         self._backup_lock = asyncio.Lock()
-        self.automatic_backup.change_interval(hours=get_backup_interval_hours())
+        self.automatic_backup.change_interval(
+            hours=get_backup_interval_hours()
+        )
         self.automatic_backup.start()
 
     def cog_unload(self):
@@ -71,7 +80,9 @@ class BackupCog(commands.Cog):
 
     async def _run_restore(self, backup_name: str | None):
         async with self._backup_lock:
-            result = await asyncio.to_thread(restore_database_backup, backup_name)
+            result = await asyncio.to_thread(
+                restore_database_backup, backup_name
+            )
             self._last_error = None
             return result
 
@@ -81,7 +92,9 @@ class BackupCog(commands.Cog):
             await self._run_backup()
         except Exception as exc:
             self._last_error = str(exc)
-            logger.error(f"[backup] Automatisches Backup fehlgeschlagen: {exc}")
+            logger.error(
+                f"[backup] Automatisches Backup fehlgeschlagen: {exc}"
+            )
 
     @automatic_backup.before_loop
     async def before_automatic_backup(self):
@@ -89,28 +102,39 @@ class BackupCog(commands.Cog):
 
     @backup.command(name="create")
     @app_commands.describe(
-        send_file="Wenn aktiviert, wird die Backup-ZIP direkt in Discord hochgeladen."
+        send_file=(
+            "Wenn aktiviert, wird die Backup-ZIP direkt in Discord "
+            "hochgeladen."
+        )
     )
-    async def backup_create(self, interaction: discord.Interaction, send_file: bool = False):
+    async def backup_create(
+        self,
+        interaction: discord.Interaction,
+        send_file: bool = False,
+    ):
         if not _is_mbl(interaction):
-            await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
+            await interaction.response.send_message(
+                "Keine Berechtigung.", ephemeral=True
+            )
             return
 
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(
+            thinking=True, ephemeral=True
+        )
         try:
             result = await self._run_backup()
         except Exception as exc:
             self._last_error = str(exc)
             await interaction.followup.send(
-                f"Backup fehlgeschlagen: `{exc}`",
-                ephemeral=True,
+                f"Backup fehlgeschlagen: `{exc}`", ephemeral=True
             )
             return
 
         description = (
-            f"Backup erstellt: `{result.path}`\n"
+            f"Backup erstellt: `{result.name}`\n"
             f"Tabellen: `{len(result.table_counts)}`\n"
-            f"Zeilen: `{result.total_rows}`"
+            f"Zeilen: `{result.total_rows}`\n"
+            f"Gespeichert in: `Tabelle database_backups`"
         )
         embed = discord.Embed(
             title="Datenbank-Backup erstellt",
@@ -119,18 +143,29 @@ class BackupCog(commands.Cog):
         )
 
         if send_file:
+            content = result.content
+            if content is None:
+                from bot.core.database_backup import (
+                    _load_backup_content,
+                )
+                content = _load_backup_content(result.name)
+            file = discord.File(
+                fp=io.BytesIO(content), filename=result.name
+            )
             await interaction.followup.send(
-                embed=embed,
-                file=discord.File(result.path),
-                ephemeral=True,
+                embed=embed, file=file, ephemeral=True
             )
         else:
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(
+                embed=embed, ephemeral=True
+            )
 
     @backup.command(name="status")
     async def backup_status(self, interaction: discord.Interaction):
         if not _is_mbl(interaction):
-            await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
+            await interaction.response.send_message(
+                "Keine Berechtigung.", ephemeral=True
+            )
             return
 
         backups = list_database_backups()
@@ -139,14 +174,28 @@ class BackupCog(commands.Cog):
         keep_count = get_backup_keep_count()
 
         lines = [
+            "Speicherort: `Tabelle database_backups`",
             f"Intervall: `{interval:g}` Stunden",
             f"Aufbewahrung: `{keep_count}` Backups",
             f"Vorhandene Backups: `{len(backups)}`",
         ]
         if newest:
-            created = datetime.fromtimestamp(newest.stat().st_mtime, tz=timezone.utc)
-            lines.append(f"Neuestes Backup: `{newest}`")
-            lines.append(f"Geaendert: `{created.isoformat()}`")
+            created = newest.get("created_at")
+            if created:
+                try:
+                    dt = datetime.fromisoformat(
+                        str(created).replace("Z", "+00:00")
+                    )
+                    created_str = dt.isoformat()
+                except Exception:
+                    created_str = str(created)
+            else:
+                created_str = "unbekannt"
+            lines.append(f"Neuestes Backup: `{newest['name']}`")
+            lines.append(f"Erstellt: `{created_str}`")
+            lines.append(
+                f"Zeilen im neuesten Backup: `{newest.get('total_rows', 0)}`"
+            )
         if self._last_error:
             lines.append(f"Letzter Fehler: `{self._last_error}`")
 
@@ -155,14 +204,21 @@ class BackupCog(commands.Cog):
             description="\n".join(lines),
             color=discord.Color.blue(),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed, ephemeral=True
+        )
 
     @backup.command(name="load")
     @app_commands.describe(
-        backup_name="Name der Backup-ZIP aus dem Backup-Ordner. Leer lassen fuer das neueste Backup.",
+        backup_name=(
+            "Name der Backup-ZIP aus der Datenbank. "
+            "Leer lassen fuer das neueste Backup."
+        ),
         confirm="Zum Laden exakt LADEN eingeben.",
     )
-    @app_commands.autocomplete(backup_name=backup_name_autocomplete)
+    @app_commands.autocomplete(
+        backup_name=backup_name_autocomplete
+    )
     async def backup_load(
         self,
         interaction: discord.Interaction,
@@ -170,7 +226,9 @@ class BackupCog(commands.Cog):
         backup_name: str = "",
     ):
         if not _is_mbl(interaction):
-            await interaction.response.send_message("Keine Berechtigung.", ephemeral=True)
+            await interaction.response.send_message(
+                "Keine Berechtigung.", ephemeral=True
+            )
             return
         if confirm != "LADEN":
             await interaction.response.send_message(
@@ -179,7 +237,9 @@ class BackupCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(
+            thinking=True, ephemeral=True
+        )
         try:
             result = await self._run_restore(backup_name or None)
         except Exception as exc:
@@ -194,7 +254,7 @@ class BackupCog(commands.Cog):
         embed = discord.Embed(
             title="Datenbank-Backup geladen",
             description=(
-                f"Backup: `{result.path}`\n"
+                f"Backup: `{result.name}`\n"
                 f"Tabellen: `{len(result.table_counts)}`\n"
                 f"Eingefuegt: `{result.total_rows}`\n"
                 f"Uebersprungen: `{result.skipped_rows}`\n"
@@ -202,7 +262,9 @@ class BackupCog(commands.Cog):
             ),
             color=discord.Color.green(),
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(
+            embed=embed, ephemeral=True
+        )
 
 
 async def setup(bot: commands.Bot):

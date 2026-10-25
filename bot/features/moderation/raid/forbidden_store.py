@@ -5,6 +5,7 @@ import json
 import os
 from typing import Optional
 
+from bot.core.supabase_client import get_supabase
 from bot.utils.logger import get_logger
 
 from .hashing import is_similar
@@ -14,55 +15,93 @@ logger = get_logger("raid.forbidden")
 
 class ForbiddenImageStore:
     """
-    Speichert verbotene Bilder als JSON-Datei im Format:
-        {
-            "<sha1_hex>": "<phash_hex>",
-            ...
-        }
+    Speichert verbotene Bilder in der Datenbank (Tabelle raid_forbidden_images).
+
+    - Liest beim ersten Zugriff alle Einträge in einen In-Memory-Cache.
+    - Neue Einträge gehen sofort in die DB und in den Cache.
+    - Eine vorhandene JSON-Datei wird beim ersten Zugriff nahtlos in die
+      DB migriert und anschließend gelöscht.
     """
 
-    def __init__(self, path: str):
-        self.path = path
+    def __init__(self, legacy_path: str):
+        self.legacy_path = legacy_path
         self._lock = asyncio.Lock()
         self._cache: Optional[dict[str, str]] = None
-        self._ensure_dir()
+        self._migration_done = False
 
-    def _ensure_dir(self) -> None:
-        d = os.path.dirname(self.path)
-        if d and not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
+    # ── Migration ────────────────────────────────────────────────────────────
 
-    def _load(self) -> dict[str, str]:
-        if self._cache is not None:
-            return self._cache
-        if not os.path.exists(self.path):
-            self._cache = {}
-            return self._cache
+    def _migrate_legacy_file(self) -> None:
+        if self._migration_done:
+            return
+        self._migration_done = True
+
+        if not os.path.exists(self.legacy_path):
+            return
+
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(self.legacy_path, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
             if not isinstance(data, dict):
                 data = {}
-            self._cache = {str(k): str(v) for k, v in data.items()}
-        except Exception as e:
-            logger.warning(f"[forbidden] load failed: {e}")
+        except Exception as exc:
+            logger.warning(f"[forbidden] Legacy-Datei laden: {exc}")
+            return
+
+        if not data:
+            try:
+                os.unlink(self.legacy_path)
+            except Exception:
+                pass
+            return
+
+        try:
+            sb = get_supabase()
+            rows = [
+                {"sha1": sha1, "phash": phash}
+                for sha1, phash in data.items()
+            ]
+            sb.table("raid_forbidden_images").upsert(
+                rows, on_conflict="sha1"
+            ).execute()
+            os.unlink(self.legacy_path)
+            logger.info(
+                f"[forbidden] {len(data)} Einträge aus Legacy-Datei "
+                f"in DB migriert und Datei entfernt."
+            )
+        except Exception as exc:
+            logger.error(f"[forbidden] Migration fehlgeschlagen: {exc}")
+
+    # ── Cache ────────────────────────────────────────────────────────────────
+
+    def _load(self) -> dict[str, str]:
+        self._migrate_legacy_file()
+        if self._cache is not None:
+            return self._cache
+        try:
+            sb = get_supabase()
+            r = (
+                sb.table("raid_forbidden_images")
+                .select("sha1, phash")
+                .execute()
+            )
+            self._cache = {
+                row["sha1"]: row["phash"]
+                for row in (r.data or [])
+            }
+        except Exception as exc:
+            logger.warning(f"[forbidden] Laden fehlgeschlagen: {exc}")
             self._cache = {}
         return self._cache
 
-    def _save(self, data: dict[str, str]) -> None:
-        try:
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            self._cache = data
-        except Exception as e:
-            logger.warning(f"[forbidden] save failed: {e}")
-
-    # --- Public API ---
+    # ── Öffentliche API ──────────────────────────────────────────────────────
 
     def exact_match(self, sha1: str) -> bool:
         return sha1 in self._load()
 
-    def find_similar(self, phash: str, threshold: int = 5) -> Optional[dict]:
+    def find_similar(
+        self, phash: str, threshold: int = 5
+    ) -> Optional[dict]:
         data = self._load()
         for sha1, stored_phash in data.items():
             if is_similar(phash, stored_phash, threshold):
@@ -74,9 +113,26 @@ class ForbiddenImageStore:
             data = self._load()
             if sha1 in data:
                 return False
-            new_data = dict(data)
-            new_data[sha1] = phash
-            self._save(new_data)
+
+            try:
+                sb = get_supabase()
+                sb.table("raid_forbidden_images").insert(
+                    {"sha1": sha1, "phash": phash}
+                ).execute()
+            except Exception as exc:
+                text = str(exc)
+                if (
+                    "23505" in text
+                    or "duplicate" in text.lower()
+                ):
+                    return False
+                logger.error(f"[forbidden] add fehlgeschlagen: {exc}")
+                raise
+
+            if self._cache is not None:
+                self._cache[sha1] = phash
+            else:
+                self._cache = {sha1: phash}
             return True
 
     def size(self) -> int:
