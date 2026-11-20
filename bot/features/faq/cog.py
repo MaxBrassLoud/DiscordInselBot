@@ -5,12 +5,12 @@ import random
 
 FAQ = {
     "Wie werde ich Mitglied?": "Aktuell nehmen wir leider keine neuen Mitglieder mehr auf. \nWir werden im https://discord.com/channels/1253751493513969735/1416403634471702609 bescheid geben, sobald wir wieder neue Mitglieder aufnehmen.\nSchaut also regelmäßig dort vorbei, um das nicht zu verpassen.\n \nSolltest du einen Freund haben, der bereits ein Mitglied bei uns ist, dann kannst du ein https://discord.com/channels/1253751493513969735/1479931271042957382 und die Situation schildern.\nDarauf hin kannst du auf Zustimmung von unserem Server Team eine https://discord.com/channels/1253751493513969735/1394713441863860336 erstellen und dort ausführlich die Fragen beantowrten.",
-    "Wo baut ihr": "In einem Ozean",
+    "Wo baut ihr": "Unser Baugebiet befindet sich südlich vom Nordspawn. Geht zunächst zur Netherdecke und folgt dort dem Eishighway in Richtung Süden. Sobald der Highway nur noch nach links weiterführt, folgt diesem weiter bis zur Moosfläche. Dort befindet sich unser Baugebiet bei den Netherkoordinaten X: 816 | Y: 128 | Z: -2267.",
     "Warum kann ich nicht beitreten": "Aktuell nehmen wir keine neuen Mitglieder mehr auf. \n \nGründe dafür sind, das zuletzt zu viele unserem Clan beitreten wollten, sodass wir die Mengen an Spielern nicht mehr kontrollieren konnten und wir eine Communtiy sind in der sich viele Freundschaften wiederfinden. Durch zu viele Neuzugänge ist dies leider teilweise verloren gegangen.",
     "Wann ist das nächste Event ": "Wenn es die Ankündigung dazu gibt...",
-    "Wie du zu uns findest": "Durch Magie",
-    "Wo kann man eine eigene Insel bauen": "Bau Einfach",
-    "Wie wird im Dorf gebaut": "What the hell"
+    "Wie du zu uns findest": "error - not configured",
+    "Wo kann man eine eigene Insel bauen": "error - not configured",
+    "Wie wird im Dorf gebaut": "error - not configured"
 }
 
 random_1 = 0
